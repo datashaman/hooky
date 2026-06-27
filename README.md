@@ -117,6 +117,19 @@ Reasoning-capable models are expanded into separate eval variants when OpenRoute
 Variants are tried from lowest to highest effort using this order: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
 The runtime passes `reasoning: {"effort": "<level>", "exclude": true}` so reasoning can affect output quality without storing reasoning text in artifacts.
 
+Tool-loop agents compact context when estimated prompt size approaches the selected model's context window.
+The eval harness passes OpenRouter's `context_length` metadata into the runtime; normal runs use the selected-model file when it includes `context_length`.
+By default, compaction triggers at 65% of the context window, keeps the newest 16 messages verbatim, and summarizes older messages with `.workflow/agents/common/static/compaction.md`.
+Compaction calls are included in cost accounting and logged to `compaction_events.json`.
+
+Useful compaction overrides:
+
+```bash
+AGENT_COMPACTION_THRESHOLD=0.75
+AGENT_COMPACTION_KEEP_RECENT_MESSAGES=24
+COMPACTION_MODEL=openai/gpt-4.1-mini
+```
+
 Each run writes artifacts and a costed report under `.workflow/eval-runs/<timestamp>/`.
 Completed model attempts are cached under `.workflow/eval-cache/`, so rerunning the loop will not spend credits on the same fixture/model/eval combination again.
 When a model passes eval, the runner updates `.workflow/agents/spec/selected_model.json` unless `--no-update-selected-model` is passed.

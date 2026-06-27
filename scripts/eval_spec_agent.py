@@ -418,8 +418,10 @@ def run_attempt(
 
     previous_model = os.environ.get("OPENROUTER_MODEL")
     previous_reasoning = os.environ.get("OPENROUTER_REASONING")
+    previous_context_length = os.environ.get("OPENROUTER_CONTEXT_LENGTH")
     os.environ["OPENROUTER_MODEL"] = model
     apply_reasoning_env(model_info)
+    apply_context_length_env(model_info)
     try:
         artifact_dir, contract, spec_usage = spec_agent.generate_spec_artifacts(
             issue_number=int(issue["number"]),
@@ -433,10 +435,12 @@ def run_attempt(
     except Exception as exc:  # noqa: BLE001 - eval report should capture failed attempts.
         restore_model(previous_model)
         restore_reasoning(previous_reasoning)
+        restore_context_length(previous_context_length)
         attempt = {
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
+            "context_length": model_info.get("context_length"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
@@ -449,6 +453,7 @@ def run_attempt(
     finally:
         restore_model(previous_model)
         restore_reasoning(previous_reasoning)
+        restore_context_length(previous_context_length)
 
     deterministic = deterministic_eval(contract, artifact_dir, fixture["expect"])
     if deterministic["status"] == "fail":
@@ -456,6 +461,7 @@ def run_attempt(
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
+            "context_length": model_info.get("context_length"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(artifact_dir),
@@ -477,6 +483,7 @@ def run_attempt(
         "model": model,
         "variant_id": variant_id,
         "reasoning_request": model_info.get("reasoning_request"),
+        "context_length": model_info.get("context_length"),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(artifact_dir),
@@ -700,6 +707,7 @@ def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model
         "model": winner["model"],
         "variant_id": winner.get("variant_id", winner["model"]),
         "reasoning_request": winner.get("reasoning_request"),
+        "context_length": winner.get("context_length"),
         "source": "eval",
         "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "report": report_path.as_posix(),
@@ -732,6 +740,21 @@ def restore_reasoning(previous_reasoning: str | None) -> None:
         os.environ.pop("OPENROUTER_REASONING", None)
     else:
         os.environ["OPENROUTER_REASONING"] = previous_reasoning
+
+
+def apply_context_length_env(model_info: dict[str, Any]) -> None:
+    context_length = model_info.get("context_length")
+    if context_length:
+        os.environ["OPENROUTER_CONTEXT_LENGTH"] = str(context_length)
+    else:
+        os.environ.pop("OPENROUTER_CONTEXT_LENGTH", None)
+
+
+def restore_context_length(previous_context_length: str | None) -> None:
+    if previous_context_length is None:
+        os.environ.pop("OPENROUTER_CONTEXT_LENGTH", None)
+    else:
+        os.environ["OPENROUTER_CONTEXT_LENGTH"] = previous_context_length
 
 
 def safe_name(value: str) -> str:

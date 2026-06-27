@@ -126,8 +126,10 @@ def run_attempt(
     prepare_attempt_workspace(project_fixture, attempt_dir)
     previous_model = os.environ.get("OPENROUTER_MODEL")
     previous_reasoning = os.environ.get("OPENROUTER_REASONING")
+    previous_context_length = os.environ.get("OPENROUTER_CONTEXT_LENGTH")
     os.environ["OPENROUTER_MODEL"] = model
     eval_spec_agent.apply_reasoning_env(model_info)
+    eval_spec_agent.apply_context_length_env(model_info)
     try:
         with attempt_time_limit("generation"):
             output_dir, contract, test_usage = test_agent.generate_test_artifacts(
@@ -142,10 +144,12 @@ def run_attempt(
     except Exception as exc:  # noqa: BLE001
         eval_spec_agent.restore_model(previous_model)
         eval_spec_agent.restore_reasoning(previous_reasoning)
+        eval_spec_agent.restore_context_length(previous_context_length)
         attempt = {
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
+            "context_length": model_info.get("context_length"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
@@ -159,6 +163,7 @@ def run_attempt(
     finally:
         eval_spec_agent.restore_model(previous_model)
         eval_spec_agent.restore_reasoning(previous_reasoning)
+        eval_spec_agent.restore_context_length(previous_context_length)
 
     deterministic = deterministic_eval(contract, output_dir, fixture["approved_spec"], fixture["expect"])
     if deterministic["status"] == "fail":
@@ -166,6 +171,7 @@ def run_attempt(
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
+            "context_length": model_info.get("context_length"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(output_dir),
@@ -186,6 +192,7 @@ def run_attempt(
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
+            "context_length": model_info.get("context_length"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(output_dir),
@@ -203,6 +210,7 @@ def run_attempt(
         "model": model,
         "variant_id": variant_id,
         "reasoning_request": model_info.get("reasoning_request"),
+        "context_length": model_info.get("context_length"),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(output_dir),
@@ -441,6 +449,7 @@ def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model
         "estimated_cost": winner.get("estimated_cost"),
         "actual_cost": winner.get("original_cost", winner.get("cost")),
         "cached": winner.get("cached", False),
+        "context_length": winner.get("context_length"),
     }
     test_agent.SELECTED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     test_agent.SELECTED_MODEL_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

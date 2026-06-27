@@ -109,6 +109,7 @@ def generate_contract_with_openrouter(
         final_report_schema=test_agent_contract_schema(),
         max_cost_usd=float(os.environ.get("TEST_AGENT_MAX_COST_USD", "0.25")),
         max_seconds=int(os.environ.get("TEST_AGENT_MAX_SECONDS", "300")),
+        context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract(contract, dynamic_context["approved_spec"]),
     )
     result = run_tool_agent(
@@ -117,7 +118,7 @@ def generate_contract_with_openrouter(
         user=test_prompt(agent_context, dynamic_context),
         runtime=runtime,
     )
-    write_runtime_log(Path(dynamic_context["workspace"]["report_root"]), result.transcript, result.tool_events)
+    write_runtime_log(Path(dynamic_context["workspace"]["report_root"]), result.transcript, result.tool_events, result.compaction_events)
     return result.final_report, result.usage
 
 
@@ -309,10 +310,16 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
         raise ValueError(f"acceptance criteria missing from coverage lists: {sorted(missing_criteria)}")
 
 
-def write_runtime_log(report_root: Path, transcript: list[dict[str, Any]], tool_events: list[dict[str, Any]]) -> None:
+def write_runtime_log(
+    report_root: Path,
+    transcript: list[dict[str, Any]],
+    tool_events: list[dict[str, Any]],
+    compaction_events: list[dict[str, Any]],
+) -> None:
     report_root.mkdir(parents=True, exist_ok=True)
     (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def write_artifacts(

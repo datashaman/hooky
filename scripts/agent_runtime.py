@@ -25,6 +25,7 @@ class AgentRunResult:
     usage: dict[str, Any]
     transcript: list[dict[str, Any]]
     tool_events: list[dict[str, Any]]
+    compaction_events: list[dict[str, Any]]
 
 
 @dataclass
@@ -35,12 +36,25 @@ class ToolRuntime:
     max_seconds: int
     bash_timeout_seconds: int = 30
     final_validator: FinalValidator | None = None
+    context_window_tokens: int | None = None
+    compaction_threshold: float = 0.65
+    compaction_keep_recent_messages: int = 16
+    compaction_prompt_path: Path = Path(".workflow/agents/common/static/compaction.md")
     todo_items: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
+        if self.context_window_tokens is None:
+            raw_context_window = os.environ.get("OPENROUTER_CONTEXT_LENGTH")
+            self.context_window_tokens = int(raw_context_window) if raw_context_window else None
+        if os.environ.get("AGENT_COMPACTION_THRESHOLD"):
+            self.compaction_threshold = float(os.environ["AGENT_COMPACTION_THRESHOLD"])
+        if os.environ.get("AGENT_COMPACTION_KEEP_RECENT_MESSAGES"):
+            self.compaction_keep_recent_messages = int(os.environ["AGENT_COMPACTION_KEEP_RECENT_MESSAGES"])
+        self.compaction_prompt_path = Path(self.compaction_prompt_path)
         self.started_at = time.monotonic()
         self.final_report: dict[str, Any] | None = None
+        self.anchored_summary = ""
 
     def tools(self) -> list[dict[str, Any]]:
         return [
@@ -176,6 +190,7 @@ def run_tool_agent(
     messages: list[Any] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     transcript: list[dict[str, Any]] = []
     tool_events: list[dict[str, Any]] = []
+    compaction_events: list[dict[str, Any]] = []
     total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
@@ -184,6 +199,15 @@ def run_tool_agent(
                 raise TimeoutError(f"agent runtime exceeded {runtime.max_seconds}s")
             if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
                 raise RuntimeError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget")
+
+            messages, compaction_event = maybe_compact_messages(client, model, runtime, messages)
+            if compaction_event:
+                usage = compaction_event.get("usage") or {}
+                accumulate_usage(total_usage, usage)
+                compaction_events.append(compaction_event)
+                transcript.append({"role": "compaction", **compaction_event})
+                if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
+                    raise RuntimeError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget after compaction")
 
             completion = client.chat.send(
                 model=model,
@@ -225,7 +249,115 @@ def run_tool_agent(
                     }
                 )
 
-    return AgentRunResult(runtime.final_report, total_usage, transcript, tool_events)
+    return AgentRunResult(runtime.final_report, total_usage, transcript, tool_events, compaction_events)
+
+
+def maybe_compact_messages(
+    client: Any,
+    model: str,
+    runtime: ToolRuntime,
+    messages: list[Any],
+) -> tuple[list[Any], dict[str, Any] | None]:
+    if not runtime.context_window_tokens:
+        return messages, None
+    estimated_tokens = estimate_tokens(messages)
+    threshold_tokens = int(runtime.context_window_tokens * runtime.compaction_threshold)
+    if estimated_tokens < threshold_tokens:
+        return messages, None
+    if len(messages) <= runtime.compaction_keep_recent_messages + 2:
+        return messages, None
+
+    keep_count = max(2, runtime.compaction_keep_recent_messages)
+    prefix = messages[:2]
+    older = messages[2:-keep_count]
+    recent = trim_leading_tool_messages(messages[-keep_count:])
+    if not older:
+        return messages, None
+
+    previous_summary = runtime.anchored_summary
+    prompt = compaction_user_prompt(previous_summary, older)
+    completion = client.chat.send(
+        model=os.environ.get("COMPACTION_MODEL", model),
+        messages=[
+            {"role": "system", "content": compaction_system_prompt(runtime)},
+            {"role": "user", "content": prompt},
+        ],
+        response_format=spec_agent.structured_response_format("context_compaction", compaction_schema()),
+        **spec_agent.openrouter_request_options(),
+    )
+    content = completion.choices[0].message.content
+    if not content:
+        return messages, None
+    payload = json.loads(content)
+    runtime.anchored_summary = payload["summary"]
+    summary_message = {
+        "role": "user",
+        "content": "Anchored context summary for continuing this agent run:\n\n" + runtime.anchored_summary,
+    }
+    compacted = prefix + [summary_message] + recent
+    after_tokens = estimate_tokens(compacted)
+    event = {
+        "reason": "context_threshold",
+        "context_window_tokens": runtime.context_window_tokens,
+        "threshold": runtime.compaction_threshold,
+        "before_estimated_tokens": estimated_tokens,
+        "after_estimated_tokens": after_tokens,
+        "older_messages_compacted": len(older),
+        "recent_messages_kept": len(recent),
+        "summary_chars": len(runtime.anchored_summary),
+        "usage": spec_agent.response_usage(completion),
+    }
+    return compacted, event
+
+
+def compaction_system_prompt(runtime: ToolRuntime) -> str:
+    if runtime.compaction_prompt_path.exists():
+        return runtime.compaction_prompt_path.read_text(encoding="utf-8")
+    return (
+        "You are an anchored context summarization assistant. Summarize only the supplied "
+        "older context, preserve exact paths and identifiers, and do not answer the task."
+    )
+
+
+def compaction_user_prompt(previous_summary: str, older_messages: list[Any]) -> str:
+    return (
+        "Return JSON with a single `summary` string.\n\n"
+        "Required structure inside summary:\n"
+        "- Objective\n"
+        "- Current state\n"
+        "- Decisions and constraints\n"
+        "- Files and artifacts\n"
+        "- Tool results and failures\n"
+        "- Todo state\n"
+        "- Next relevant actions\n\n"
+        "Previous summary:\n"
+        + (previous_summary or "None.")
+        + "\n\nOlder context to compact:\n```json\n"
+        + json.dumps(older_messages, indent=2, sort_keys=True, default=str)
+        + "\n```"
+    )
+
+
+def compaction_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["summary"],
+        "properties": {
+            "summary": {"type": "string"},
+        },
+    }
+
+
+def trim_leading_tool_messages(messages: list[Any]) -> list[Any]:
+    trimmed = list(messages)
+    while trimmed and isinstance(trimmed[0], dict) and trimmed[0].get("role") == "tool":
+        trimmed.pop(0)
+    return trimmed
+
+
+def estimate_tokens(value: Any) -> int:
+    return max(1, len(json.dumps(value, sort_keys=True, default=str)) // 4)
 
 
 def accumulate_usage(total: dict[str, Any], usage: dict[str, Any]) -> None:
