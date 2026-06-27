@@ -4,3 +4,4 @@
 __pycache__/
 *.py[cod]
 .workflow/eval-runs/
+.workflow/eval-cache/

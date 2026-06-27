@@ -26,10 +26,20 @@
       "editing state",
       "framework"
     ],
+    "topic_aliases": {
+      "clear completed": ["clear completed", "clear-completed"],
+      "pluralized": ["pluralized", "pluralization"],
+      "routing": ["routing", "routes", "route"],
+      "editing state": ["editing state", "edit state"],
+      "new-todo input": ["new-todo input", "new todo input"],
+      "production code": ["production code", "production implementation", "code generation", "generate code"],
+      "executable tests": ["executable tests", "test generation", "generate tests"],
+      "dependencies": ["dependencies", "dependency"]
+    },
     "forbidden_topics": [
-      "production code",
       "implementation diff",
-      "executable tests"
+      "database migration code",
+      "API route code"
     ],
     "non_goals": [
       "production code",

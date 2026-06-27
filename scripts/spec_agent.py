@@ -20,7 +20,10 @@ from typing import Any
 
 ARTIFACT_ROOT = Path("docs/specs")
 SIDECAR_ROOT = Path(".workflow/artifacts/specs")
-TEMPLATE_ROOT = Path(".workflow/templates")
+AGENT_ROOT = Path(".workflow/agents/spec")
+STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
+TEMPLATE_ROOT = AGENT_ROOT / "templates"
+PROJECT_CONTEXT_FILES = [Path("AGENTS.md")]
 
 
 def main() -> int:
@@ -69,12 +72,15 @@ def generate_spec_artifacts(
     artifact_root: Path = ARTIFACT_ROOT,
     sidecar_root: Path = SIDECAR_ROOT,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    contract, usage = generate_contract(
+    dynamic_context = build_dynamic_context(
         issue_number=issue_number,
         title=title,
         body=body,
         author=author,
         generated_at=generated_at,
+    )
+    contract, usage = generate_contract(
+        dynamic_context=dynamic_context,
     )
     validate_contract(contract)
 
@@ -94,6 +100,7 @@ def generate_spec_artifacts(
         author=author,
         generated_at=generated_at,
         contract=contract,
+        dynamic_context=dynamic_context,
     )
 
     pr_body = artifact_dir / "pull_request_body.md"
@@ -125,27 +132,20 @@ def should_run(event: dict[str, Any], trigger_label: str) -> bool:
 
 def generate_contract(
     *,
-    issue_number: int,
-    title: str,
-    body: str,
-    author: str,
-    generated_at: str,
+    dynamic_context: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required; Spec Agent has no non-AI generation path")
-    return generate_contract_with_openrouter(issue_number, title, body, author, generated_at)
+    return generate_contract_with_openrouter(dynamic_context)
 
 
 def generate_contract_with_openrouter(
-    issue_number: int,
-    title: str,
-    body: str,
-    author: str,
-    generated_at: str,
+    dynamic_context: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     from openrouter import OpenRouter
 
     model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
+    agent_context = load_agent_context()
     with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"]) as client:
         completion = client.chat.send(
             model=model,
@@ -153,16 +153,11 @@ def generate_contract_with_openrouter(
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are the Spec Agent in a strict agentic SDLC pipeline. "
-                        "Transform a GitHub issue into an implementation contract. "
-                        "Never write production code. Never generate tests. Do not invent requirements. "
-                        "Ask only blocking questions. Return only valid JSON."
-                    ),
+                    "content": agent_context["system"],
                 },
                 {
                     "role": "user",
-                    "content": spec_prompt(issue_number, title, body, author, generated_at),
+                    "content": spec_prompt(agent_context, dynamic_context),
                 },
             ],
         )
@@ -187,34 +182,73 @@ def response_usage(response: Any) -> dict[str, Any]:
     }
 
 
-def spec_prompt(issue_number: int, title: str, body: str, author: str, generated_at: str) -> str:
-    return f"""Issue number: {issue_number}
-Title: {title}
-Author: {author}
-Generated: {generated_at}
+def build_dynamic_context(
+    *,
+    issue_number: int,
+    title: str,
+    body: str,
+    author: str,
+    generated_at: str,
+) -> dict[str, Any]:
+    return {
+        "source": "github_issue",
+        "issue": {
+            "number": issue_number,
+            "title": title,
+            "body": body,
+            "author": author,
+        },
+        "generated_at": generated_at,
+    }
 
-Issue body:
-{body or "(empty)"}
 
-Return only JSON matching this shape:
-{{
-  "summary": "string",
-  "scope": ["string"],
-  "non_goals": ["string"],
-  "acceptance_criteria": ["string"],
-  "affected_components": ["string"],
-  "edge_cases": ["string"],
-  "blocking_questions": ["string"],
-  "test_plan": ["string"],
-  "risks": ["string"],
-  "cost_plan": {{
-    "complexity": "small|medium|large",
-    "max_iterations": 3,
-    "model_route": {{"spec": "string", "test": "string", "builder": "string", "verifier": "string", "eval": "string"}}
-  }},
-  "requires_human_approval": true
-}}
+def load_agent_context() -> dict[str, Any]:
+    static_files = {}
+    for path in sorted(STATIC_CONTEXT_ROOT.glob("*.md")):
+        static_files[path.name] = path.read_text(encoding="utf-8")
+
+    project_files = {}
+    for path in PROJECT_CONTEXT_FILES:
+        if path.exists():
+            project_files[path.as_posix()] = path.read_text(encoding="utf-8")
+
+    return {
+        "system": static_files.get("system.md", ""),
+        "static_files": static_files,
+        "project_files": project_files,
+    }
+
+
+def spec_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) -> str:
+    project_context = format_context_block("Project Context", agent_context["project_files"])
+    static_context = format_context_block(
+        "Spec Agent Static Context",
+        {
+            key: value
+            for key, value in agent_context["static_files"].items()
+            if key != "system.md"
+        },
+    )
+    return f"""{project_context}
+
+{static_context}
+
+Dynamic Context:
+```json
+{json.dumps(dynamic_context, indent=2, sort_keys=True)}
+```
+
+Produce the Spec Agent contract from the dynamic context, constrained by the project and static agent context.
 """
+
+
+def format_context_block(title: str, files: dict[str, str]) -> str:
+    if not files:
+        return f"{title}: none"
+    parts = [f"{title}:"]
+    for name, content in files.items():
+        parts.append(f"\n--- {name} ---\n{content.strip()}")
+    return "\n".join(parts)
 
 
 def validate_contract(contract: dict[str, Any]) -> None:
@@ -251,7 +285,11 @@ def write_artifacts(
     author: str,
     generated_at: str,
     contract: dict[str, Any],
+    dynamic_context: dict[str, Any],
 ) -> list[Path]:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+
     context = {
         "title": title,
         "issue_number": str(issue_number),
@@ -287,6 +325,14 @@ def write_artifacts(
         path.write_text(content, encoding="utf-8")
         written.append(path)
 
+    dynamic_context_path = artifact_dir / "dynamic_context.json"
+    dynamic_context_path.write_text(json.dumps(dynamic_context, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    written.append(dynamic_context_path)
+
+    context_snapshot_path = artifact_dir / "context_snapshot.md"
+    context_snapshot_path.write_text(render_context_snapshot(dynamic_context), encoding="utf-8")
+    written.append(context_snapshot_path)
+
     sidecar = {
         "id": spec_id,
         "issue": issue_number,
@@ -301,6 +347,20 @@ def write_artifacts(
     sidecar_path.write_text(json.dumps(sidecar, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     written.append(sidecar_path)
     return written
+
+
+def render_context_snapshot(dynamic_context: dict[str, Any]) -> str:
+    agent_context = load_agent_context()
+    return (
+        "# Spec Agent Context Snapshot\n\n"
+        "## Project Context Files\n\n"
+        + md_list(agent_context["project_files"].keys())
+        + "\n\n## Static Context Files\n\n"
+        + md_list(agent_context["static_files"].keys())
+        + "\n\n## Dynamic Context\n\n```json\n"
+        + json.dumps(dynamic_context, indent=2, sort_keys=True)
+        + "\n```\n"
+    )
 
 
 def render_template(name: str, context: dict[str, str]) -> str:

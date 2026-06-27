@@ -1,11 +1,18 @@
 {
   "spec_agent": {
     "strategy": "openrouter_models_api_by_estimated_cost",
-    "max_models": 10,
+    "max_models": 40,
     "require_parameters": [
       "response_format"
     ],
     "exclude_free_models": true,
+    "min_context_length": 16000,
+    "exclude_id_patterns": [
+      "mythomax",
+      "lunaris",
+      "roleplay",
+      "rp"
+    ],
     "estimated_prompt_tokens": 2500,
     "estimated_completion_tokens": 1500
   },

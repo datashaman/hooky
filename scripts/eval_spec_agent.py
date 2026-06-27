@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ import spec_agent
 DEFAULT_FIXTURE = Path("tests/fixtures/spec_agent/moderately_complex.json")
 DEFAULT_LADDER = Path(".workflow/model_ladder.json")
 DEFAULT_RUN_ROOT = Path(".workflow/eval-runs")
+DEFAULT_CACHE_ROOT = Path(".workflow/eval-cache/spec-agent")
 
 
 def main() -> int:
@@ -32,35 +34,31 @@ def main() -> int:
 
     ladder_report = resolve_model_ladder(args, ladder_config, fixture)
     runnable_ladder = [item for item in ladder_report if item["available"] and item["estimated_cost"] is not None]
-    models = [item["id"] for item in runnable_ladder]
-    if not models:
+    if not runnable_ladder:
         raise RuntimeError("No runnable candidate models available from OpenRouter /models")
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_root = args.run_root / run_id
     run_root.mkdir(parents=True, exist_ok=True)
+    cache_key = eval_cache_key(args.fixture, judge_model)
+    cache_root = args.cache_root / cache_key
+
+    print_ladder_summary(runnable_ladder)
 
     attempts = []
     winner = None
-    for model in models:
-        attempt = run_attempt(fixture, model, judge_model, run_root)
+    report_path = run_root / "report.json"
+    for model_info in runnable_ladder:
+        attempt = run_attempt(fixture, model_info, judge_model, run_root, cache_root, args.no_cache)
         attempts.append(attempt)
         print_attempt(attempt)
+        write_report(report_path, fixture, judge_model, ladder_report, attempts, winner, final=False)
         if attempt["status"] == "pass":
             winner = attempt
+            write_report(report_path, fixture, judge_model, ladder_report, attempts, winner, final=True)
             break
 
-    report = {
-        "status": "pass" if winner else "fail",
-        "fixture": fixture["name"],
-        "judge_model": judge_model,
-        "winner_model": winner["model"] if winner else None,
-        "model_ladder": ladder_report,
-        "total_cost": sum_costs(attempts),
-        "attempts": attempts,
-    }
-    report_path = run_root / "report.json"
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report(report_path, fixture, judge_model, ladder_report, attempts, winner, final=True)
     print(f"\nreport: {report_path}")
     cleanup_runs(args.run_root, args.keep_runs)
     if winner:
@@ -74,11 +72,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     parser.add_argument("--model-ladder", type=Path, default=DEFAULT_LADDER)
     parser.add_argument("--models", nargs="+", help="Override spec model ladder")
+    parser.add_argument("--max-models", type=int, help="Override max models to try from the API-priced ladder")
     parser.add_argument("--print-ladder", action="store_true", help="Print API-priced model ladder and exit")
     parser.add_argument("--judge-model", help="Override judge model")
     parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--cache-root", type=Path, default=DEFAULT_CACHE_ROOT)
+    parser.add_argument("--no-cache", action="store_true", help="Ignore cached model attempts and call OpenRouter again")
     parser.add_argument("--keep-runs", type=int, default=10)
     return parser.parse_args()
+
+
+def print_ladder_summary(ladder: list[dict[str, Any]]) -> None:
+    print("planned_ladder:")
+    for index, item in enumerate(ladder, 1):
+        print(f"{index}. estimated={item['estimated_cost']} model={item['id']}")
+
+
+def write_report(
+    report_path: Path,
+    fixture: dict[str, Any],
+    judge_model: str,
+    ladder_report: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+    winner: dict[str, Any] | None,
+    final: bool,
+) -> None:
+    report = {
+        "status": "pass" if winner else "fail" if final else "running",
+        "fixture": fixture["name"],
+        "judge_model": judge_model,
+        "winner_model": winner["model"] if winner else None,
+        "model_ladder": ladder_report,
+        "total_cost": sum_costs(attempts),
+        "attempts": attempts,
+    }
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any], fixture: dict[str, Any]) -> list[dict[str, Any]]:
@@ -91,7 +119,7 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
         max_models = len(candidate_ids)
     else:
         candidate_ids = set(selector.get("candidate_model_ids", []))
-        max_models = int(selector.get("max_models", 10))
+        max_models = args.max_models or int(selector.get("max_models", 10))
     if max_models <= 0:
         raise RuntimeError("max_models must be greater than zero")
 
@@ -101,10 +129,14 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
         completion_tokens = int(selector.get("estimated_completion_tokens", 1500))
         required_parameters = set(selector.get("require_parameters", []))
         exclude_free_models = bool(selector.get("exclude_free_models", True))
+        min_context_length = int(selector.get("min_context_length", 0))
+        exclude_id_patterns = [pattern.lower() for pattern in selector.get("exclude_id_patterns", [])]
     else:
         completion_tokens = 1500
         required_parameters = set()
         exclude_free_models = True
+        min_context_length = 0
+        exclude_id_patterns = []
 
     ladder = []
     unavailable = []
@@ -115,6 +147,16 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
             continue
         returned_ids.add(model_id)
         if candidate_ids and model_id not in candidate_ids:
+            continue
+        context_length = int(model.get("context_length") or 0)
+        if context_length < min_context_length:
+            if candidate_ids:
+                unavailable.append(model_summary(model, None, prompt_tokens, completion_tokens, f"context_length below {min_context_length}"))
+            continue
+        excluded_pattern = next((pattern for pattern in exclude_id_patterns if pattern in model_id.lower()), None)
+        if excluded_pattern:
+            if candidate_ids:
+                unavailable.append(model_summary(model, None, prompt_tokens, completion_tokens, f"excluded by id pattern: {excluded_pattern}"))
             continue
         supported_parameters = set(model.get("supported_parameters") or [])
         missing_parameters = sorted(required_parameters - supported_parameters)
@@ -215,7 +257,24 @@ def estimate_cost(pricing: dict[str, Any], prompt_tokens: int, completion_tokens
     return round(prompt_price * prompt_tokens + completion_price * completion_tokens, 10)
 
 
-def run_attempt(fixture: dict[str, Any], model: str, judge_model: str, run_root: Path) -> dict[str, Any]:
+def run_attempt(
+    fixture: dict[str, Any],
+    model_info: dict[str, Any],
+    judge_model: str,
+    run_root: Path,
+    cache_root: Path,
+    no_cache: bool,
+) -> dict[str, Any]:
+    model = model_info["id"]
+    cache_path = cache_root / f"{safe_name(model)}.json"
+    if not no_cache and cache_path.exists():
+        cached = read_json(cache_path)
+        cached["cached"] = True
+        cached["original_cost"] = cached.get("cost", 0)
+        cached["cost"] = 0
+        cached["estimated_cost"] = model_info.get("estimated_cost")
+        return cached
+
     issue = fixture["issue"]
     attempt_dir = run_root / safe_name(model)
     artifact_root = attempt_dir / "docs/specs"
@@ -236,22 +295,28 @@ def run_attempt(fixture: dict[str, Any], model: str, judge_model: str, run_root:
         )
     except Exception as exc:  # noqa: BLE001 - eval report should capture failed attempts.
         restore_model(previous_model)
-        return {
+        attempt = {
             "model": model,
+            "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
+            "cached": False,
+            "cost": 0,
             "deterministic": {"status": "fail", "findings": [f"generation failed: {exc}"]},
             "judge": None,
         }
+        return attempt
     finally:
         restore_model(previous_model)
 
     deterministic = deterministic_eval(contract, artifact_dir, fixture["expect"])
     if deterministic["status"] == "fail":
-        return {
+        attempt = {
             "model": model,
+            "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(artifact_dir),
+            "cached": False,
             "cost": sum_costs([{"usage": spec_usage}]),
             "usage": {
                 "spec": spec_usage,
@@ -260,13 +325,17 @@ def run_attempt(fixture: dict[str, Any], model: str, judge_model: str, run_root:
             "deterministic": deterministic,
             "judge": None,
         }
+        write_attempt_cache(cache_path, attempt)
+        return attempt
 
     judge, judge_usage = judge_eval(judge_model, fixture, contract)
     status = "pass" if judge_passes(judge) else "fail"
-    return {
+    attempt = {
         "model": model,
+        "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(artifact_dir),
+        "cached": False,
         "cost": sum_costs([{"usage": spec_usage}, {"usage": judge_usage}]),
         "usage": {
             "spec": spec_usage,
@@ -275,6 +344,8 @@ def run_attempt(fixture: dict[str, Any], model: str, judge_model: str, run_root:
         "deterministic": deterministic,
         "judge": judge,
     }
+    write_attempt_cache(cache_path, attempt)
+    return attempt
 
 
 def deterministic_eval(contract: dict[str, Any], artifact_dir: Path, expect: dict[str, Any]) -> dict[str, Any]:
@@ -302,18 +373,38 @@ def deterministic_eval(contract: dict[str, Any], artifact_dir: Path, expect: dic
         findings.append("too few risks")
 
     text = json.dumps(contract, sort_keys=True).lower()
+    aliases = expect.get("topic_aliases", {})
     for topic in expect["required_topics"]:
-        if topic.lower() not in text:
+        topic_terms = aliases.get(topic, [topic])
+        if not any(term.lower() in text for term in topic_terms):
             findings.append(f"missing required topic: {topic}")
+    forbidden_text = json.dumps(
+        {
+            key: value
+            for key, value in contract.items()
+            if key not in {"non_goals", "summary"}
+        },
+        sort_keys=True,
+    ).lower()
     for topic in expect["forbidden_topics"]:
-        if topic.lower() in text:
-            findings.append(f"contains forbidden topic: {topic}")
+        if topic.lower() in forbidden_text:
+            findings.append(f"contains forbidden topic outside non-goals: {topic}")
     non_goals = " ".join(contract.get("non_goals", [])).lower()
     for topic in expect["non_goals"]:
-        if topic.lower() not in non_goals:
+        topic_terms = aliases.get(topic, [topic])
+        if not any(term.lower() in non_goals for term in topic_terms):
             findings.append(f"non-goals missing topic: {topic}")
 
-    allowed = {"spec.md", "acceptance_tests.md", "risk_register.md", "cost_plan.md", "contract.json", "pull_request_body.md"}
+    allowed = {
+        "spec.md",
+        "acceptance_tests.md",
+        "risk_register.md",
+        "cost_plan.md",
+        "contract.json",
+        "pull_request_body.md",
+        "dynamic_context.json",
+        "context_snapshot.md",
+    }
     produced = {path.name for path in artifact_dir.glob("*") if path.is_file()}
     unexpected = produced - allowed
     if unexpected:
@@ -388,9 +479,14 @@ def judge_passes(judge: dict[str, Any]) -> bool:
 
 def print_attempt(attempt: dict[str, Any]) -> None:
     print(f"\nmodel: {attempt['model']}")
+    print(f"estimated_cost: {attempt.get('estimated_cost')}")
     print(f"status: {attempt['status']}")
-    if "cost" in attempt:
-        print(f"cost: {attempt['cost']}")
+    print(f"cached: {attempt.get('cached', False)}")
+    if attempt.get("cached"):
+        print(f"current_run_cost: {attempt.get('cost', 0)}")
+        print(f"original_cost: {attempt.get('original_cost', 0)}")
+    elif "cost" in attempt:
+        print(f"actual_cost: {attempt['cost']}")
     deterministic = attempt["deterministic"]
     if deterministic["findings"]:
         print("deterministic_findings:")
@@ -407,6 +503,33 @@ def print_attempt(attempt: dict[str, Any]) -> None:
 def read_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def write_attempt_cache(path: Path, attempt: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cache_attempt = dict(attempt)
+    cache_attempt["cached"] = False
+    path.write_text(json.dumps(cache_attempt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
+    digest = hashlib.sha256()
+    paths = [
+        fixture_path,
+        Path("AGENTS.md"),
+        Path("scripts/spec_agent.py"),
+        Path("scripts/eval_spec_agent.py"),
+    ]
+    paths.extend(sorted(Path(".workflow/agents/spec/static").glob("*.md")))
+    for path in paths:
+        if not path.exists():
+            continue
+        digest.update(path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    digest.update(judge_model.encode("utf-8"))
+    return digest.hexdigest()[:24]
 
 
 def restore_model(previous_model: str | None) -> None:

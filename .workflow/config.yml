@@ -12,6 +12,14 @@ artifacts:
 
 agents:
   spec:
+    context:
+      project_files:
+        - AGENTS.md
+      static_root: .workflow/agents/spec/static
+      templates_root: .workflow/agents/spec/templates
+      dynamic_snapshot_files:
+        - dynamic_context.json
+        - context_snapshot.md
     responsibilities:
       - normalize_request
       - ask_only_blocking_questions
@@ -28,4 +36,3 @@ agents:
       - invent_requirements
       - omit_human_approval
     requires_human_approval: true
-

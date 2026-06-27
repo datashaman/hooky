@@ -16,6 +16,32 @@ The workflow:
 
 The Spec Agent never edits production code.
 
+## Agent Context
+
+Agents run with both static and dynamic context.
+
+Static project context:
+
+- `AGENTS.md` describes repository architecture, patterns, and agent stage boundaries.
+
+Static Spec Agent context:
+
+- `.workflow/agents/spec/static/system.md`
+- `.workflow/agents/spec/static/contract_schema.md`
+- `.workflow/agents/spec/static/quality_bar.md`
+
+Dynamic Spec Agent context:
+
+- GitHub issue event data in production.
+- Eval fixture issue data during local eval.
+
+Each generated spec artifact folder includes:
+
+- `dynamic_context.json`
+- `context_snapshot.md`
+
+Those files make the exact runtime context auditable.
+
 ## GitHub Setup
 
 Create this label in the repository:
@@ -44,11 +70,14 @@ python3 scripts/eval_spec_agent.py
 The OpenRouter API supplies the model set. Filtering and cost-estimation assumptions live in `.workflow/model_ladder.json`.
 
 Each run writes artifacts and a costed report under `.workflow/eval-runs/<timestamp>/`.
+Completed model attempts are cached under `.workflow/eval-cache/`, so rerunning the loop will not spend credits on the same fixture/model/eval combination again.
 
 Useful overrides:
 
 ```bash
 python3 scripts/eval_spec_agent.py --print-ladder
+python3 scripts/eval_spec_agent.py --max-models 40
 python3 scripts/eval_spec_agent.py --models openai/gpt-4.1-mini openai/gpt-4.1
 python3 scripts/eval_spec_agent.py --judge-model openai/gpt-4.1
+python3 scripts/eval_spec_agent.py --no-cache
 ```
