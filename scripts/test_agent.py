@@ -118,7 +118,13 @@ def generate_contract_with_openrouter(
         user=test_prompt(agent_context, dynamic_context),
         runtime=runtime,
     )
-    write_runtime_log(Path(dynamic_context["workspace"]["report_root"]), result.transcript, result.tool_events, result.compaction_events)
+    write_runtime_log(
+        Path(dynamic_context["workspace"]["report_root"]),
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+    )
     return result.final_report, result.usage
 
 
@@ -315,11 +321,13 @@ def write_runtime_log(
     transcript: list[dict[str, Any]],
     tool_events: list[dict[str, Any]],
     compaction_events: list[dict[str, Any]],
+    pre_compaction_archives: list[dict[str, Any]],
 ) -> None:
     report_root.mkdir(parents=True, exist_ok=True)
     (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def write_artifacts(

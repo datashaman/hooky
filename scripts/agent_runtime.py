@@ -26,6 +26,7 @@ class AgentRunResult:
     transcript: list[dict[str, Any]]
     tool_events: list[dict[str, Any]]
     compaction_events: list[dict[str, Any]]
+    pre_compaction_archives: list[dict[str, Any]]
 
 
 @dataclass
@@ -191,6 +192,7 @@ def run_tool_agent(
     transcript: list[dict[str, Any]] = []
     tool_events: list[dict[str, Any]] = []
     compaction_events: list[dict[str, Any]] = []
+    pre_compaction_archives: list[dict[str, Any]] = []
     total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
@@ -200,7 +202,10 @@ def run_tool_agent(
             if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
                 raise RuntimeError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget")
 
-            messages, compaction_event = maybe_compact_messages(client, model, runtime, messages)
+            messages, compaction_event, pre_compaction_archive = maybe_compact_messages(client, model, runtime, messages)
+            if pre_compaction_archive:
+                pre_compaction_archives.append(pre_compaction_archive)
+                transcript.append({"role": "pre_compaction", **pre_compaction_archive})
             if compaction_event:
                 usage = compaction_event.get("usage") or {}
                 accumulate_usage(total_usage, usage)
@@ -249,7 +254,7 @@ def run_tool_agent(
                     }
                 )
 
-    return AgentRunResult(runtime.final_report, total_usage, transcript, tool_events, compaction_events)
+    return AgentRunResult(runtime.final_report, total_usage, transcript, tool_events, compaction_events, pre_compaction_archives)
 
 
 def maybe_compact_messages(
@@ -257,22 +262,32 @@ def maybe_compact_messages(
     model: str,
     runtime: ToolRuntime,
     messages: list[Any],
-) -> tuple[list[Any], dict[str, Any] | None]:
+) -> tuple[list[Any], dict[str, Any] | None, dict[str, Any] | None]:
     if not runtime.context_window_tokens:
-        return messages, None
+        return messages, None, None
     estimated_tokens = estimate_tokens(messages)
     threshold_tokens = int(runtime.context_window_tokens * runtime.compaction_threshold)
     if estimated_tokens < threshold_tokens:
-        return messages, None
+        return messages, None, None
     if len(messages) <= runtime.compaction_keep_recent_messages + 2:
-        return messages, None
+        return messages, None, None
 
     keep_count = max(2, runtime.compaction_keep_recent_messages)
     prefix = messages[:2]
     older = messages[2:-keep_count]
     recent = trim_leading_tool_messages(messages[-keep_count:])
     if not older:
-        return messages, None
+        return messages, None, None
+
+    archive = {
+        "reason": "pre_compaction_archive",
+        "context_window_tokens": runtime.context_window_tokens,
+        "threshold": runtime.compaction_threshold,
+        "before_estimated_tokens": estimated_tokens,
+        "older_messages_count": len(older),
+        "recent_messages_count": len(recent),
+        "older_messages": older,
+    }
 
     previous_summary = runtime.anchored_summary
     prompt = compaction_user_prompt(previous_summary, older)
@@ -287,7 +302,7 @@ def maybe_compact_messages(
     )
     content = completion.choices[0].message.content
     if not content:
-        return messages, None
+        return messages, None, archive
     payload = json.loads(content)
     runtime.anchored_summary = payload["summary"]
     summary_message = {
@@ -307,7 +322,7 @@ def maybe_compact_messages(
         "summary_chars": len(runtime.anchored_summary),
         "usage": spec_agent.response_usage(completion),
     }
-    return compacted, event
+    return compacted, event, archive
 
 
 def compaction_system_prompt(runtime: ToolRuntime) -> str:

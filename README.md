@@ -120,6 +120,7 @@ The runtime passes `reasoning: {"effort": "<level>", "exclude": true}` so reason
 Tool-loop agents compact context when estimated prompt size approaches the selected model's context window.
 The eval harness passes OpenRouter's `context_length` metadata into the runtime; normal runs use the selected-model file when it includes `context_length`.
 By default, compaction triggers at 65% of the context window, keeps the newest 16 messages verbatim, and summarizes older messages with `.workflow/agents/common/static/compaction.md`.
+Before compaction rewrites model context, the runtime archives the exact older message slice to `pre_compaction_archives.json`.
 Compaction calls are included in cost accounting and logged to `compaction_events.json`.
 
 Useful compaction overrides:
