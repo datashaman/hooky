@@ -1,9 +1,18 @@
 {
-  "spec_agent": {
+  "model_selector": {
     "strategy": "openrouter_models_api_by_estimated_cost",
     "max_models": 40,
+    "api_filters": {
+      "sort": "pricing-low-to-high",
+      "supported_parameters": [
+        "response_format",
+        "structured_outputs"
+      ],
+      "context": 16000
+    },
     "require_parameters": [
-      "response_format"
+      "response_format",
+      "structured_outputs"
     ],
     "exclude_free_models": true,
     "min_context_length": 16000,
@@ -14,7 +23,56 @@
       "rp"
     ],
     "estimated_prompt_tokens": 2500,
-    "estimated_completion_tokens": 1500
+    "estimated_completion_tokens": 1500,
+    "expand_reasoning_efforts": true,
+    "reasoning_exclude": true,
+    "profiles": {
+      "cheap_general": {
+        "description": "Lowest-cost general text models that support strict structured output."
+      },
+      "balanced_general": {
+        "description": "Cheap general ladder plus Haiku-class anchor models for non-code product/spec work.",
+        "max_models": 60,
+        "include_model_ids": [
+          "anthropic/claude-haiku-4.5"
+        ]
+      },
+      "coding": {
+        "description": "OpenRouter programming category for implementation-heavy evals.",
+        "api_filters": {
+          "category": "programming"
+        },
+        "max_models": 40
+      },
+      "reasoning": {
+        "description": "Broader structured-output ladder for hard judgement or synthesis tasks.",
+        "max_models": 120,
+        "include_model_ids": [
+          "anthropic/claude-haiku-4.5",
+          "openai/gpt-4.1-mini",
+          "openai/gpt-4.1"
+        ]
+      }
+    }
+  },
+  "spec_agent": {
+    "default_profile": "balanced_general"
+  },
+  "test_agent": {
+    "default_profile": "coding",
+    "estimated_prompt_tokens": 5000,
+    "estimated_completion_tokens": 3000
+  },
+  "builder_agent": {
+    "default_profile": "coding",
+    "estimated_prompt_tokens": 9000,
+    "estimated_completion_tokens": 4000
+  },
+  "verifier_agent": {
+    "default_profile": "cheap_general"
+  },
+  "eval_agent": {
+    "default_profile": "reasoning"
   },
   "judge": "openai/gpt-4.1"
 }

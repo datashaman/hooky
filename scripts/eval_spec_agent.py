@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ DEFAULT_FIXTURE = Path("tests/fixtures/spec_agent/moderately_complex.json")
 DEFAULT_LADDER = Path(".workflow/model_ladder.json")
 DEFAULT_RUN_ROOT = Path(".workflow/eval-runs")
 DEFAULT_CACHE_ROOT = Path(".workflow/eval-cache/spec-agent")
+REASONING_EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 def main() -> int:
@@ -32,7 +34,7 @@ def main() -> int:
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required for Spec Agent eval")
 
-    ladder_report = resolve_model_ladder(args, ladder_config, fixture)
+    ladder_report = resolve_model_ladder(args, ladder_config, fixture, agent_key="spec_agent")
     runnable_ladder = [item for item in ladder_report if item["available"] and item["estimated_cost"] is not None]
     if not runnable_ladder:
         raise RuntimeError("No runnable candidate models available from OpenRouter /models")
@@ -56,6 +58,8 @@ def main() -> int:
         if attempt["status"] == "pass":
             winner = attempt
             write_report(report_path, fixture, judge_model, ladder_report, attempts, winner, final=True)
+            if not args.no_update_selected_model:
+                update_selected_model(winner, report_path, judge_model)
             break
 
     write_report(report_path, fixture, judge_model, ladder_report, attempts, winner, final=True)
@@ -71,6 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     parser.add_argument("--model-ladder", type=Path, default=DEFAULT_LADDER)
+    parser.add_argument("--profile", help="Model ladder profile from .workflow/model_ladder.json")
     parser.add_argument("--models", nargs="+", help="Override spec model ladder")
     parser.add_argument("--max-models", type=int, help="Override max models to try from the API-priced ladder")
     parser.add_argument("--print-ladder", action="store_true", help="Print API-priced model ladder and exit")
@@ -78,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
     parser.add_argument("--cache-root", type=Path, default=DEFAULT_CACHE_ROOT)
     parser.add_argument("--no-cache", action="store_true", help="Ignore cached model attempts and call OpenRouter again")
+    parser.add_argument("--no-update-selected-model", action="store_true", help="Do not persist the passing model as the selected Spec Agent model")
     parser.add_argument("--keep-runs", type=int, default=10)
     return parser.parse_args()
 
@@ -85,7 +91,8 @@ def parse_args() -> argparse.Namespace:
 def print_ladder_summary(ladder: list[dict[str, Any]]) -> None:
     print("planned_ladder:")
     for index, item in enumerate(ladder, 1):
-        print(f"{index}. estimated={item['estimated_cost']} model={item['id']}")
+        variant = item.get("variant_id", item["id"])
+        print(f"{index}. estimated={item['estimated_cost']} model={variant}")
 
 
 def write_report(
@@ -109,8 +116,13 @@ def write_report(
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any], fixture: dict[str, Any]) -> list[dict[str, Any]]:
-    selector = ladder_config["spec_agent"]
+def resolve_model_ladder(
+    args: argparse.Namespace,
+    ladder_config: dict[str, Any],
+    fixture: dict[str, Any],
+    agent_key: str = "spec_agent",
+) -> list[dict[str, Any]]:
+    selector = resolve_agent_selector(ladder_config, agent_key, getattr(args, "profile", None))
     if args.models:
         candidate_ids = set(args.models)
         max_models = len(candidate_ids)
@@ -120,6 +132,7 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
     else:
         candidate_ids = set(selector.get("candidate_model_ids", []))
         max_models = args.max_models or int(selector.get("max_models", 10))
+    include_model_ids = set(selector.get("include_model_ids", [])) if isinstance(selector, dict) and not candidate_ids else set()
     if max_models <= 0:
         raise RuntimeError("max_models must be greater than zero")
 
@@ -131,17 +144,34 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
         exclude_free_models = bool(selector.get("exclude_free_models", True))
         min_context_length = int(selector.get("min_context_length", 0))
         exclude_id_patterns = [pattern.lower() for pattern in selector.get("exclude_id_patterns", [])]
+        expand_reasoning = bool(selector.get("expand_reasoning_efforts", True))
+        reasoning_exclude = bool(selector.get("reasoning_exclude", True))
     else:
         completion_tokens = 1500
         required_parameters = set()
         exclude_free_models = True
         min_context_length = 0
         exclude_id_patterns = []
+        expand_reasoning = True
+        reasoning_exclude = True
 
     ladder = []
     unavailable = []
     returned_ids = set()
-    for model in fetch_openrouter_models():
+    api_filters = {}
+    if isinstance(selector, dict) and not candidate_ids:
+        api_filters = dict(selector.get("api_filters") or {})
+        if required_parameters and "supported_parameters" not in api_filters:
+            api_filters["supported_parameters"] = sorted(required_parameters)
+        if min_context_length and "context" not in api_filters:
+            api_filters["context"] = min_context_length
+        api_filters.setdefault("sort", "pricing-low-to-high")
+        if "category" in api_filters:
+            # OpenRouter rejects category combined with supported_parameters; keep
+            # the category server-side and enforce capabilities locally below.
+            api_filters.pop("supported_parameters", None)
+
+    for model in fetch_openrouter_models(api_filters):
         model_id = model.get("id")
         if not model_id:
             continue
@@ -176,7 +206,17 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
             continue
         ladder.append(model_summary(model, estimated_cost, prompt_tokens, completion_tokens))
 
-    ordered = sorted(ladder, key=lambda item: (item["estimated_cost"], item["id"]))[:max_models]
+    sorted_ladder = sorted(ladder, key=lambda item: (item["estimated_cost"], item["id"]))
+    ordered = sorted_ladder if candidate_ids else sorted_ladder[:max_models]
+    ordered_variant_ids = {item.get("variant_id", item["id"]) for item in ordered}
+    for item in sorted_ladder:
+        variant_id = item.get("variant_id", item["id"])
+        if item["id"] in include_model_ids and variant_id not in ordered_variant_ids:
+            anchor = dict(item)
+            anchor["included_by_profile"] = True
+            ordered.append(anchor)
+            ordered_variant_ids.add(variant_id)
+    ordered = expand_reasoning_variants(ordered, expand_reasoning, reasoning_exclude)
     if candidate_ids:
         for missing_id in sorted(candidate_ids - returned_ids):
             unavailable.append(
@@ -199,32 +239,114 @@ def resolve_model_ladder(args: argparse.Namespace, ladder_config: dict[str, Any]
     return ordered
 
 
+def resolve_agent_selector(ladder_config: dict[str, Any], agent_key: str, profile: str | None) -> Any:
+    if "model_selector" in ladder_config:
+        base_selector = ladder_config["model_selector"]
+        agent_selector = ladder_config.get(agent_key, {})
+        if not isinstance(base_selector, dict) or not isinstance(agent_selector, dict):
+            raise RuntimeError("model_selector and agent selector entries must be objects")
+        return resolve_selector(deep_merge(base_selector, agent_selector), profile)
+    return resolve_selector(ladder_config[agent_key], profile)
+
+
+def resolve_selector(selector: Any, profile: str | None) -> Any:
+    if not isinstance(selector, dict) or not selector.get("profiles"):
+        if profile:
+            raise RuntimeError("model ladder does not define profiles")
+        return selector
+
+    profile_name = profile or selector.get("default_profile")
+    if not profile_name:
+        return {key: value for key, value in selector.items() if key not in {"profiles", "default_profile"}}
+    profiles = selector.get("profiles") or {}
+    if profile_name not in profiles:
+        available = ", ".join(sorted(profiles))
+        raise RuntimeError(f"unknown model ladder profile: {profile_name}. Available profiles: {available}")
+
+    base = {key: value for key, value in selector.items() if key not in {"profiles", "default_profile"}}
+    return deep_merge(base, profiles[profile_name])
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def model_summary(
     model: dict[str, Any],
     estimated_cost: float | None,
     prompt_tokens: int,
     completion_tokens: int,
     reason: str | None = None,
+    reasoning_request: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = {
         "id": model["id"],
         "name": model.get("name", model["id"]),
+        "variant_id": model["id"] + reasoning_variant_suffix(reasoning_request),
         "estimated_cost": estimated_cost,
         "estimated_prompt_tokens": prompt_tokens,
         "estimated_completion_tokens": completion_tokens,
         "pricing": model.get("pricing") or {},
         "context_length": model.get("context_length"),
         "supported_parameters": model.get("supported_parameters") or [],
+        "reasoning": model.get("reasoning") or {},
         "available": reason is None,
     }
+    if reasoning_request:
+        summary["reasoning_request"] = reasoning_request
     if reason:
         summary["reason"] = reason
     return summary
 
 
-def fetch_openrouter_models() -> list[dict[str, Any]]:
+def expand_reasoning_variants(
+    summaries: list[dict[str, Any]],
+    expand_reasoning: bool,
+    reasoning_exclude: bool,
+) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for summary in summaries:
+        efforts = reasoning_efforts(summary)
+        if not expand_reasoning or not efforts:
+            expanded.append(summary)
+            continue
+        for effort in efforts:
+            variant = dict(summary)
+            variant["variant_id"] = summary["id"] + reasoning_variant_suffix({"effort": effort})
+            variant["reasoning_request"] = {"effort": effort, "exclude": reasoning_exclude}
+            expanded.append(variant)
+    return expanded
+
+
+def reasoning_efforts(model: dict[str, Any]) -> list[str]:
+    reasoning = model.get("reasoning") or {}
+    supported = reasoning.get("supported_efforts") or []
+    if not supported:
+        return []
+    order = {name: index for index, name in enumerate(REASONING_EFFORT_ORDER)}
+    return sorted([str(value) for value in supported], key=lambda value: (order.get(value, 999), value))
+
+
+def reasoning_variant_suffix(reasoning_request: dict[str, Any] | None) -> str:
+    if not reasoning_request:
+        return ""
+    effort = reasoning_request.get("effort")
+    return f"#reasoning={effort}" if effort else "#reasoning"
+
+
+def fetch_openrouter_models(api_filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    url = "https://openrouter.ai/api/v1/models"
+    query = encode_openrouter_model_filters(api_filters or {})
+    if query:
+        url = f"{url}?{query}"
     request = urllib.request.Request(
-        "https://openrouter.ai/api/v1/models",
+        url,
         headers={
             "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
             "Accept": "application/json",
@@ -241,6 +363,18 @@ def fetch_openrouter_models() -> list[dict[str, Any]]:
     if not isinstance(data, list):
         raise RuntimeError("OpenRouter /models response did not include a data array")
     return data
+
+
+def encode_openrouter_model_filters(api_filters: dict[str, Any]) -> str:
+    query: dict[str, str] = {}
+    for key, value in api_filters.items():
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, (list, tuple, set)):
+            query[key] = ",".join(str(item) for item in value)
+        else:
+            query[key] = str(value)
+    return urllib.parse.urlencode(query)
 
 
 def estimate_tokens(fixture: dict[str, Any]) -> int:
@@ -266,7 +400,8 @@ def run_attempt(
     no_cache: bool,
 ) -> dict[str, Any]:
     model = model_info["id"]
-    cache_path = cache_root / f"{safe_name(model)}.json"
+    variant_id = model_info.get("variant_id", model)
+    cache_path = cache_root / f"{safe_name(variant_id)}.json"
     if not no_cache and cache_path.exists():
         cached = read_json(cache_path)
         cached["cached"] = True
@@ -276,13 +411,15 @@ def run_attempt(
         return cached
 
     issue = fixture["issue"]
-    attempt_dir = run_root / safe_name(model)
+    attempt_dir = run_root / safe_name(variant_id)
     artifact_root = attempt_dir / "docs/specs"
     sidecar_root = attempt_dir / ".workflow/artifacts/specs"
     attempt_dir.mkdir(parents=True, exist_ok=True)
 
     previous_model = os.environ.get("OPENROUTER_MODEL")
+    previous_reasoning = os.environ.get("OPENROUTER_REASONING")
     os.environ["OPENROUTER_MODEL"] = model
+    apply_reasoning_env(model_info)
     try:
         artifact_dir, contract, spec_usage = spec_agent.generate_spec_artifacts(
             issue_number=int(issue["number"]),
@@ -295,8 +432,11 @@ def run_attempt(
         )
     except Exception as exc:  # noqa: BLE001 - eval report should capture failed attempts.
         restore_model(previous_model)
+        restore_reasoning(previous_reasoning)
         attempt = {
             "model": model,
+            "variant_id": variant_id,
+            "reasoning_request": model_info.get("reasoning_request"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
@@ -308,11 +448,14 @@ def run_attempt(
         return attempt
     finally:
         restore_model(previous_model)
+        restore_reasoning(previous_reasoning)
 
     deterministic = deterministic_eval(contract, artifact_dir, fixture["expect"])
     if deterministic["status"] == "fail":
         attempt = {
             "model": model,
+            "variant_id": variant_id,
+            "reasoning_request": model_info.get("reasoning_request"),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(artifact_dir),
@@ -332,6 +475,8 @@ def run_attempt(
     status = "pass" if judge_passes(judge) else "fail"
     attempt = {
         "model": model,
+        "variant_id": variant_id,
+        "reasoning_request": model_info.get("reasoning_request"),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(artifact_dir),
@@ -419,7 +564,20 @@ def judge_eval(judge_model: str, fixture: dict[str, Any], contract: dict[str, An
     with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"]) as client:
         completion = client.chat.send(
             model=judge_model,
-            response_format={"type": "json_object"},
+            response_format=spec_agent.structured_response_format(
+                "spec_agent_eval",
+                spec_agent.agent_eval_schema(
+                    [
+                        "spec_alignment",
+                        "acceptance_criteria_quality",
+                        "test_plan_quality",
+                        "risk_awareness",
+                        "scope_discipline",
+                        "blocking_question_quality",
+                    ]
+                ),
+            ),
+            **spec_agent.openrouter_request_options(),
             messages=[
                 {
                     "role": "system",
@@ -479,6 +637,10 @@ def judge_passes(judge: dict[str, Any]) -> bool:
 
 def print_attempt(attempt: dict[str, Any]) -> None:
     print(f"\nmodel: {attempt['model']}")
+    if attempt.get("variant_id") and attempt.get("variant_id") != attempt["model"]:
+        print(f"variant: {attempt['variant_id']}")
+    if attempt.get("reasoning_request"):
+        print(f"reasoning: {json.dumps(attempt['reasoning_request'], sort_keys=True)}")
     print(f"estimated_cost: {attempt.get('estimated_cost')}")
     print(f"status: {attempt['status']}")
     print(f"cached: {attempt.get('cached', False)}")
@@ -517,6 +679,7 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
     paths = [
         fixture_path,
         Path("AGENTS.md"),
+        spec_agent.SELECTED_MODEL_PATH,
         Path("scripts/spec_agent.py"),
         Path("scripts/eval_spec_agent.py"),
     ]
@@ -532,11 +695,43 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
     return digest.hexdigest()[:24]
 
 
+def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model: str) -> None:
+    payload = {
+        "model": winner["model"],
+        "variant_id": winner.get("variant_id", winner["model"]),
+        "reasoning_request": winner.get("reasoning_request"),
+        "source": "eval",
+        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "report": report_path.as_posix(),
+        "judge_model": judge_model,
+        "estimated_cost": winner.get("estimated_cost"),
+        "actual_cost": winner.get("original_cost", winner.get("cost")),
+        "cached": winner.get("cached", False),
+    }
+    spec_agent.SELECTED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    spec_agent.SELECTED_MODEL_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def restore_model(previous_model: str | None) -> None:
     if previous_model is None:
         os.environ.pop("OPENROUTER_MODEL", None)
     else:
         os.environ["OPENROUTER_MODEL"] = previous_model
+
+
+def apply_reasoning_env(model_info: dict[str, Any]) -> None:
+    reasoning_request = model_info.get("reasoning_request")
+    if reasoning_request:
+        os.environ["OPENROUTER_REASONING"] = json.dumps(reasoning_request, sort_keys=True)
+    else:
+        os.environ.pop("OPENROUTER_REASONING", None)
+
+
+def restore_reasoning(previous_reasoning: str | None) -> None:
+    if previous_reasoning is None:
+        os.environ.pop("OPENROUTER_REASONING", None)
+    else:
+        os.environ["OPENROUTER_REASONING"] = previous_reasoning
 
 
 def safe_name(value: str) -> str:

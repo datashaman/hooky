@@ -22,6 +22,7 @@ Hooky is an agentic SDLC pipeline. Work flows through explicit stages:
 
 ## Current Repository Shape
 
+- `.workflow/agents/common/` stores static runtime context shared by all agents.
 - `.workflow/agents/` stores static agent context, templates, and eval configuration.
 - `.workflow/eval-runs/` stores generated eval outputs and reports.
 - `.workflow/eval-cache/` stores cached eval attempts.
@@ -35,3 +36,14 @@ Hooky is an agentic SDLC pipeline. Work flows through explicit stages:
 - The Builder Agent writes production implementation only after approved tests exist.
 - Verifier and Eval agents do not edit code or tests.
 
+## Required Runtime Basics
+
+Each agent must receive:
+
+- a working folder for the project/task
+- read/write file tools
+- list/find/grep file tools
+- bash
+- todo read/write tools
+
+Agents must use the todo list for substantive work.

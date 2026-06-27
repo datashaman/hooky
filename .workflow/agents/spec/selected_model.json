@@ -1,0 +1,10 @@
+{
+  "actual_cost": 0.01469045,
+  "cached": false,
+  "estimated_cost": 0.002225,
+  "judge_model": "openai/gpt-4.1",
+  "model": "stepfun/step-3.7-flash",
+  "report": ".workflow/eval-runs/20260627T173332Z/report.json",
+  "source": "eval",
+  "updated_at": "2026-06-27T17:39:39+00:00"
+}

@@ -21,8 +21,10 @@ from typing import Any
 ARTIFACT_ROOT = Path("docs/specs")
 SIDECAR_ROOT = Path(".workflow/artifacts/specs")
 AGENT_ROOT = Path(".workflow/agents/spec")
+COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
 STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
 TEMPLATE_ROOT = AGENT_ROOT / "templates"
+SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
 PROJECT_CONTEXT_FILES = [Path("AGENTS.md")]
 
 
@@ -78,6 +80,8 @@ def generate_spec_artifacts(
         body=body,
         author=author,
         generated_at=generated_at,
+        artifact_root=artifact_root,
+        sidecar_root=sidecar_root,
     )
     contract, usage = generate_contract(
         dynamic_context=dynamic_context,
@@ -144,12 +148,13 @@ def generate_contract_with_openrouter(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     from openrouter import OpenRouter
 
-    model = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
+    model = selected_model()
     agent_context = load_agent_context()
     with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"]) as client:
         completion = client.chat.send(
             model=model,
-            response_format={"type": "json_object"},
+            response_format=structured_response_format("spec_agent_contract", spec_agent_contract_schema()),
+            **openrouter_request_options(),
             messages=[
                 {
                     "role": "system",
@@ -165,6 +170,100 @@ def generate_contract_with_openrouter(
     if not content:
         raise RuntimeError("OpenRouter returned an empty response")
     return json.loads(content), response_usage(completion)
+
+
+def openrouter_request_options() -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    reasoning = os.environ.get("OPENROUTER_REASONING")
+    if reasoning:
+        options["reasoning"] = json.loads(reasoning)
+    return options
+
+
+def structured_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def string_array_schema() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}}
+
+
+def spec_agent_contract_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": True,
+        "required": [
+            "summary",
+            "scope",
+            "non_goals",
+            "acceptance_criteria",
+            "test_plan",
+            "risks",
+            "cost_plan",
+            "requires_human_approval",
+        ],
+        "properties": {
+            "summary": {"type": "string"},
+            "scope": string_array_schema(),
+            "non_goals": string_array_schema(),
+            "acceptance_criteria": string_array_schema(),
+            "affected_components": string_array_schema(),
+            "edge_cases": string_array_schema(),
+            "blocking_questions": string_array_schema(),
+            "test_plan": string_array_schema(),
+            "risks": string_array_schema(),
+            "cost_plan": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": ["complexity", "max_iterations", "model_route"],
+                "properties": {
+                    "complexity": {"type": "string", "enum": ["small", "medium", "large"]},
+                    "max_iterations": {"type": "integer"},
+                    "model_route": {"type": "object", "additionalProperties": True},
+                },
+            },
+            "requires_human_approval": {"type": "boolean"},
+        },
+    }
+
+
+def agent_eval_schema(score_fields: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": True,
+        "required": ["status", "scores", "critical_findings", "findings", "human_review_focus"],
+        "properties": {
+            "status": {"type": "string", "enum": ["pass", "fail", "needs_human_review"]},
+            "scores": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": score_fields,
+                "properties": {field: {"type": "number"} for field in score_fields},
+            },
+            "critical_findings": string_array_schema(),
+            "findings": string_array_schema(),
+            "human_review_focus": string_array_schema(),
+        },
+    }
+
+
+def selected_model() -> str:
+    env_model = os.environ.get("OPENROUTER_MODEL")
+    if env_model:
+        return env_model
+    if SELECTED_MODEL_PATH.exists():
+        data = read_json(SELECTED_MODEL_PATH)
+        model = data.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return "openai/gpt-4.1-mini"
 
 
 def response_usage(response: Any) -> dict[str, Any]:
@@ -189,9 +288,29 @@ def build_dynamic_context(
     body: str,
     author: str,
     generated_at: str,
+    artifact_root: Path = ARTIFACT_ROOT,
+    sidecar_root: Path = SIDECAR_ROOT,
 ) -> dict[str, Any]:
     return {
         "source": "github_issue",
+        "workspace": {
+            "working_folder": ".",
+            "artifact_root": artifact_root.as_posix(),
+            "sidecar_root": sidecar_root.as_posix(),
+        },
+        "tools": {
+            "available": [
+                "read_file",
+                "write_file",
+                "list_files",
+                "grep_files",
+                "find_files",
+                "bash",
+                "todo_read",
+                "todo_write",
+            ],
+            "todo_required": True,
+        },
         "issue": {
             "number": issue_number,
             "title": title,
@@ -203,6 +322,10 @@ def build_dynamic_context(
 
 
 def load_agent_context() -> dict[str, Any]:
+    common_static_files = {}
+    for path in sorted(COMMON_STATIC_CONTEXT_ROOT.glob("*.md")):
+        common_static_files[path.name] = path.read_text(encoding="utf-8")
+
     static_files = {}
     for path in sorted(STATIC_CONTEXT_ROOT.glob("*.md")):
         static_files[path.name] = path.read_text(encoding="utf-8")
@@ -214,8 +337,10 @@ def load_agent_context() -> dict[str, Any]:
 
     return {
         "system": static_files.get("system.md", ""),
+        "common_static_files": common_static_files,
         "static_files": static_files,
         "project_files": project_files,
+        "selected_model": selected_model_metadata(),
     }
 
 
@@ -229,9 +354,17 @@ def spec_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
             if key != "system.md"
         },
     )
+    common_context = format_context_block("Common Agent Runtime Context", agent_context["common_static_files"])
     return f"""{project_context}
 
+{common_context}
+
 {static_context}
+
+Selected Model:
+```json
+{json.dumps(agent_context["selected_model"], indent=2, sort_keys=True)}
+```
 
 Dynamic Context:
 ```json
@@ -355,12 +488,26 @@ def render_context_snapshot(dynamic_context: dict[str, Any]) -> str:
         "# Spec Agent Context Snapshot\n\n"
         "## Project Context Files\n\n"
         + md_list(agent_context["project_files"].keys())
+        + "\n\n## Common Static Context Files\n\n"
+        + md_list(agent_context["common_static_files"].keys())
         + "\n\n## Static Context Files\n\n"
         + md_list(agent_context["static_files"].keys())
+        + "\n\n## Selected Model\n\n```json\n"
+        + json.dumps(agent_context["selected_model"], indent=2, sort_keys=True)
+        + "\n```\n"
         + "\n\n## Dynamic Context\n\n```json\n"
         + json.dumps(dynamic_context, indent=2, sort_keys=True)
         + "\n```\n"
     )
+
+
+def selected_model_metadata() -> dict[str, Any]:
+    env_model = os.environ.get("OPENROUTER_MODEL")
+    if env_model:
+        return {"model": env_model, "source": "OPENROUTER_MODEL"}
+    if SELECTED_MODEL_PATH.exists():
+        return read_json(SELECTED_MODEL_PATH)
+    return {"model": "openai/gpt-4.1-mini", "source": "fallback"}
 
 
 def render_template(name: str, context: dict[str, str]) -> str:

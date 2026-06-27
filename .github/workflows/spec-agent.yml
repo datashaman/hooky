@@ -32,7 +32,6 @@ jobs:
         id: spec
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'openai/gpt-4.1-mini' }}
         run: |
           python3 scripts/spec_agent.py \
             --event "$GITHUB_EVENT_PATH" \

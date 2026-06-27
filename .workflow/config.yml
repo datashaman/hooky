@@ -17,6 +17,7 @@ agents:
         - AGENTS.md
       static_root: .workflow/agents/spec/static
       templates_root: .workflow/agents/spec/templates
+      selected_model: .workflow/agents/spec/selected_model.json
       dynamic_snapshot_files:
         - dynamic_context.json
         - context_snapshot.md
@@ -36,3 +37,55 @@ agents:
       - invent_requirements
       - omit_human_approval
     requires_human_approval: true
+  test:
+    context:
+      project_files:
+        - AGENTS.md
+      static_root: .workflow/agents/test/static
+      templates_root: .workflow/agents/test/templates
+      selected_model: .workflow/agents/test/selected_model.json
+      dynamic_snapshot_files:
+        - dynamic_context.json
+        - context_snapshot.md
+    responsibilities:
+      - read_approved_specification
+      - generate_unit_tests
+      - generate_integration_tests
+      - generate_regression_tests
+      - create_fixtures_and_mocks
+      - cover_acceptance_criteria
+      - report_untestable_requirements
+    forbidden:
+      - write_production_code
+      - weaken_tests
+      - invent_requirements
+      - ignore_acceptance_criteria
+    requires_human_approval: true
+  builder:
+    context:
+      project_files:
+        - AGENTS.md
+        - README.md
+        - package.json
+        - playwright.config.cjs
+      static_root: .workflow/agents/builder/static
+      templates_root: .workflow/agents/builder/templates
+      selected_model: .workflow/agents/builder/selected_model.json
+      dynamic_snapshot_files:
+        - dynamic_context.json
+        - context_snapshot.md
+    responsibilities:
+      - read_approved_specification
+      - read_approved_tests
+      - read_project_conventions
+      - implement_behavior
+      - run_tests
+      - produce_build_report
+    forbidden:
+      - edit_tests
+      - weaken_tests
+      - scope_expansion
+      - unrelated_refactoring
+      - hidden_dependencies
+      - deployments
+    requires_verifier: true
