@@ -1,0 +1,16 @@
+{
+  "actual_cost": 0.00694652,
+  "cached": false,
+  "context_length": 131072,
+  "estimated_cost": 0.00027,
+  "judge_model": "openai/gpt-4.1",
+  "model": "openai/gpt-oss-20b",
+  "reasoning_request": {
+    "effort": "low",
+    "exclude": true
+  },
+  "report": ".workflow/eval-runs/20260627T184534Z/report.json",
+  "source": "eval",
+  "updated_at": "2026-06-27T18:46:41+00:00",
+  "variant_id": "openai/gpt-oss-20b#reasoning=low"
+}

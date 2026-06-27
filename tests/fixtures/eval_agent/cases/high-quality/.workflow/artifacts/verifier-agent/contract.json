@@ -1,0 +1,19 @@
+{
+  "status": "pass",
+  "summary": "Tests passed and no scope or integrity issues were found.",
+  "checks_run": [
+    {
+      "name": "test suite",
+      "command": "npm test",
+      "status": "pass",
+      "evidence": "node --test completed successfully"
+    }
+  ],
+  "scope_violations": [],
+  "test_integrity_findings": [],
+  "acceptance_coverage_findings": [],
+  "security_findings": [],
+  "required_actions": [],
+  "safe_to_open_pr": true
+}
+

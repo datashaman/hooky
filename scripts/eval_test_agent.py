@@ -62,7 +62,7 @@ def main() -> int:
     winner = None
     report_path = run_root / "report.json"
     for model_info in runnable_ladder:
-        print(f"\nstarting_model: {model_info['id']}", flush=True)
+        print(f"\nstarting_model: {eval_spec_agent.model_display_name(model_info)}", flush=True)
         attempt = run_attempt(fixture, model_info, judge_model, run_root, cache_root, args.project_fixture, args.no_cache)
         attempts.append(attempt)
         eval_spec_agent.print_attempt(attempt)
@@ -78,7 +78,7 @@ def main() -> int:
     print(f"\nreport: {report_path}")
     eval_spec_agent.cleanup_runs(args.run_root, args.keep_runs)
     if winner:
-        print(f"passed_with: {winner['model']}")
+        print(f"passed_with: {eval_spec_agent.model_display_name(winner)}")
         return 0
     return 1
 
@@ -413,7 +413,7 @@ def write_report(
         "status": "pass" if winner else "fail" if final else "running",
         "fixture": fixture["name"],
         "judge_model": judge_model,
-        "winner_model": winner["model"] if winner else None,
+        "winner_model": eval_spec_agent.model_display_name(winner) if winner else None,
         "model_ladder": ladder_report,
         "total_cost": eval_spec_agent.sum_costs(attempts),
         "attempts": attempts,
@@ -426,6 +426,9 @@ def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) 
     paths = [
         fixture_path,
         test_agent.SELECTED_MODEL_PATH,
+        Path(".workflow/model_ladder.json"),
+        Path("scripts/agent_runtime.py"),
+        Path("scripts/spec_agent.py"),
         Path("scripts/test_agent.py"),
         Path("scripts/eval_test_agent.py"),
     ]

@@ -6,13 +6,17 @@
       "sort": "pricing-low-to-high",
       "supported_parameters": [
         "response_format",
-        "structured_outputs"
+        "structured_outputs",
+        "tools",
+        "tool_choice"
       ],
       "context": 16000
     },
     "require_parameters": [
       "response_format",
-      "structured_outputs"
+      "structured_outputs",
+      "tools",
+      "tool_choice"
     ],
     "exclude_free_models": true,
     "min_context_length": 16000,

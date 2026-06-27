@@ -1,0 +1,11 @@
+{
+  "actual_cost": 0.07454529,
+  "cached": false,
+  "context_length": 1048576,
+  "estimated_cost": 0.00153,
+  "judge_model": "openai/gpt-4.1",
+  "model": "deepseek/deepseek-v4-flash",
+  "report": ".workflow/eval-runs/builder-agent/20260627T191700Z/report.json",
+  "source": "eval",
+  "updated_at": "2026-06-27T19:25:00+00:00"
+}

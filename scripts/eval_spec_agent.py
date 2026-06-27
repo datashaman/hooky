@@ -66,7 +66,7 @@ def main() -> int:
     print(f"\nreport: {report_path}")
     cleanup_runs(args.run_root, args.keep_runs)
     if winner:
-        print(f"passed_with: {winner['model']}")
+        print(f"passed_with: {model_display_name(winner)}")
         return 0
     return 1
 
@@ -91,8 +91,11 @@ def parse_args() -> argparse.Namespace:
 def print_ladder_summary(ladder: list[dict[str, Any]]) -> None:
     print("planned_ladder:")
     for index, item in enumerate(ladder, 1):
-        variant = item.get("variant_id", item["id"])
-        print(f"{index}. estimated={item['estimated_cost']} model={variant}")
+        print(f"{index}. estimated={item['estimated_cost']} model={model_display_name(item)}")
+
+
+def model_display_name(model_info: dict[str, Any]) -> str:
+    return str(model_info.get("variant_id") or model_info.get("id") or model_info["model"])
 
 
 def write_report(
@@ -108,7 +111,7 @@ def write_report(
         "status": "pass" if winner else "fail" if final else "running",
         "fixture": fixture["name"],
         "judge_model": judge_model,
-        "winner_model": winner["model"] if winner else None,
+        "winner_model": model_display_name(winner) if winner else None,
         "model_ladder": ladder_report,
         "total_cost": sum_costs(attempts),
         "attempts": attempts,
@@ -693,7 +696,6 @@ def write_attempt_cache(path: Path, attempt: dict[str, Any]) -> None:
 
 def tool_use_summary(report_root: Path | None) -> dict[str, Any]:
     summary = {
-        "tool_use_turns": 0,
         "tool_calls": 0,
         "tools": {},
         "compactions": 0,
@@ -707,7 +709,6 @@ def tool_use_summary(report_root: Path | None) -> dict[str, Any]:
     if tool_events_path.exists():
         tool_events = read_json_list(tool_events_path)
         summary["tool_calls"] = len(tool_events)
-        summary["tool_use_turns"] = len(tool_events)
         tools: dict[str, int] = {}
         for event in tool_events:
             name = str(event.get("name", "unknown"))
@@ -739,6 +740,8 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
         fixture_path,
         Path("AGENTS.md"),
         spec_agent.SELECTED_MODEL_PATH,
+        Path(".workflow/model_ladder.json"),
+        Path("scripts/agent_runtime.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/eval_spec_agent.py"),
     ]

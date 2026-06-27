@@ -1,0 +1,6 @@
+{
+  "expected_status": "pass",
+  "expected_safe_to_merge": true,
+  "expected_topics": ["maintainability"],
+  "name": "high-quality"
+}

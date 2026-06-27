@@ -1,0 +1,8 @@
+{
+  "name": "eval-agent-high-quality-fixture",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/calculator.test.js"
+  }
+}
+

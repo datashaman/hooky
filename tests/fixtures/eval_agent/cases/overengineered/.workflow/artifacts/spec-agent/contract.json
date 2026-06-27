@@ -1,0 +1,15 @@
+{
+  "summary": "Add calculator addition support.",
+  "scope": ["Implement add(a, b) in the public calculator module."],
+  "non_goals": ["Do not add subtraction, operation registries, plugin systems, or a framework abstraction."],
+  "acceptance_criteria": ["Calling add(1, 2) returns 3."],
+  "test_plan": ["Unit test add with two positive numbers."],
+  "risks": ["Overengineering would make the small module harder to maintain."],
+  "cost_plan": {
+    "complexity": "small",
+    "max_iterations": 3,
+    "model_route": {}
+  },
+  "requires_human_approval": true
+}
+

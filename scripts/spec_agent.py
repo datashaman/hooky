@@ -177,7 +177,7 @@ def generate_contract_with_openrouter(
 
 
 def openrouter_request_options() -> dict[str, Any]:
-    options: dict[str, Any] = {}
+    options: dict[str, Any] = {"provider": {"require_parameters": True}}
     reasoning = os.environ.get("OPENROUTER_REASONING")
     if reasoning:
         options["reasoning"] = json.loads(reasoning)

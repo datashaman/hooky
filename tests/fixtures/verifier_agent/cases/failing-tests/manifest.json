@@ -1,0 +1,6 @@
+{
+  "expected_status": "fail",
+  "expected_topics": ["npm test"],
+  "name": "failing-tests"
+}
+
