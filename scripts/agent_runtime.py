@@ -381,6 +381,20 @@ def accumulate_usage(total: dict[str, Any], usage: dict[str, Any]) -> None:
     total["cost"] = round(float(total.get("cost") or 0) + float(usage.get("cost") or 0), 8)
 
 
+def write_runtime_log(
+    report_root: Path,
+    transcript: list[dict[str, Any]],
+    tool_events: list[dict[str, Any]],
+    compaction_events: list[dict[str, Any]],
+    pre_compaction_archives: list[dict[str, Any]],
+) -> None:
+    report_root.mkdir(parents=True, exist_ok=True)
+    (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def openrouter_timeout_ms() -> int:
     return int(os.environ.get("OPENROUTER_TIMEOUT_MS", "120000"))
 

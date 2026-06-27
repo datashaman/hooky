@@ -73,6 +73,7 @@ def generate_spec_artifacts(
     generated_at: str,
     artifact_root: Path = ARTIFACT_ROOT,
     sidecar_root: Path = SIDECAR_ROOT,
+    working_folder: Path = Path("."),
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     dynamic_context = build_dynamic_context(
         issue_number=issue_number,
@@ -82,6 +83,7 @@ def generate_spec_artifacts(
         generated_at=generated_at,
         artifact_root=artifact_root,
         sidecar_root=sidecar_root,
+        working_folder=working_folder,
     )
     contract, usage = generate_contract(
         dynamic_context=dynamic_context,
@@ -146,30 +148,32 @@ def generate_contract(
 def generate_contract_with_openrouter(
     dynamic_context: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from openrouter import OpenRouter
+    from agent_runtime import ToolRuntime, run_tool_agent, write_runtime_log
 
     model = selected_model()
     agent_context = load_agent_context()
-    with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"]) as client:
-        completion = client.chat.send(
-            model=model,
-            response_format=structured_response_format("spec_agent_contract", spec_agent_contract_schema()),
-            **openrouter_request_options(),
-            messages=[
-                {
-                    "role": "system",
-                    "content": agent_context["system"],
-                },
-                {
-                    "role": "user",
-                    "content": spec_prompt(agent_context, dynamic_context),
-                },
-            ],
-        )
-    content = completion.choices[0].message.content
-    if not content:
-        raise RuntimeError("OpenRouter returned an empty response")
-    return json.loads(content), response_usage(completion)
+    runtime = ToolRuntime(
+        working_folder=dynamic_context["workspace"]["working_folder"],
+        final_report_schema=spec_agent_contract_schema(),
+        max_cost_usd=float(os.environ.get("SPEC_AGENT_MAX_COST_USD", "0.10")),
+        max_seconds=int(os.environ.get("SPEC_AGENT_MAX_SECONDS", "180")),
+        context_window_tokens=agent_context["selected_model"].get("context_length"),
+        final_validator=validate_contract,
+    )
+    result = run_tool_agent(
+        model=model,
+        system=agent_context["system"],
+        user=spec_prompt(agent_context, dynamic_context),
+        runtime=runtime,
+    )
+    write_runtime_log(
+        Path(dynamic_context["workspace"]["runtime_root"]),
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+    )
+    return result.final_report, result.usage
 
 
 def openrouter_request_options() -> dict[str, Any]:
@@ -290,13 +294,15 @@ def build_dynamic_context(
     generated_at: str,
     artifact_root: Path = ARTIFACT_ROOT,
     sidecar_root: Path = SIDECAR_ROOT,
+    working_folder: Path = Path("."),
 ) -> dict[str, Any]:
     return {
         "source": "github_issue",
         "workspace": {
-            "working_folder": ".",
+            "working_folder": working_folder.as_posix(),
             "artifact_root": artifact_root.as_posix(),
             "sidecar_root": sidecar_root.as_posix(),
+            "runtime_root": (sidecar_root / "_runtime").as_posix(),
         },
         "tools": {
             "available": [
@@ -371,7 +377,9 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Produce the Spec Agent contract from the dynamic context, constrained by the project and static agent context.
+Use the available tools to inspect project context as needed. Use todo tools to track substantive work.
+Do not write production code, tests, dependency manifests, or runtime configuration.
+Finish only by calling final_report with the Spec Agent contract.
 """
 
 

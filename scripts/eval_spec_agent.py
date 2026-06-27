@@ -408,6 +408,7 @@ def run_attempt(
         cached["original_cost"] = cached.get("cost", 0)
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
+        cached.setdefault("tool_use", tool_use_summary(Path(cached["artifact_dir"]) if cached.get("artifact_dir") else None))
         return cached
 
     issue = fixture["issue"]
@@ -431,16 +432,19 @@ def run_attempt(
             generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             artifact_root=artifact_root,
             sidecar_root=sidecar_root,
+            working_folder=attempt_dir,
         )
     except Exception as exc:  # noqa: BLE001 - eval report should capture failed attempts.
         restore_model(previous_model)
         restore_reasoning(previous_reasoning)
         restore_context_length(previous_context_length)
+        runtime_root = sidecar_root / "_runtime"
         attempt = {
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
+            "tool_use": tool_use_summary(runtime_root),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
@@ -457,11 +461,13 @@ def run_attempt(
 
     deterministic = deterministic_eval(contract, artifact_dir, fixture["expect"])
     if deterministic["status"] == "fail":
+        runtime_root = sidecar_root / "_runtime"
         attempt = {
             "model": model,
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
+            "tool_use": tool_use_summary(runtime_root),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(artifact_dir),
@@ -479,11 +485,13 @@ def run_attempt(
 
     judge, judge_usage = judge_eval(judge_model, fixture, contract)
     status = "pass" if judge_passes(judge) else "fail"
+    runtime_root = sidecar_root / "_runtime"
     attempt = {
         "model": model,
         "variant_id": variant_id,
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
+        "tool_use": tool_use_summary(runtime_root),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(artifact_dir),
@@ -651,6 +659,8 @@ def print_attempt(attempt: dict[str, Any]) -> None:
     print(f"estimated_cost: {attempt.get('estimated_cost')}")
     print(f"status: {attempt['status']}")
     print(f"cached: {attempt.get('cached', False)}")
+    if "tool_use" in attempt:
+        print(f"tool_use: {json.dumps(attempt['tool_use'], sort_keys=True)}")
     if attempt.get("cached"):
         print(f"current_run_cost: {attempt.get('cost', 0)}")
         print(f"original_cost: {attempt.get('original_cost', 0)}")
@@ -679,6 +689,48 @@ def write_attempt_cache(path: Path, attempt: dict[str, Any]) -> None:
     cache_attempt = dict(attempt)
     cache_attempt["cached"] = False
     path.write_text(json.dumps(cache_attempt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def tool_use_summary(report_root: Path | None) -> dict[str, Any]:
+    summary = {
+        "tool_use_turns": 0,
+        "tool_calls": 0,
+        "tools": {},
+        "compactions": 0,
+        "pre_compaction_archives": 0,
+    }
+    if not report_root:
+        return summary
+    tool_events_path = first_matching_file(report_root, "tool_events.json")
+    compaction_events_path = first_matching_file(report_root, "compaction_events.json")
+    pre_compaction_path = first_matching_file(report_root, "pre_compaction_archives.json")
+    if tool_events_path.exists():
+        tool_events = read_json_list(tool_events_path)
+        summary["tool_calls"] = len(tool_events)
+        summary["tool_use_turns"] = len(tool_events)
+        tools: dict[str, int] = {}
+        for event in tool_events:
+            name = str(event.get("name", "unknown"))
+            tools[name] = tools.get(name, 0) + 1
+        summary["tools"] = tools
+    if compaction_events_path.exists():
+        summary["compactions"] = len(read_json_list(compaction_events_path))
+    if pre_compaction_path.exists():
+        summary["pre_compaction_archives"] = len(read_json_list(pre_compaction_path))
+    return summary
+
+
+def first_matching_file(root: Path, name: str) -> Path:
+    direct = root / name
+    if direct.exists():
+        return direct
+    matches = sorted(root.rglob(name)) if root.exists() else []
+    return matches[0] if matches else direct
+
+
+def read_json_list(path: Path) -> list[dict[str, Any]]:
+    data = read_json(path)
+    return data if isinstance(data, list) else []
 
 
 def eval_cache_key(fixture_path: Path, judge_model: str) -> str:

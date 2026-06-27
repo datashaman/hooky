@@ -126,6 +126,7 @@ def run_attempt(
         cached["original_cost"] = cached.get("cost", 0)
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
+        cached.setdefault("tool_use", eval_spec_agent.tool_use_summary(Path(cached["artifact_dir"]) if cached.get("artifact_dir") else None))
         return cached
 
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id)
@@ -162,6 +163,7 @@ def run_attempt(
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
+            "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(report_dir),
@@ -183,6 +185,7 @@ def run_attempt(
             "variant_id": variant_id,
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
+            "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(report_dir),
@@ -201,6 +204,7 @@ def run_attempt(
         "variant_id": variant_id,
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
+        "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(report_dir),
@@ -220,6 +224,7 @@ def failed_attempt(model: str, model_info: dict[str, Any], attempt_dir: Path, fi
         "variant_id": model_info.get("variant_id", model),
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
+        "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": "fail",
         "artifact_dir": str(attempt_dir),

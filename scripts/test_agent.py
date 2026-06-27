@@ -13,7 +13,7 @@ from string import Template
 from typing import Any
 
 import spec_agent
-from agent_runtime import ToolRuntime, run_tool_agent
+from agent_runtime import ToolRuntime, run_tool_agent, write_runtime_log
 
 
 ARTIFACT_ROOT = Path("tests/generated")
@@ -314,20 +314,6 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
     missing_criteria = approved_criteria - covered - uncovered
     if missing_criteria:
         raise ValueError(f"acceptance criteria missing from coverage lists: {sorted(missing_criteria)}")
-
-
-def write_runtime_log(
-    report_root: Path,
-    transcript: list[dict[str, Any]],
-    tool_events: list[dict[str, Any]],
-    compaction_events: list[dict[str, Any]],
-    pre_compaction_archives: list[dict[str, Any]],
-) -> None:
-    report_root.mkdir(parents=True, exist_ok=True)
-    (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def write_artifacts(

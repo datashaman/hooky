@@ -112,24 +112,32 @@ def generate_contract_with_openrouter(
     dynamic_context: dict[str, Any],
     working_folder: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from openrouter import OpenRouter
+    from agent_runtime import ToolRuntime, run_tool_agent, write_runtime_log
 
     model = selected_model()
     agent_context = load_agent_context(working_folder)
-    with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=test_agent.openrouter_timeout_ms()) as client:
-        completion = client.chat.send(
-            model=model,
-            response_format=spec_agent.structured_response_format("builder_agent_contract", builder_agent_contract_schema()),
-            **spec_agent.openrouter_request_options(),
-            messages=[
-                {"role": "system", "content": agent_context["system"]},
-                {"role": "user", "content": builder_prompt(agent_context, dynamic_context)},
-            ],
-        )
-    content = completion.choices[0].message.content
-    if not content:
-        raise RuntimeError("OpenRouter returned an empty response")
-    return json.loads(content), spec_agent.response_usage(completion)
+    runtime = ToolRuntime(
+        working_folder=working_folder,
+        final_report_schema=builder_agent_contract_schema(),
+        max_cost_usd=float(os.environ.get("BUILDER_AGENT_MAX_COST_USD", "0.50")),
+        max_seconds=int(os.environ.get("BUILDER_AGENT_MAX_SECONDS", "420")),
+        context_window_tokens=agent_context["selected_model"].get("context_length"),
+        final_validator=validate_contract,
+    )
+    result = run_tool_agent(
+        model=model,
+        system=agent_context["system"],
+        user=builder_prompt(agent_context, dynamic_context),
+        runtime=runtime,
+    )
+    write_runtime_log(
+        working_folder / dynamic_context["workspace"]["report_root"],
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+    )
+    return result.final_report, result.usage
 
 
 def builder_agent_contract_schema() -> dict[str, Any]:
@@ -242,7 +250,10 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Produce the minimum production implementation as file writes. Do not edit approved tests.
+Use the available tools to inspect project files, approved tests, and runtime behavior as needed.
+Use todo tools to track substantive work. You may write production implementation files only.
+Do not edit approved tests, prior-stage artifacts, dependency manifests, or runtime configuration.
+Finish only by calling final_report with the Builder Agent contract.
 """
 
 
