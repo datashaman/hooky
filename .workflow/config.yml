@@ -1,0 +1,31 @@
+schema_version: 1
+pipeline:
+  name: agentic-sdlc
+  first_flow: issue_to_spec
+
+github:
+  spec_trigger_label: sdlc:spec
+
+artifacts:
+  root: docs/specs
+  generated_marker: "<!-- generated-by: hooky-spec-agent -->"
+
+agents:
+  spec:
+    responsibilities:
+      - normalize_request
+      - ask_only_blocking_questions
+      - define_acceptance_criteria
+      - identify_affected_components
+      - identify_edge_cases
+      - define_non_goals
+      - produce_cost_estimate
+      - recommend_model_routing
+      - produce_implementation_test_plan
+    forbidden:
+      - write_production_code
+      - modify_tests
+      - invent_requirements
+      - omit_human_approval
+    requires_human_approval: true
+

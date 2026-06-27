@@ -1,0 +1,6 @@
+.env
+.envrc
+/.venv/
+__pycache__/
+*.py[cod]
+.workflow/eval-runs/
