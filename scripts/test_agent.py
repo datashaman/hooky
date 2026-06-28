@@ -384,6 +384,8 @@ Inspect the project context and existing files as needed. Write executable test 
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 You may run commands to check syntax or test discovery when useful. Do not write production implementation.
 Do not write package manifests, lockfiles, framework config, workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
+In acceptance_criteria_covered, acceptance_criteria_uncovered, and untestable_requirements, include only exact full strings copied from approved_spec.acceptance_criteria. Each list item must contain exactly one approved criterion.
+Do not claim a criterion is covered unless at least one generated test directly asserts that behavior without contradicting another approved criterion.
 Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created, including each file's content.
 """
 
@@ -406,16 +408,46 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
         raise ValueError("test contract must require human approval")
     if not contract["test_files"]:
         raise ValueError("test contract must include test files")
-    approved_criteria = set(approved_spec.get("acceptance_criteria", []))
-    covered = set(contract.get("acceptance_criteria_covered", []))
-    uncovered = set(contract.get("acceptance_criteria_uncovered", []))
-    missing_criteria = approved_criteria - covered - uncovered
-    if missing_criteria:
-        raise ValueError(f"acceptance criteria missing from coverage lists: {sorted(missing_criteria)}")
+    validate_coverage_lists(contract, approved_spec)
     for item in contract.get("test_files", []):
         validate_test_artifact_path(item, "test file")
+        validate_test_content(item, approved_spec)
     for item in contract.get("fixtures", []):
         validate_test_artifact_path(item, "fixture")
+
+
+def validate_coverage_lists(contract: dict[str, Any], approved_spec: dict[str, Any]) -> None:
+    approved = list(approved_spec.get("acceptance_criteria", []))
+    approved_criteria = set(approved)
+    if len(approved_criteria) != len(approved):
+        raise ValueError("approved spec has duplicate acceptance criteria")
+    covered_list = contract.get("acceptance_criteria_covered", [])
+    uncovered_list = contract.get("acceptance_criteria_uncovered", [])
+    untestable_list = contract.get("untestable_requirements", [])
+    for field, values in (
+        ("acceptance_criteria_covered", covered_list),
+        ("acceptance_criteria_uncovered", uncovered_list),
+        ("untestable_requirements", untestable_list),
+    ):
+        if not isinstance(values, list):
+            raise ValueError(f"{field} must be a list")
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{field} entries must be non-empty strings")
+            if "\n" in value or "\r" in value:
+                raise ValueError(f"{field} entries must contain exactly one acceptance criterion, not multiline text")
+            if value not in approved_criteria:
+                raise ValueError(f"{field} entry does not exactly match an approved acceptance criterion: {value}")
+    covered = set(covered_list)
+    uncovered = set(uncovered_list)
+    untestable = set(untestable_list)
+    overlaps = (covered & uncovered) | (covered & untestable) | (uncovered & untestable)
+    if overlaps:
+        raise ValueError(f"acceptance criteria appear in multiple coverage lists: {sorted(overlaps)}")
+    missing_criteria = approved_criteria - covered - uncovered
+    missing_criteria -= untestable
+    if missing_criteria:
+        raise ValueError(f"acceptance criteria missing from coverage lists: {sorted(missing_criteria)}")
 
 
 def validate_test_artifact_path(item: dict[str, Any], label: str) -> None:
@@ -429,6 +461,47 @@ def validate_test_artifact_path(item: dict[str, Any], label: str) -> None:
         raise ValueError(f"{label} must not be written under .workflow: {path}")
     if path.name in TOOLCHAIN_FILE_NAMES:
         raise ValueError(f"{label} must not modify dependency or config files: {path}")
+
+
+def validate_test_content(item: dict[str, Any], approved_spec: dict[str, Any]) -> None:
+    path = str(item.get("path") or "")
+    content = str(item.get("content") or "")
+    if not content.strip():
+        raise ValueError(f"test file content must not be empty: {path}")
+    if path.endswith((".js", ".jsx", ".ts", ".tsx")):
+        validate_playwright_content(path, content, approved_spec)
+
+
+def validate_playwright_content(path: str, content: str, approved_spec: dict[str, Any]) -> None:
+    if "@playwright/test" not in content:
+        return
+    findings = playwright_quality_findings(content, approved_spec)
+    if findings:
+        raise ValueError(f"invalid Playwright test content in {path}: {'; '.join(findings)}")
+
+
+def playwright_quality_findings(content: str, approved_spec: dict[str, Any]) -> list[str]:
+    findings: list[str] = []
+    if re.search(r"locator\(['\"]\\.todo-count['\"]\).*toContainText\(['\"]0 items", content, re.S):
+        findings.append("must not expect .todo-count to show 0 items while empty-state footer is hidden")
+    if re.search(r"Complete the other todo[\s\S]{0,220}toggleTodo\(page,\s*0\)", content):
+        findings.append("mark-all reflection test toggles the first todo while claiming to toggle the other todo")
+    if re.search(r"cd\s+/home/user", content):
+        findings.append("test content must not assume /home/user")
+    if approved_spec_requires_hidden_empty_footer(approved_spec) and ".todo-count" in content:
+        empty_counter_test = re.search(
+            r"test\([^)]*(?:plural|counter)[\s\S]{0,600}toContainText\(['\"]0 items",
+            content,
+            re.IGNORECASE,
+        )
+        if empty_counter_test:
+            findings.append("counter pluralization test contradicts hidden footer requirement for zero todos")
+    return findings
+
+
+def approved_spec_requires_hidden_empty_footer(approved_spec: dict[str, Any]) -> bool:
+    text = " ".join(str(item).lower() for item in approved_spec.get("acceptance_criteria", []))
+    return "footer" in text and "hidden" in text and "no todos" in text
 
 
 def write_artifacts(
