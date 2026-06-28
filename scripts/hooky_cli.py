@@ -211,6 +211,14 @@ def resolve_workspace_path(workspace: Path, path: Path) -> Path:
     return workspace_path if workspace_path.exists() else path
 
 
+def is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def git_command(workspace: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
@@ -500,7 +508,13 @@ def task_create(
     ensure_initialized(workspace)
     if body_file and body:
         raise typer.BadParameter("use either --body-file or --body, not both")
-    body_text = resolve_workspace_path(workspace, body_file).read_text(encoding="utf-8") if body_file else body or ""
+    if body_file:
+        resolved_body_file = resolve_workspace_path(workspace, body_file)
+        if is_relative_to(resolved_body_file, workspace):
+            raise typer.BadParameter("task --body-file must be outside the workspace; use --body or an external temp file so issue input is not visible to later agents")
+        body_text = resolved_body_file.read_text(encoding="utf-8")
+    else:
+        body_text = body or ""
     if not body_text.strip():
         raise typer.BadParameter("task body is required via --body-file or --body")
     task_id = make_task_id(title, issue_number)

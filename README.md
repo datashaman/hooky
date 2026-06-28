@@ -94,7 +94,7 @@ Hooky provides a Typer CLI for local workspaces. Commands default to the current
 
 ```bash
 uv run hooky init
-uv run hooky task create --title "Implement TodoMVC" --body-file issue.md
+uv run hooky task create --title "Implement TodoMVC" --body-file /tmp/todomvc-issue.md
 uv run hooky run spec
 uv run hooky approve spec
 uv run hooky run test
@@ -113,9 +113,11 @@ For a separate workspace:
 
 ```bash
 uv run hooky -C /tmp/todomvc init
-uv run hooky -C /tmp/todomvc task create --title "Implement TodoMVC" --body-file issue.md
+uv run hooky -C /tmp/todomvc task create --title "Implement TodoMVC" --body-file /tmp/todomvc-issue.md
 uv run hooky -C /tmp/todomvc run pipeline --auto-approve
 ```
+
+Task input is process input, not project context. Keep `--body-file` outside the workspace, or pass the body with `--body`; Hooky stores it under `.workflow/tasks/...` for the Spec Agent. The CLI rejects workspace-local body files so later agents cannot discover the original issue text as an ordinary project file.
 
 The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths. `hooky status` shows per-stage state, errors, report paths, and approved test file paths. `hooky trace pipeline --follow` tails the stage-level pipeline log. `hooky trace <stage>` shows the readable runtime timeline for one stage and can be run while an agent is still in progress. `hooky trace <stage> --follow` tails that stage's append-only `runtime_events.log`; `--tail-path` prints the log path for external `tail -f`.
 
