@@ -7,5 +7,6 @@
   "model": "deepseek/deepseek-v4-flash",
   "report": ".workflow/eval-runs/builder-agent/20260627T191700Z/report.json",
   "source": "eval",
-  "updated_at": "2026-06-27T19:25:00+00:00"
+  "updated_at": "2026-06-27T19:25:00+00:00",
+  "variant_id": "deepseek/deepseek-v4-flash"
 }

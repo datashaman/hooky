@@ -17,6 +17,8 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+import eval_runtime
+
 
 ARTIFACT_ROOT = Path("docs/specs")
 SIDECAR_ROOT = Path(".workflow/artifacts/specs")
@@ -263,7 +265,7 @@ def selected_model() -> str:
     if env_model:
         return env_model
     if SELECTED_MODEL_PATH.exists():
-        data = read_json(SELECTED_MODEL_PATH)
+        data = eval_runtime.read_selected_model(SELECTED_MODEL_PATH)
         model = data.get("model")
         if isinstance(model, str) and model:
             return model
@@ -514,7 +516,7 @@ def selected_model_metadata() -> dict[str, Any]:
     if env_model:
         return {"model": env_model, "source": "OPENROUTER_MODEL"}
     if SELECTED_MODEL_PATH.exists():
-        return read_json(SELECTED_MODEL_PATH)
+        return eval_runtime.read_selected_model(SELECTED_MODEL_PATH)
     return {"model": "openai/gpt-4.1-mini", "source": "fallback"}
 
 

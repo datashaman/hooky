@@ -62,7 +62,7 @@ def load_cached_attempt(
 
 
 def selected_model_payload(winner: dict[str, Any], report_path: Path, judge_model: str) -> dict[str, Any]:
-    return {
+    payload = {
         "model": winner["model"],
         "variant_id": winner.get("variant_id", winner["model"]),
         "reasoning_request": winner.get("reasoning_request"),
@@ -75,8 +75,42 @@ def selected_model_payload(winner: dict[str, Any], report_path: Path, judge_mode
         "actual_cost": winner.get("original_cost", winner.get("cost")),
         "cached": winner.get("cached", False),
     }
+    validate_selected_model(payload)
+    return payload
 
 
 def write_selected_model(path: Path, winner: dict[str, Any], report_path: Path, judge_model: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(selected_model_payload(winner, report_path, judge_model), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_selected_model(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    validate_selected_model(payload)
+    return payload
+
+
+def validate_selected_model(payload: dict[str, Any]) -> None:
+    required = ["model", "variant_id", "source", "updated_at"]
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"selected model missing required fields: {', '.join(missing)}")
+    string_fields = ["model", "variant_id", "source", "updated_at"]
+    for field in string_fields:
+        if not isinstance(payload.get(field), str) or not payload[field]:
+            raise ValueError(f"selected model field must be a non-empty string: {field}")
+    nullable_object_fields = ["reasoning_request"]
+    for field in nullable_object_fields:
+        if payload.get(field) is not None and not isinstance(payload[field], dict):
+            raise ValueError(f"selected model field must be an object or null: {field}")
+    if payload.get("context_length") is not None and not isinstance(payload["context_length"], int):
+        raise ValueError("selected model context_length must be an integer or null")
+    if payload.get("report") is not None and not isinstance(payload["report"], str):
+        raise ValueError("selected model report must be a string or null")
+    if payload.get("judge_model") is not None and not isinstance(payload["judge_model"], str):
+        raise ValueError("selected model judge_model must be a string or null")
+    for field in ("estimated_cost", "actual_cost"):
+        if payload.get(field) is not None and not isinstance(payload[field], int | float):
+            raise ValueError(f"selected model {field} must be numeric or null")
+    if payload.get("cached") is not None and not isinstance(payload["cached"], bool):
+        raise ValueError("selected model cached must be boolean or null")
