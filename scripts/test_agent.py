@@ -112,6 +112,27 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract(contract, dynamic_context["approved_spec"]),
         live_log_root=report_root,
+        live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
+        live_event_prefix="stage=test ",
+        write_blocked_names=[
+            "package.json",
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "playwright.config.js",
+            "playwright.config.cjs",
+            "playwright.config.mjs",
+        ],
+        bash_blocked_substrings=[
+            "npm install",
+            "npm add",
+            "npm i ",
+            "pnpm install",
+            "pnpm add",
+            "yarn install",
+            "yarn add",
+            "playwright install",
+        ],
     )
     try:
         result = run_tool_agent(
@@ -283,6 +304,8 @@ def test_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
             if key != "system.md"
         },
     )
+    visible_dynamic_context = json.loads(json.dumps(dynamic_context))
+    visible_dynamic_context.get("workspace", {}).pop("report_root", None)
     return f"""{project_context}
 
 {common_context}
@@ -296,13 +319,14 @@ Selected Model:
 
 Dynamic Context:
 ```json
-{json.dumps(dynamic_context, indent=2, sort_keys=True)}
+{json.dumps(visible_dynamic_context, indent=2, sort_keys=True)}
 ```
 
 You have filesystem and shell tools scoped to the working folder. Use the todo tools to plan and track work.
 Inspect the project context and existing files as needed. Write executable test artifacts at project-native relative paths that match the app's conventions.
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 You may run commands to check syntax or test discovery when useful. Do not write production implementation.
+Do not write package manifests, lockfiles, framework config, workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
 Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created, including each file's content.
 """
 

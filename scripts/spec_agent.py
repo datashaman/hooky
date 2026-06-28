@@ -162,9 +162,12 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("SPEC_AGENT_MAX_SECONDS", "180")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
+        write_enabled=False,
     )
     runtime_root = Path(dynamic_context["workspace"]["runtime_root"])
     runtime.live_log_root = runtime_root
+    runtime.live_event_log_paths = [Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"]
+    runtime.live_event_prefix = "stage=spec "
     try:
         result = run_tool_agent(
             model=model,

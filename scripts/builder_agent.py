@@ -160,6 +160,10 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
+        live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
+        live_event_prefix="stage=builder ",
+        write_blocked_prefixes=[".workflow", "tests"],
+        write_blocked_names=["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "playwright.config.js", "playwright.config.cjs"],
     )
     try:
         result = run_tool_agent(

@@ -26,6 +26,6 @@ Artifact policy:
 
 - Read the approved Spec Agent artifact contract as immutable input.
 - Write executable test artifacts at project-native relative paths that match the app's existing conventions.
-- Emit `contract.json`, `dynamic_context.json`, `context_snapshot.md`, and `test_report.md` under the Test Agent report root.
-- Do not write executable tests or fixtures under `.workflow`; that tree is reserved for Hooky reports and runtime metadata.
+- Do not write workflow reports, contracts, context snapshots, runtime logs, or other `.workflow` files. Hooky writes those system-managed artifacts after `final_report`.
 - Do not create production files, dependency manifests, or Builder/Verifier/Eval artifacts.
+- Finish by calling `final_report`; do not create a contract file yourself.

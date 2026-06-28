@@ -6,9 +6,9 @@ Every pipeline agent runs inside a task workspace and must use a small, explicit
 
 - Each agent receives a working folder for the current project or task.
 - The working folder is the root for relative file paths.
-- Agents must keep generated artifacts inside the folders allowed for their stage.
 - Agents must not write outside the working folder.
-- Agents must report the working folder they used in their structured output or generated context snapshot.
+- Hooky, not the agent, manages workflow state, reports, context snapshots, runtime logs, and `.workflow` artifacts.
+- Agents must not write `.workflow` files directly.
 
 ## Required Basic Tools
 

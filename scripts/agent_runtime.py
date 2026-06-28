@@ -54,6 +54,12 @@ class ToolRuntime:
     compaction_keep_recent_messages: int = 16
     compaction_prompt_path: Path = Path(".workflow/agents/common/static/compaction.md")
     live_log_root: Path | None = None
+    live_event_log_paths: list[Path] = field(default_factory=list)
+    live_event_prefix: str = ""
+    write_enabled: bool = True
+    write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
+    write_blocked_names: list[str] = field(default_factory=list)
+    bash_blocked_substrings: list[str] = field(default_factory=list)
     todo_items: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -137,9 +143,22 @@ class ToolRuntime:
 
     def write_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
+        self.validate_write_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(args["content"]), encoding="utf-8")
         return {"ok": True, "path": relative_to(path, self.working_folder), "bytes": path.stat().st_size}
+
+    def validate_write_path(self, path: Path) -> None:
+        if not self.write_enabled:
+            raise ValueError("write_file is disabled for this agent; finish with final_report instead")
+        relative = relative_to(path, self.working_folder)
+        parts = Path(relative).parts
+        for prefix in self.write_blocked_prefixes:
+            prefix_parts = Path(prefix).parts
+            if parts[: len(prefix_parts)] == prefix_parts:
+                raise ValueError(f"agent is not allowed to write system-managed path: {relative}")
+        if path.name in set(self.write_blocked_names):
+            raise ValueError(f"agent is not allowed to write system-managed file: {relative}")
 
     def list_files(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args.get("path") or "."))
@@ -177,8 +196,13 @@ class ToolRuntime:
         return {"ok": True, "matches": matches, "truncated": False}
 
     def bash(self, args: dict[str, Any]) -> dict[str, Any]:
+        command = str(args["command"])
+        lowered = command.lower()
+        for blocked in self.bash_blocked_substrings:
+            if blocked.lower() in lowered:
+                return {"ok": False, "error": f"bash command blocked by agent policy: {blocked}"}
         completed = subprocess.run(
-            str(args["command"]),
+            command,
             cwd=self.working_folder,
             shell=True,
             text=True,
@@ -304,7 +328,7 @@ def run_tool_agent(
             },
         )
 
-    append_live_event(runtime.live_log_root, f"{utc_timestamp()} run start model={model}")
+    append_live_event(runtime, f"{utc_timestamp()} run start model={model}")
     flush_live_log()
     try:
         with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
@@ -354,7 +378,7 @@ def run_tool_agent(
                         "duration_ms": assistant_duration_ms,
                     }
                 )
-                append_live_event(runtime.live_log_root, format_runtime_event_line(transcript[-1]))
+                append_live_event(runtime, format_runtime_event_line(transcript[-1]))
                 flush_live_log()
 
                 tool_calls = getattr(message, "tool_calls", None) or []
@@ -384,7 +408,7 @@ def run_tool_agent(
                     }
                     tool_events.append(event)
                     transcript.append({"role": "tool", **event})
-                    append_live_event(runtime.live_log_root, format_runtime_event_line(transcript[-1]))
+                    append_live_event(runtime, format_runtime_event_line(transcript[-1]))
                     flush_live_log()
                     messages.append(
                         {
@@ -395,15 +419,15 @@ def run_tool_agent(
                         }
                     )
     except AgentRunError as exc:
-        append_live_event(runtime.live_log_root, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
+        append_live_event(runtime, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
         flush_live_log(status="error", error=str(exc))
         raise
     except Exception as exc:
-        append_live_event(runtime.live_log_root, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
+        append_live_event(runtime, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
         flush_live_log(status="error", error=str(exc))
         raise AgentRunError(str(exc), current_result()) from exc
 
-    append_live_event(runtime.live_log_root, f"{utc_timestamp()} run success tool_calls={len(tool_events)} cost=${float(total_usage.get('cost') or 0):.8f}")
+    append_live_event(runtime, f"{utc_timestamp()} run success tool_calls={len(tool_events)} cost=${float(total_usage.get('cost') or 0):.8f}")
     flush_live_log(status="success")
     return current_result()
 
@@ -555,12 +579,25 @@ def write_runtime_log(
     )
 
 
-def append_live_event(report_root: Path | None, line: str) -> None:
-    if report_root is None:
-        return
-    report_root.mkdir(parents=True, exist_ok=True)
-    with (report_root / "runtime_events.log").open("a", encoding="utf-8") as handle:
-        handle.write(line.rstrip() + "\n")
+def append_live_event(runtime: ToolRuntime, line: str) -> None:
+    targets: list[tuple[Path, str]] = []
+    if runtime.live_log_root is not None:
+        targets.append((runtime.live_log_root / "runtime_events.log", ""))
+    for path in runtime.live_event_log_paths:
+        targets.append((path, runtime.live_event_prefix))
+    for path, prefix in targets:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(prefix_event_line(line.rstrip(), prefix) + "\n")
+
+
+def prefix_event_line(line: str, prefix: str) -> str:
+    if not prefix:
+        return line
+    timestamp, sep, rest = line.partition(" ")
+    if not sep:
+        return prefix + line
+    return f"{timestamp} {prefix}{rest}"
 
 
 def render_runtime_events_log(transcript: list[dict[str, Any]]) -> str:

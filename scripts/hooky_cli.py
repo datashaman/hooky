@@ -152,7 +152,7 @@ def set_stage_status(workspace: Path, state: dict[str, Any], stage: str, status:
         task=state.get("task_id"),
         stage=stage,
         status=status,
-        trace=stage_runtime_events_path(workspace, stage, state),
+        trace=stage_runtime_events_path(workspace, stage, state) if status == "running" else None,
         **extra,
     )
 

@@ -112,6 +112,9 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
+        live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
+        live_event_prefix="stage=verifier ",
+        write_enabled=False,
     )
     try:
         result = run_tool_agent(
