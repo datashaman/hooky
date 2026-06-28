@@ -449,7 +449,6 @@ def write_report(
 
 def eval_cache_key(workspace_fixture: Path, judge_model: str) -> str:
     paths = [
-        builder_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),

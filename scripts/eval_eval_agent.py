@@ -326,7 +326,6 @@ def write_report(
 
 def eval_cache_key(cases_root: Path, judge_model: str) -> str:
     paths = [
-        eval_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),

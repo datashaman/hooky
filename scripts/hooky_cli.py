@@ -722,16 +722,26 @@ def run_eval(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
     workspace = workspace_from_ctx(ctx)
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
-    require_artifact(state, "verifier")
     set_stage_status(workspace, state, "eval", "running")
     try:
         with in_workspace(workspace):
-            report_dir, _contract, usage = eval_agent.generate_eval_artifacts(working_folder=Path("."), generated_at=utc_now())
+            report_dir, contract, usage = eval_agent.generate_eval_artifacts(working_folder=Path("."), generated_at=utc_now())
     except Exception as exc:
         set_stage_status(workspace, state, "eval", "failed", error=str(exc))
         raise
     state["artifacts"]["eval"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "eval", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
+    eval_status = str(contract.get("status") or "fail")
+    stage_status = "passed" if eval_status == "pass" else eval_status
+    set_stage_status(
+        workspace,
+        state,
+        "eval",
+        stage_status,
+        contract=(report_dir / "contract.json").as_posix(),
+        report_dir=report_dir.as_posix(),
+        cost=usage.get("cost"),
+        safe_to_merge=contract.get("safe_to_merge"),
+    )
     save_task_state(workspace, state)
     typer.echo(f"eval report: {report_dir}")
     typer.echo("next: hooky report")
@@ -749,16 +759,43 @@ def run_pipeline(
     workspace = workspace_from_ctx(ctx)
     state = load_task_state(workspace, task)
     append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="running")
+    failures: list[str] = []
     try:
-        run_spec(ctx, task=task)
-        approve_stage(ctx, "spec", "running test...", task)
-        run_test(ctx, task=task)
-        approve_stage(ctx, "test", "running builder...", task)
-        run_builder(ctx, task=task)
-        run_verifier(ctx, task=task)
-        run_eval(ctx, task=task)
-    except Exception as exc:
-        append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="failed", error=str(exc))
+        try:
+            run_spec(ctx, task=task)
+            approve_stage(ctx, "spec", "running test...", task)
+        except Exception as exc:
+            failures.append(f"spec failed: {exc}")
+
+        if not failures:
+            try:
+                run_test(ctx, task=task)
+                approve_stage(ctx, "test", "running builder...", task)
+            except Exception as exc:
+                failures.append(f"test failed: {exc}")
+
+        if not failures:
+            try:
+                run_builder(ctx, task=task)
+            except Exception as exc:
+                failures.append(f"builder failed: {exc}")
+
+        if not failures:
+            try:
+                run_verifier(ctx, task=task)
+            except Exception as exc:
+                failures.append(f"verifier failed: {exc}")
+
+        try:
+            run_eval(ctx, task=task)
+        except Exception as exc:
+            failures.append(f"eval failed: {exc}")
+
+        if failures:
+            message = "; ".join(failures)
+            append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="failed", error=message)
+            raise RuntimeError(message)
+    except Exception:
         raise
     append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="passed")
 

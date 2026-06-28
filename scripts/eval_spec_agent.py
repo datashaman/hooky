@@ -467,6 +467,7 @@ def run_attempt(
             "deterministic": {"status": "fail", "findings": [f"generation failed: {exc}"]},
             "judge": None,
         }
+        write_attempt_cache(cache_path, attempt)
         return attempt
     finally:
         restore_model(previous_model)
@@ -749,7 +750,6 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
     paths = [
         fixture_path,
         Path("AGENTS.md"),
-        spec_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
