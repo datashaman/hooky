@@ -15,10 +15,9 @@ from typing import Any
 import agent_runtime
 import eval_runtime
 import spec_agent
-from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
+from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
-ARTIFACT_ROOT = Path("tests/generated")
 REPORT_ROOT = Path(".workflow/artifacts/test-agent")
 AGENT_ROOT = Path(".workflow/agents/test")
 COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
@@ -33,7 +32,7 @@ def main() -> int:
     os.environ["OPENROUTER_TIMEOUT_MS"] = str(args.request_timeout_ms)
     approved_spec = spec_agent.read_json(args.spec_contract)
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    output_dir, _, _ = generate_test_artifacts(
+    report_dir, _, _ = generate_test_artifacts(
         approved_spec=approved_spec,
         spec_source=args.spec_contract.as_posix(),
         generated_at=generated_at,
@@ -41,14 +40,14 @@ def main() -> int:
         artifact_root=args.artifact_root,
         report_root=args.report_root,
     )
-    print(output_dir)
+    print(report_dir)
     return 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--spec-contract", type=Path, required=True)
-    parser.add_argument("--artifact-root", type=Path, default=ARTIFACT_ROOT)
+    parser.add_argument("--artifact-root", type=Path, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--report-root", type=Path, default=REPORT_ROOT)
     parser.add_argument("--request-timeout-ms", type=int, default=120_000)
     return parser.parse_args()
@@ -61,7 +60,7 @@ def generate_test_artifacts(
     generated_at: str,
     working_folder: Path = Path("."),
     project_root: Path = Path("."),
-    artifact_root: Path = ARTIFACT_ROOT,
+    artifact_root: Path | None = None,
     report_root: Path = REPORT_ROOT,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     dynamic_context = build_dynamic_context(
@@ -70,28 +69,26 @@ def generate_test_artifacts(
         generated_at=generated_at,
         working_folder=working_folder,
         project_root=project_root,
-        artifact_root=artifact_root,
         report_root=report_root,
     )
     contract, usage = generate_contract(dynamic_context=dynamic_context, project_root=project_root)
     validate_contract(contract, approved_spec)
 
-    slug = spec_agent.slugify(approved_spec.get("summary", "approved-spec"))
-    output_dir = artifact_root / slug
+    slug = report_slug(spec_source, approved_spec)
     report_dir = report_root / slug
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
+    absolute_report_dir = report_dir if report_dir.is_absolute() else working_folder / report_dir
+    absolute_report_dir.mkdir(parents=True, exist_ok=True)
 
     write_artifacts(
-        output_dir=output_dir,
-        report_dir=report_dir,
+        working_folder=working_folder,
+        report_dir=absolute_report_dir,
         contract=contract,
         dynamic_context=dynamic_context,
         spec_source=spec_source,
         generated_at=generated_at,
         title=approved_spec.get("summary", "Approved Spec"),
     )
-    return output_dir, contract, usage
+    return report_dir, contract, usage
 
 
 def generate_contract(*, dynamic_context: dict[str, Any], project_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -114,21 +111,43 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract(contract, dynamic_context["approved_spec"]),
     )
-    result = run_tool_agent(
-        model=model,
-        system=agent_context["system"],
-        user=test_prompt(agent_context, dynamic_context),
-        runtime=runtime,
-    )
+    report_root = resolved_report_root(dynamic_context)
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=agent_context["system"],
+            user=test_prompt(agent_context, dynamic_context),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            report_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("test", model, agent_context["selected_model"], result, status="error", error=str(exc)),
+        )
+        raise
     write_runtime_log(
-        Path(dynamic_context["workspace"]["report_root"]),
+        report_root,
         result.transcript,
         result.tool_events,
         result.compaction_events,
         result.pre_compaction_archives,
         metadata=build_runtime_metadata("test", model, agent_context["selected_model"], result),
     )
+    if result.final_report is None:
+        raise RuntimeError("Test Agent finished without final_report")
     return result.final_report, result.usage
+
+
+def resolved_report_root(dynamic_context: dict[str, Any]) -> Path:
+    report_root = Path(dynamic_context["workspace"]["report_root"])
+    if report_root.is_absolute():
+        return report_root
+    return Path(dynamic_context["workspace"]["working_folder"]) / report_root
 
 
 def artifact_array_schema() -> dict[str, Any]:
@@ -197,7 +216,6 @@ def build_dynamic_context(
     generated_at: str,
     working_folder: Path,
     project_root: Path,
-    artifact_root: Path,
     report_root: Path,
 ) -> dict[str, Any]:
     return {
@@ -207,8 +225,11 @@ def build_dynamic_context(
         "workspace": {
             "working_folder": working_folder.as_posix(),
             "project_root": project_root.as_posix(),
-            "artifact_root": artifact_root.as_posix(),
             "report_root": report_root.as_posix(),
+        },
+        "test_artifact_policy": {
+            "mode": "project_native_paths",
+            "instruction": "Write test files and fixtures at relative paths that match the project's own conventions. Do not put executable tests under .workflow.",
         },
         "tools": {
             "available": agent_runtime.available_tool_names(),
@@ -278,7 +299,8 @@ Dynamic Context:
 ```
 
 You have filesystem and shell tools scoped to the working folder. Use the todo tools to plan and track work.
-Inspect the project context and existing files as needed. Write executable test artifacts under the configured artifact_root.
+Inspect the project context and existing files as needed. Write executable test artifacts at project-native relative paths that match the app's conventions.
+Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 You may run commands to check syntax or test discovery when useful. Do not write production implementation.
 Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created, including each file's content.
 """
@@ -308,11 +330,28 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
     missing_criteria = approved_criteria - covered - uncovered
     if missing_criteria:
         raise ValueError(f"acceptance criteria missing from coverage lists: {sorted(missing_criteria)}")
+    for item in contract.get("test_files", []):
+        validate_test_artifact_path(item, "test file")
+    for item in contract.get("fixtures", []):
+        validate_test_artifact_path(item, "fixture")
+
+
+def validate_test_artifact_path(item: dict[str, Any], label: str) -> None:
+    for field in ("path", "purpose", "content"):
+        if field not in item:
+            raise ValueError(f"{label} missing required field: {field}")
+    path = Path(str(item["path"]))
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{label} path must be relative and stay inside working folder: {path}")
+    if path.parts and path.parts[0] == ".workflow":
+        raise ValueError(f"{label} must not be written under .workflow: {path}")
+    if path.name in {"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "playwright.config.cjs"}:
+        raise ValueError(f"{label} must not modify dependency or config files: {path}")
 
 
 def write_artifacts(
     *,
-    output_dir: Path,
+    working_folder: Path,
     report_dir: Path,
     contract: dict[str, Any],
     dynamic_context: dict[str, Any],
@@ -320,15 +359,17 @@ def write_artifacts(
     generated_at: str,
     title: str,
 ) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    working_folder = Path(working_folder)
     report_dir.mkdir(parents=True, exist_ok=True)
 
     for test_file in contract.get("test_files", []):
-        path = output_dir / Path(test_file["path"]).name
+        path = working_folder / test_file["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(test_file["content"], encoding="utf-8")
 
     for fixture in contract.get("fixtures", []):
-        path = output_dir / Path(fixture["path"]).name
+        path = working_folder / fixture["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(fixture["content"], encoding="utf-8")
 
     (report_dir / "contract.json").write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -350,6 +391,13 @@ def write_artifacts(
     template = (TEMPLATE_ROOT / "test_report.md").read_text(encoding="utf-8")
     rendered = Template(template.replace("{{ ", "${").replace(" }}", "}")).safe_substitute(report_context)
     (report_dir / "test_report.md").write_text(rendered, encoding="utf-8")
+
+
+def report_slug(spec_source: str, approved_spec: dict[str, Any]) -> str:
+    source_path = Path(spec_source)
+    if source_path.name == "contract.json" and source_path.parent.name:
+        return spec_agent.slugify(source_path.parent.name)
+    return spec_agent.slugify(approved_spec.get("summary", "approved-spec"))
 
 
 def render_context_snapshot(dynamic_context: dict[str, Any]) -> str:

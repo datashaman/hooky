@@ -14,7 +14,7 @@ from typing import Any
 import eval_runtime
 import spec_agent
 import agent_runtime
-from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
+from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
 REPORT_ROOT = Path(".workflow/artifacts/verifier-agent")
@@ -112,12 +112,24 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
     )
-    result = run_tool_agent(
-        model=model,
-        system=agent_context["system"],
-        user=verifier_prompt(agent_context, dynamic_context),
-        runtime=runtime,
-    )
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=agent_context["system"],
+            user=verifier_prompt(agent_context, dynamic_context),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            working_folder / dynamic_context["workspace"]["report_root"],
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("verifier", model, agent_context["selected_model"], result, status="error", error=str(exc)),
+        )
+        raise
     write_runtime_log(
         working_folder / dynamic_context["workspace"]["report_root"],
         result.transcript,
@@ -126,6 +138,8 @@ def generate_contract_with_openrouter(
         result.pre_compaction_archives,
         metadata=build_runtime_metadata("verifier", model, agent_context["selected_model"], result),
     )
+    if result.final_report is None:
+        raise RuntimeError("Verifier Agent finished without final_report")
     return result.final_report, result.usage
 
 

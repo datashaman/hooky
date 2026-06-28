@@ -26,7 +26,6 @@ TEMPLATE_ROOT = AGENT_ROOT / "templates"
 SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
 PROJECT_CONTEXT_FILES = [Path("AGENTS.md"), Path("README.md"), Path("package.json"), Path("playwright.config.cjs")]
 APPROVED_TEST_CONTRACT = Path(".workflow/artifacts/test-agent/approved-todomvc-implementation-contract/contract.json")
-APPROVED_TEST_ROOT = Path("tests/generated/approved-todomvc-implementation-contract")
 
 
 def main() -> int:
@@ -71,13 +70,9 @@ def generate_build_artifacts(
 
 
 def build_dynamic_context(*, working_folder: Path, generated_at: str, report_root: Path) -> dict[str, Any]:
-    approved_contract_path = working_folder / APPROVED_TEST_CONTRACT
+    approved_contract_path = approved_test_contract_path(working_folder)
     approved_contract = spec_agent.read_json(approved_contract_path)
-    approved_tests = {
-        path.relative_to(working_folder).as_posix(): path.read_text(encoding="utf-8")
-        for path in sorted((working_folder / APPROVED_TEST_ROOT).glob("*"))
-        if path.is_file()
-    }
+    approved_tests = read_approved_test_artifacts(working_folder, approved_contract)
     return {
         "source": "approved_test_agent_workspace",
         "workspace": {
@@ -88,11 +83,58 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
             "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
-        "approved_test_contract_path": APPROVED_TEST_CONTRACT.as_posix(),
+        "approved_test_contract_path": display_path(approved_contract_path, working_folder),
         "approved_test_contract": approved_contract,
         "approved_tests": approved_tests,
         "generated_at": generated_at,
     }
+
+
+def approved_test_contract_path(working_folder: Path) -> Path:
+    env_path = os.environ.get("HOOKY_APPROVED_TEST_CONTRACT")
+    if env_path:
+        path = Path(env_path)
+        return path if path.is_absolute() else working_folder / path
+
+    state_path = working_folder / ".workflow/state.json"
+    if state_path.exists():
+        state = spec_agent.read_json(state_path)
+        current_task = state.get("current_task")
+        task_state_path = working_folder / ".workflow/tasks" / str(current_task) / "state.json"
+        if current_task and task_state_path.exists():
+            task_state = spec_agent.read_json(task_state_path)
+            contract = task_state.get("artifacts", {}).get("test", {}).get("contract")
+            if contract:
+                return working_folder / contract
+
+    contracts = sorted((working_folder / ".workflow/artifacts/test-agent").glob("*/contract.json"))
+    if len(contracts) == 1:
+        return contracts[0]
+    if (working_folder / APPROVED_TEST_CONTRACT).exists():
+        return working_folder / APPROVED_TEST_CONTRACT
+    if not contracts:
+        raise FileNotFoundError("approved Test Agent contract not found")
+    raise RuntimeError("multiple Test Agent contracts found; set HOOKY_APPROVED_TEST_CONTRACT")
+
+
+def read_approved_test_artifacts(working_folder: Path, contract: dict[str, Any]) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+    for item in list(contract.get("test_files", [])) + list(contract.get("fixtures", [])):
+        path = Path(str(item.get("path", "")))
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError(f"approved test artifact path is unsafe: {path}")
+        full_path = working_folder / path
+        if not full_path.exists():
+            raise FileNotFoundError(f"approved test artifact is missing: {path}")
+        artifacts[path.as_posix()] = full_path.read_text(encoding="utf-8")
+    return artifacts
+
+
+def display_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def generate_contract(*, dynamic_context: dict[str, Any], working_folder: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -106,7 +148,7 @@ def generate_contract_with_openrouter(
     dynamic_context: dict[str, Any],
     working_folder: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from agent_runtime import ToolRuntime, run_tool_agent, write_runtime_log
+    from agent_runtime import AgentRunError, ToolRuntime, run_tool_agent, write_runtime_log
 
     model = selected_model()
     agent_context = load_agent_context(working_folder)
@@ -118,12 +160,24 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
     )
-    result = run_tool_agent(
-        model=model,
-        system=agent_context["system"],
-        user=builder_prompt(agent_context, dynamic_context),
-        runtime=runtime,
-    )
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=agent_context["system"],
+            user=builder_prompt(agent_context, dynamic_context),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            working_folder / dynamic_context["workspace"]["report_root"],
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("builder", model, agent_context["selected_model"], result, status="error", error=str(exc)),
+        )
+        raise
     write_runtime_log(
         working_folder / dynamic_context["workspace"]["report_root"],
         result.transcript,
@@ -132,6 +186,8 @@ def generate_contract_with_openrouter(
         result.pre_compaction_archives,
         metadata=build_runtime_metadata("builder", model, agent_context["selected_model"], result),
     )
+    if result.final_report is None:
+        raise RuntimeError("Builder Agent finished without final_report")
     return result.final_report, result.usage
 
 

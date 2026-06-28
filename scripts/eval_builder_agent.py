@@ -369,7 +369,7 @@ def judge_prompt(working_folder: Path, contract: dict[str, Any], deterministic: 
         for path in deterministic.get("implementation_files", [])
         if (working_folder / path).exists()
     }
-    test_contract = spec_agent.read_json(working_folder / builder_agent.APPROVED_TEST_CONTRACT)
+    test_contract = spec_agent.read_json(builder_agent.approved_test_contract_path(working_folder))
     return f"""Approved Test Agent contract:
 {json.dumps(test_contract, indent=2, sort_keys=True)}
 
@@ -415,7 +415,7 @@ def judge_passes(judge: dict[str, Any]) -> bool:
 
 
 def fixture_for_ladder(workspace_fixture: Path) -> dict[str, Any]:
-    contract_path = workspace_fixture / builder_agent.APPROVED_TEST_CONTRACT
+    contract_path = builder_agent.approved_test_contract_path(workspace_fixture)
     contract = spec_agent.read_json(contract_path)
     return {
         "name": "TodoMVC approved tests to implementation",

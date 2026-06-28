@@ -25,7 +25,7 @@ FinalValidator = Callable[[dict[str, Any]], None]
 
 @dataclass
 class AgentRunResult:
-    final_report: dict[str, Any]
+    final_report: dict[str, Any] | None
     usage: dict[str, Any]
     transcript: list[dict[str, Any]]
     tool_events: list[dict[str, Any]]
@@ -33,6 +33,12 @@ class AgentRunResult:
     pre_compaction_archives: list[dict[str, Any]]
     started_at: str
     ended_at: str
+
+
+class AgentRunError(RuntimeError):
+    def __init__(self, message: str, result: AgentRunResult):
+        super().__init__(message)
+        self.result = result
 
 
 @dataclass
@@ -257,75 +263,83 @@ def run_tool_agent(
     total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     started_at = utc_timestamp()
 
-    with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
-        while runtime.final_report is None:
-            if time.monotonic() - runtime.started_at > runtime.max_seconds:
-                raise TimeoutError(f"agent runtime exceeded {runtime.max_seconds}s")
-            if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
-                raise RuntimeError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget")
+    def current_result() -> AgentRunResult:
+        return AgentRunResult(
+            runtime.final_report,
+            total_usage,
+            transcript,
+            tool_events,
+            compaction_events,
+            pre_compaction_archives,
+            started_at,
+            utc_timestamp(),
+        )
 
-            messages, compaction_event, pre_compaction_archive = maybe_compact_messages(client, model, runtime, messages)
-            if pre_compaction_archive:
-                pre_compaction_archives.append(pre_compaction_archive)
-                transcript.append({"role": "pre_compaction", **pre_compaction_archive})
-            if compaction_event:
-                usage = compaction_event.get("usage") or {}
-                accumulate_usage(total_usage, usage)
-                compaction_events.append(compaction_event)
-                transcript.append({"role": "compaction", **compaction_event})
+    try:
+        with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
+            while runtime.final_report is None:
+                if time.monotonic() - runtime.started_at > runtime.max_seconds:
+                    raise AgentRunError(f"agent runtime exceeded {runtime.max_seconds}s", current_result())
                 if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
-                    raise RuntimeError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget after compaction")
+                    raise AgentRunError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget", current_result())
 
-            completion = client.chat.send(
-                model=model,
-                messages=messages,
-                tools=runtime.tools(),
-                tool_choice="auto",
-                **spec_agent.openrouter_request_options(),
-            )
-            usage = spec_agent.response_usage(completion)
-            accumulate_usage(total_usage, usage)
-            message = completion.choices[0].message
-            message_payload = message.model_dump(exclude_none=True) if hasattr(message, "model_dump") else message
-            messages.append(message_payload)
-            transcript.append({"role": "assistant", "message": message_payload, "usage": usage})
+                messages, compaction_event, pre_compaction_archive = maybe_compact_messages(client, model, runtime, messages)
+                if pre_compaction_archive:
+                    pre_compaction_archives.append(pre_compaction_archive)
+                    transcript.append({"role": "pre_compaction", **pre_compaction_archive})
+                if compaction_event:
+                    usage = compaction_event.get("usage") or {}
+                    accumulate_usage(total_usage, usage)
+                    compaction_events.append(compaction_event)
+                    transcript.append({"role": "compaction", **compaction_event})
+                    if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
+                        raise AgentRunError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget after compaction", current_result())
 
-            tool_calls = getattr(message, "tool_calls", None) or []
-            if not tool_calls:
-                messages.append({"role": "user", "content": "Continue by using the available tools. Finish only by calling final_report."})
-                continue
-
-            for tool_call in tool_calls:
-                name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments or "{}")
-                except json.JSONDecodeError as exc:
-                    args = {}
-                    result = {"ok": False, "error": f"invalid JSON tool arguments: {exc}"}
-                else:
-                    result = runtime.run_tool(name, args)
-                event = {"tool_call_id": tool_call.id, "name": name, "arguments": args, "result": result}
-                tool_events.append(event)
-                transcript.append({"role": "tool", **event})
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": name,
-                        "content": json.dumps(result, sort_keys=True),
-                    }
+                completion = client.chat.send(
+                    model=model,
+                    messages=messages,
+                    tools=runtime.tools(),
+                    tool_choice="auto",
+                    **spec_agent.openrouter_request_options(),
                 )
+                usage = spec_agent.response_usage(completion)
+                accumulate_usage(total_usage, usage)
+                message = completion.choices[0].message
+                message_payload = message.model_dump(exclude_none=True) if hasattr(message, "model_dump") else message
+                messages.append(message_payload)
+                transcript.append({"role": "assistant", "message": message_payload, "usage": usage})
 
-    return AgentRunResult(
-        runtime.final_report,
-        total_usage,
-        transcript,
-        tool_events,
-        compaction_events,
-        pre_compaction_archives,
-        started_at,
-        utc_timestamp(),
-    )
+                tool_calls = getattr(message, "tool_calls", None) or []
+                if not tool_calls:
+                    messages.append({"role": "user", "content": "Continue by using the available tools. Finish only by calling final_report."})
+                    continue
+
+                for tool_call in tool_calls:
+                    name = tool_call.function.name
+                    try:
+                        args = json.loads(tool_call.function.arguments or "{}")
+                    except json.JSONDecodeError as exc:
+                        args = {}
+                        result = {"ok": False, "error": f"invalid JSON tool arguments: {exc}"}
+                    else:
+                        result = runtime.run_tool(name, args)
+                    event = {"tool_call_id": tool_call.id, "name": name, "arguments": args, "result": result}
+                    tool_events.append(event)
+                    transcript.append({"role": "tool", **event})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": name,
+                            "content": json.dumps(result, sort_keys=True),
+                        }
+                    )
+    except AgentRunError:
+        raise
+    except Exception as exc:
+        raise AgentRunError(str(exc), current_result()) from exc
+
+    return current_result()
 
 
 def maybe_compact_messages(
@@ -472,9 +486,18 @@ def write_runtime_log(
     )
 
 
-def build_runtime_metadata(agent_name: str, model: str, selected_model: dict[str, Any], result: AgentRunResult) -> dict[str, Any]:
+def build_runtime_metadata(
+    agent_name: str,
+    model: str,
+    selected_model: dict[str, Any],
+    result: AgentRunResult,
+    *,
+    status: str = "success",
+    error: str | None = None,
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
+        "status": status,
         "agent_name": agent_name,
         "model": model,
         "variant_id": selected_model.get("variant_id", model),
@@ -482,6 +505,8 @@ def build_runtime_metadata(agent_name: str, model: str, selected_model: dict[str
         "started_at": result.started_at,
         "ended_at": result.ended_at,
         "written_at": utc_timestamp(),
+        "error": error,
+        "final_report_present": result.final_report is not None,
         "usage": result.usage,
         "events": {
             "tool_calls": len(result.tool_events),

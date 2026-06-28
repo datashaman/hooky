@@ -137,6 +137,15 @@ def save_task_state(workspace: Path, state: dict[str, Any]) -> None:
     write_json(task_state_path(workspace, state["task_id"]), state)
 
 
+def set_stage_status(workspace: Path, state: dict[str, Any], stage: str, status: str, **extra: Any) -> None:
+    state.setdefault("stage_status", {})[stage] = {
+        "status": status,
+        "updated_at": utc_now(),
+        **extra,
+    }
+    save_task_state(workspace, state)
+
+
 def ensure_initialized(workspace: Path) -> None:
     if not (workflow_dir(workspace) / "agents").exists():
         raise typer.BadParameter("workspace is not initialized. Run `hooky init` first.")
@@ -247,18 +256,24 @@ def run_spec(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
     issue = state["issue"]
-    with in_workspace(workspace):
-        artifact_dir, _contract, usage = spec_agent.generate_spec_artifacts(
-            issue_number=int(issue["number"]),
-            title=issue["title"],
-            body=issue["body"],
-            author=issue.get("user", {}).get("login", "local"),
-            generated_at=utc_now(),
-            artifact_root=Path("docs/specs"),
-            sidecar_root=Path(".workflow/artifacts/specs"),
-            working_folder=Path("."),
-        )
+    set_stage_status(workspace, state, "spec", "running")
+    try:
+        with in_workspace(workspace):
+            artifact_dir, _contract, usage = spec_agent.generate_spec_artifacts(
+                issue_number=int(issue["number"]),
+                title=issue["title"],
+                body=issue["body"],
+                author=issue.get("user", {}).get("login", "local"),
+                generated_at=utc_now(),
+                artifact_root=Path("docs/specs"),
+                sidecar_root=Path(".workflow/artifacts/specs"),
+                working_folder=Path("."),
+            )
+    except Exception as exc:
+        set_stage_status(workspace, state, "spec", "failed", error=str(exc))
+        raise
     state["artifacts"]["spec"] = {"artifact_dir": artifact_dir.as_posix(), "contract": (artifact_dir / "contract.json").as_posix(), "usage": usage}
+    set_stage_status(workspace, state, "spec", "passed", contract=(artifact_dir / "contract.json").as_posix())
     save_task_state(workspace, state)
     typer.echo(f"spec artifacts: {artifact_dir}")
     typer.echo("next: hooky approve spec")
@@ -295,43 +310,32 @@ def run_test(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
     state = load_task_state(workspace, task)
     require_approval(state, "spec")
     spec_contract = Path(state["artifacts"]["spec"]["contract"])
-    with in_workspace(workspace):
-        approved_spec = spec_agent.read_json(spec_contract)
-        output_dir, _contract, usage = test_agent.generate_test_artifacts(
-            approved_spec=approved_spec,
-            spec_source=spec_contract.as_posix(),
-            generated_at=utc_now(),
-            working_folder=Path("."),
-            project_root=Path("."),
-            artifact_root=Path("tests/generated"),
-            report_root=Path(".workflow/artifacts/test-agent"),
-        )
-    report_dir = Path(".workflow/artifacts/test-agent") / output_dir.name
-    sync_builder_expected_test_paths(workspace, output_dir, report_dir)
+    set_stage_status(workspace, state, "test", "running")
+    try:
+        with in_workspace(workspace):
+            approved_spec = spec_agent.read_json(spec_contract)
+            report_dir, contract, usage = test_agent.generate_test_artifacts(
+                approved_spec=approved_spec,
+                spec_source=spec_contract.as_posix(),
+                generated_at=utc_now(),
+                working_folder=Path("."),
+                project_root=Path("."),
+                report_root=Path(".workflow/artifacts/test-agent"),
+            )
+    except Exception as exc:
+        set_stage_status(workspace, state, "test", "failed", error=str(exc))
+        raise
     state["artifacts"]["test"] = {
-        "artifact_dir": output_dir.as_posix(),
         "report_dir": report_dir.as_posix(),
         "contract": (report_dir / "contract.json").as_posix(),
-        "builder_compat_contract": builder_agent.APPROVED_TEST_CONTRACT.as_posix(),
-        "builder_compat_test_root": builder_agent.APPROVED_TEST_ROOT.as_posix(),
+        "test_files": [item["path"] for item in contract.get("test_files", [])],
+        "fixtures": [item["path"] for item in contract.get("fixtures", [])],
         "usage": usage,
     }
+    set_stage_status(workspace, state, "test", "passed", contract=(report_dir / "contract.json").as_posix())
     save_task_state(workspace, state)
-    typer.echo(f"test artifacts: {output_dir}")
+    typer.echo(f"test report: {report_dir}")
     typer.echo("next: hooky approve test")
-
-
-def sync_builder_expected_test_paths(workspace: Path, output_dir: Path, report_dir: Path) -> None:
-    expected_contract = workspace / builder_agent.APPROVED_TEST_CONTRACT
-    expected_root = workspace / builder_agent.APPROVED_TEST_ROOT
-    actual_contract = workspace / report_dir / "contract.json"
-    actual_root = workspace / output_dir
-    expected_contract.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(actual_contract, expected_contract)
-    if expected_root.exists():
-        shutil.rmtree(expected_root)
-    expected_root.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(actual_root, expected_root)
 
 
 @run_app.command("builder")
@@ -341,9 +345,15 @@ def run_builder(ctx: typer.Context, task: Annotated[str | None, typer.Option(hel
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
     require_approval(state, "test")
-    with in_workspace(workspace):
-        report_dir, _contract, usage = builder_agent.generate_build_artifacts(working_folder=Path("."), generated_at=utc_now())
+    set_stage_status(workspace, state, "builder", "running")
+    try:
+        with in_workspace(workspace):
+            report_dir, _contract, usage = builder_agent.generate_build_artifacts(working_folder=Path("."), generated_at=utc_now())
+    except Exception as exc:
+        set_stage_status(workspace, state, "builder", "failed", error=str(exc))
+        raise
     state["artifacts"]["builder"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
+    set_stage_status(workspace, state, "builder", "passed", contract=(report_dir / "contract.json").as_posix())
     save_task_state(workspace, state)
     typer.echo(f"builder report: {report_dir}")
     typer.echo("next: hooky run verifier")
@@ -356,9 +366,15 @@ def run_verifier(ctx: typer.Context, task: Annotated[str | None, typer.Option(he
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
     require_artifact(state, "builder")
-    with in_workspace(workspace):
-        report_dir, _contract, usage = verifier_agent.generate_verification_artifacts(working_folder=Path("."), generated_at=utc_now())
+    set_stage_status(workspace, state, "verifier", "running")
+    try:
+        with in_workspace(workspace):
+            report_dir, _contract, usage = verifier_agent.generate_verification_artifacts(working_folder=Path("."), generated_at=utc_now())
+    except Exception as exc:
+        set_stage_status(workspace, state, "verifier", "failed", error=str(exc))
+        raise
     state["artifacts"]["verifier"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
+    set_stage_status(workspace, state, "verifier", "passed", contract=(report_dir / "contract.json").as_posix())
     save_task_state(workspace, state)
     typer.echo(f"verifier report: {report_dir}")
     typer.echo("next: hooky run eval")
@@ -371,9 +387,15 @@ def run_eval(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
     require_artifact(state, "verifier")
-    with in_workspace(workspace):
-        report_dir, _contract, usage = eval_agent.generate_eval_artifacts(working_folder=Path("."), generated_at=utc_now())
+    set_stage_status(workspace, state, "eval", "running")
+    try:
+        with in_workspace(workspace):
+            report_dir, _contract, usage = eval_agent.generate_eval_artifacts(working_folder=Path("."), generated_at=utc_now())
+    except Exception as exc:
+        set_stage_status(workspace, state, "eval", "failed", error=str(exc))
+        raise
     state["artifacts"]["eval"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
+    set_stage_status(workspace, state, "eval", "passed", contract=(report_dir / "contract.json").as_posix())
     save_task_state(workspace, state)
     typer.echo(f"eval report: {report_dir}")
     typer.echo("next: hooky report")
@@ -405,6 +427,33 @@ def require_approval(state: dict[str, Any], stage: str) -> None:
 def require_artifact(state: dict[str, Any], stage: str) -> None:
     if stage not in state.get("artifacts", {}):
         raise typer.BadParameter(f"{stage} has not run yet.")
+
+
+@app.command()
+def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None) -> None:
+    """Show the current task's pipeline state and artifact locations."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_initialized(workspace)
+    state = load_task_state(workspace, task)
+    typer.echo(f"task: {state['task_id']}")
+    typer.echo(f"title: {state['title']}")
+    for stage in ["spec", "test", "builder", "verifier", "eval"]:
+        stage_state = state.get("stage_status", {}).get(stage, {})
+        artifact = state.get("artifacts", {}).get(stage, {})
+        approval = state.get("approvals", {}).get(stage)
+        status_text = stage_state.get("status", "not-run")
+        suffix = " approved" if approval else ""
+        typer.echo(f"{stage}: {status_text}{suffix}")
+        if stage_state.get("error"):
+            typer.echo(f"  error: {stage_state['error']}")
+        for key in ["artifact_dir", "report_dir", "contract"]:
+            if artifact.get(key):
+                typer.echo(f"  {key}: {artifact[key]}")
+        if stage == "test":
+            for path in artifact.get("test_files", []):
+                typer.echo(f"  test_file: {path}")
+            for path in artifact.get("fixtures", []):
+                typer.echo(f"  fixture: {path}")
 
 
 @app.command()

@@ -143,13 +143,12 @@ def run_attempt(
     eval_spec_agent.apply_context_length_env(model_info)
     try:
         with attempt_time_limit("generation"):
-            output_dir, contract, test_usage = test_agent.generate_test_artifacts(
+            report_dir, contract, test_usage = test_agent.generate_test_artifacts(
                 approved_spec=fixture["approved_spec"],
                 spec_source=args_fixture_source(fixture),
                 generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                 working_folder=attempt_dir,
                 project_root=attempt_dir,
-                artifact_root=attempt_dir / "tests/generated",
                 report_root=attempt_dir / ".workflow/artifacts/test-agent",
             )
     except Exception as exc:  # noqa: BLE001
@@ -178,7 +177,7 @@ def run_attempt(
         eval_spec_agent.restore_reasoning(previous_reasoning)
         eval_spec_agent.restore_context_length(previous_context_length)
 
-    deterministic = deterministic_eval(contract, output_dir, fixture["approved_spec"], fixture["expect"])
+    deterministic = deterministic_eval(contract, attempt_dir, report_dir, fixture["approved_spec"], fixture["expect"])
     if deterministic["status"] == "fail":
         attempt = {
             "model": model,
@@ -189,7 +188,8 @@ def run_attempt(
             "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
-            "artifact_dir": str(output_dir),
+            "artifact_dir": str(attempt_dir),
+            "report_dir": str(report_dir),
             "cached": False,
             "cost": eval_spec_agent.sum_costs([{"usage": test_usage}]),
             "usage": {"test": test_usage, "judge": {}},
@@ -212,7 +212,8 @@ def run_attempt(
             "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
-            "artifact_dir": str(output_dir),
+            "artifact_dir": str(attempt_dir),
+            "report_dir": str(report_dir),
             "cached": False,
             "cost": eval_spec_agent.sum_costs([{"usage": test_usage}]),
             "usage": {"test": test_usage, "judge": {}},
@@ -232,7 +233,8 @@ def run_attempt(
         "artifact_policy": deterministic.get("artifact_policy", {}),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
-        "artifact_dir": str(output_dir),
+        "artifact_dir": str(attempt_dir),
+        "report_dir": str(report_dir),
         "cached": False,
         "cost": eval_spec_agent.sum_costs([{"usage": test_usage}, {"usage": judge_usage}]),
         "usage": {"test": test_usage, "judge": judge_usage},
@@ -272,7 +274,8 @@ def args_fixture_source(fixture: dict[str, Any]) -> str:
 
 def deterministic_eval(
     contract: dict[str, Any],
-    output_dir: Path,
+    working_folder: Path,
+    report_dir: Path,
     approved_spec: dict[str, Any],
     expect: dict[str, Any],
 ) -> dict[str, Any]:
@@ -299,15 +302,14 @@ def deterministic_eval(
     if missing:
         findings.append(f"missing covered criteria: {len(missing)}")
     required_artifacts = sorted(
-        {Path(item["path"]).name for item in contract.get("test_files", [])}
-        | {Path(item["path"]).name for item in contract.get("fixtures", [])}
+        {item["path"] for item in contract.get("test_files", [])}
+        | {item["path"] for item in contract.get("fixtures", [])}
     )
     policy = artifact_policy.load_policy(Path(".workflow/agents/test/artifact_policy.json"))
-    artifact_report = artifact_policy.validate_files(output_dir, required_files=required_artifacts)
-    report_dir = output_dir.parents[2] / ".workflow/artifacts/test-agent" / output_dir.name
+    artifact_report = artifact_policy.validate_files(working_folder, required_files=required_artifacts)
     report_artifacts = artifact_policy.validate_files(report_dir, required_files=policy["required_report_files"])
-    if not artifact_report.get("produced_files"):
-        findings.append("no generated test files written")
+    if required_artifacts and any(path not in artifact_report.get("produced_files", []) for path in required_artifacts):
+        findings.append("not all declared test artifacts were written")
     findings.extend(artifact_report["findings"])
     findings.extend(report_artifacts["findings"])
     return {

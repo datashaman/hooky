@@ -91,6 +91,7 @@ uv run hooky approve test
 uv run hooky run builder
 uv run hooky run verifier
 uv run hooky run eval
+uv run hooky status
 uv run hooky report
 ```
 
@@ -102,7 +103,9 @@ uv run hooky -C /tmp/todomvc task create --title "Implement TodoMVC" --body-file
 uv run hooky -C /tmp/todomvc run pipeline --auto-approve
 ```
 
-The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths.
+The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths. `hooky status` shows per-stage state, errors, report paths, and approved test file paths.
+
+The Test Agent writes executable tests and fixtures at project-native paths chosen from the workspace context. Hooky reports, contracts, context snapshots, and runtime transcripts stay under `.workflow`.
 
 ## Local Spec Agent Eval
 
@@ -196,7 +199,7 @@ The TodoMVC project context lives under `tests/fixtures/projects/todomvc/`. Duri
 
 `.workflow/eval-runs/test-agent/<timestamp>/<model>/`
 
-Generated test artifacts and agent reports are written inside that copied working folder, so eval runs do not mix TodoMVC fixture files with Hooky's own project files.
+Generated test files are written at project-native paths inside that copied working folder. Test Agent reports and runtime logs are written under `.workflow/artifacts/test-agent/`.
 
 When a model passes eval, the runner updates `.workflow/agents/test/selected_model.json` unless `--no-update-selected-model` is passed.
 
@@ -209,7 +212,7 @@ export OPENROUTER_API_KEY=...
 uv run python scripts/eval_builder_agent.py
 ```
 
-The Builder fixture lives under `tests/fixtures/builder_agent/todomvc_approved_tests/`. It is a full working folder snapshot after the Test Agent stage: project context, generated tests, and Test Agent sidecar artifacts.
+The Builder fixture lives under `tests/fixtures/builder_agent/todomvc_approved_tests/`. It is a full working folder snapshot after the Test Agent stage: project context, approved tests at project-native paths, and Test Agent sidecar artifacts.
 
 During eval, each model receives an isolated copy under:
 

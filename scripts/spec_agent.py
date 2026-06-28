@@ -151,7 +151,7 @@ def generate_contract(
 def generate_contract_with_openrouter(
     dynamic_context: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
+    from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
     model = selected_model()
     agent_context = load_agent_context()
@@ -163,20 +163,35 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
     )
-    result = run_tool_agent(
-        model=model,
-        system=agent_context["system"],
-        user=spec_prompt(agent_context, dynamic_context),
-        runtime=runtime,
-    )
+    runtime_root = Path(dynamic_context["workspace"]["runtime_root"])
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=agent_context["system"],
+            user=spec_prompt(agent_context, dynamic_context),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            runtime_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("spec", model, agent_context["selected_model"], result, status="error", error=str(exc)),
+        )
+        raise
     write_runtime_log(
-        Path(dynamic_context["workspace"]["runtime_root"]),
+        runtime_root,
         result.transcript,
         result.tool_events,
         result.compaction_events,
         result.pre_compaction_archives,
         metadata=build_runtime_metadata("spec", model, agent_context["selected_model"], result),
     )
+    if result.final_report is None:
+        raise RuntimeError("Spec Agent finished without final_report")
     return result.final_report, result.usage
 
 
