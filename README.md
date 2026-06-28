@@ -135,6 +135,14 @@ Each run writes artifacts and a costed report under `.workflow/eval-runs/<timest
 Completed model attempts are cached under `.workflow/eval-cache/`, so rerunning the loop will not spend credits on the same fixture/model/eval combination again.
 When a model passes eval, the runner updates `.workflow/agents/spec/selected_model.json` unless `--no-update-selected-model` is passed.
 
+Generate a static HTML pipeline health report from local eval reports:
+
+```bash
+uv run python scripts/generate_eval_report.py
+```
+
+The report is written to `.workflow/eval-runs/report.html` and scans existing `report.json` files directly, so it also works before `.workflow/eval-runs/index.json` has been created. It includes per-attempt filesystem snapshots with noisy dependency folders such as `node_modules` omitted.
+
 Useful overrides:
 
 ```bash
