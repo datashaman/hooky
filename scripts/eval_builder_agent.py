@@ -10,13 +10,13 @@ import json
 import os
 import shutil
 import signal
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import artifact_policy
 import builder_agent
+import command_result
 import eval_runtime
 import eval_spec_agent
 import eval_test_agent
@@ -290,8 +290,8 @@ def deterministic_eval(
     implementation_files = [item["path"] for item in contract.get("file_writes", [])]
     if not implementation_files:
         findings.append("no production implementation files written")
-    install = run_command(["npm", "install"], working_folder, command_timeout)
-    test_result = run_command(["npm", "test"], working_folder, command_timeout)
+    install = command_result.run_command(["npm", "install"], working_folder, command_timeout)
+    test_result = command_result.run_command(["npm", "test"], working_folder, command_timeout)
     if install["returncode"] != 0:
         findings.append("npm install failed")
     if test_result["returncode"] != 0:
@@ -300,8 +300,8 @@ def deterministic_eval(
         "status": "fail" if findings else "pass",
         "findings": findings,
         "commands": {
-            "npm install": redact_command_result(install),
-            "npm test": redact_command_result(test_result),
+            "npm install": command_result.redacted(install),
+            "npm test": command_result.redacted(test_result),
         },
         "artifact_policy": artifact_report,
         "implementation_files": implementation_files,
@@ -311,32 +311,6 @@ def deterministic_eval(
 def builder_protected_prefixes() -> list[str]:
     policy = artifact_policy.load_policy(Path(".workflow/agents/builder/artifact_policy.json"))
     return list(policy["protected_prefixes"])
-
-
-def run_command(command: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
-    try:
-        completed = subprocess.run(command, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=False)
-        return {
-            "returncode": completed.returncode,
-            "stdout": completed.stdout[-4000:],
-            "stderr": completed.stderr[-4000:],
-        }
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "returncode": 124,
-            "stdout": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
-            "stderr": (exc.stderr or "")[-4000:] if isinstance(exc.stderr, str) else "",
-            "timed_out": True,
-        }
-
-
-def redact_command_result(result: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "returncode": result.get("returncode"),
-        "timed_out": result.get("timed_out", False),
-        "stdout_tail": result.get("stdout", "")[-1200:],
-        "stderr_tail": result.get("stderr", "")[-1200:],
-    }
 
 
 def judge_eval(
@@ -473,6 +447,7 @@ def eval_cache_key(workspace_fixture: Path, judge_model: str) -> str:
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
+        Path("scripts/command_result.py"),
         Path(".workflow/agents/builder/artifact_policy.json"),
         Path("scripts/spec_agent.py"),
         Path("scripts/builder_agent.py"),
