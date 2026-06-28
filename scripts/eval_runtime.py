@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -38,6 +39,22 @@ def write_report(
 
 def report_status(winner: dict[str, Any] | None, final: bool) -> str:
     return "pass" if winner else "fail" if final else "running"
+
+
+def cache_key(paths: list[Path], *extra_values: str) -> str:
+    digest = hashlib.sha256()
+    all_paths = [Path(__file__), *paths]
+    for path in all_paths:
+        if not path.exists():
+            continue
+        digest.update(path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    for value in extra_values:
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:24]
 
 
 def load_cached_attempt(

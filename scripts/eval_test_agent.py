@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hashlib
 import json
 import os
 import shutil
@@ -442,7 +441,6 @@ def write_report(
 
 
 def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) -> str:
-    digest = hashlib.sha256()
     paths = [
         fixture_path,
         test_agent.SELECTED_MODEL_PATH,
@@ -458,15 +456,7 @@ def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) 
         paths.extend(path for path in sorted(project_fixture.rglob("*")) if path.is_file())
     paths.extend(sorted(Path(".workflow/agents/test/static").glob("*.md")))
     paths.extend(sorted(Path(".workflow/agents/common/static").glob("*.md")))
-    for path in paths:
-        if not path.exists():
-            continue
-        digest.update(path.as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    digest.update(judge_model.encode("utf-8"))
-    return digest.hexdigest()[:24]
+    return eval_runtime.cache_key(paths, judge_model)
 
 
 def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model: str) -> None:

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -739,7 +738,6 @@ def read_json_list(path: Path) -> list[dict[str, Any]]:
 
 
 def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
-    digest = hashlib.sha256()
     paths = [
         fixture_path,
         Path("AGENTS.md"),
@@ -752,15 +750,7 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
         Path("scripts/eval_spec_agent.py"),
     ]
     paths.extend(sorted(Path(".workflow/agents/spec/static").glob("*.md")))
-    for path in paths:
-        if not path.exists():
-            continue
-        digest.update(path.as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    digest.update(judge_model.encode("utf-8"))
-    return digest.hexdigest()[:24]
+    return eval_runtime.cache_key(paths, judge_model)
 
 
 def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model: str) -> None:
