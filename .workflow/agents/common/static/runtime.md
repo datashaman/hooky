@@ -20,6 +20,7 @@ Agents may assume these basic tools exist:
 - `grep_files(pattern, path)`: search file contents.
 - `find_files(glob, path)`: find files by name or glob.
 - `bash(command)`: run shell commands inside the working folder.
+- `web_search(query, max_results, include_domains, exclude_domains)`: search the web for external source material. It requires a configured search provider.
 - `fetch_url(url)`: fetch UTF-8 text from an `http` or `https` URL when a task explicitly references external source material.
 - `todo_read()`: read the current task todo list.
 - `todo_write(items)`: update the current task todo list.
@@ -35,7 +36,14 @@ Agents may assume these basic tools exist:
 ## Tool Discipline
 
 - Prefer `find_files` or `grep_files` over broad shell commands when discovering project context.
+- Use `web_search` when source material is named but no URL is provided.
 - Use `fetch_url` for referenced source material that is not present in the working folder.
 - Use `bash` for deterministic local commands such as tests, formatters, and static checks.
 - Do not use tools to perform responsibilities assigned to another SDLC agent.
 - Do not hide tool failures; include them in the agent report.
+
+## Web Search Configuration
+
+- `web_search` currently supports `WEB_SEARCH_PROVIDER=tavily`.
+- Tavily search requires `TAVILY_API_KEY`.
+- If web search is not configured, the tool returns a structured error. Agents must not silently fall back to model memory for missing external source material.

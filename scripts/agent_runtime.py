@@ -71,6 +71,17 @@ class ToolRuntime:
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("grep_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("bash", "Run a shell command in the working folder with a timeout.", {"command": string_schema()}, ["command"]),
+            tool_schema(
+                "web_search",
+                "Search the web for source material and return normalized result metadata.",
+                {
+                    "query": string_schema(),
+                    "max_results": integer_schema(default=5, minimum=1, maximum=10),
+                    "include_domains": string_array_schema(),
+                    "exclude_domains": string_array_schema(),
+                },
+                ["query"],
+            ),
             tool_schema("fetch_url", "Fetch UTF-8 text content from an http or https URL.", {"url": string_schema()}, ["url"]),
             tool_schema("todo_read", "Read the current todo list.", {}, []),
             tool_schema("todo_write", "Replace the current todo list.", {"items": {"type": "array", "items": {"type": "object", "additionalProperties": True}}}, ["items"]),
@@ -94,6 +105,7 @@ class ToolRuntime:
             "find_files": self.find_files,
             "grep_files": self.grep_files,
             "bash": self.bash,
+            "web_search": self.web_search,
             "fetch_url": self.fetch_url,
             "todo_read": self.todo_read,
             "todo_write": self.todo_write,
@@ -196,6 +208,23 @@ class ToolRuntime:
             return {"ok": False, "url": url, "status": exc.code, "error": exc.reason}
         except urllib.error.URLError as exc:
             return {"ok": False, "url": url, "error": str(exc.reason)}
+
+    def web_search(self, args: dict[str, Any]) -> dict[str, Any]:
+        provider = os.environ.get("WEB_SEARCH_PROVIDER", "").strip().lower()
+        if not provider:
+            return {"ok": False, "error": "WEB_SEARCH_PROVIDER is not configured"}
+        if provider != "tavily":
+            return {"ok": False, "error": f"unsupported WEB_SEARCH_PROVIDER: {provider}"}
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
+            return {"ok": False, "provider": "tavily", "error": "TAVILY_API_KEY is not configured"}
+        return tavily_search(
+            api_key=api_key,
+            query=str(args["query"]),
+            max_results=int(args.get("max_results") or 5),
+            include_domains=list(args.get("include_domains") or []),
+            exclude_domains=list(args.get("exclude_domains") or []),
+        )
 
     def todo_read(self, _args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "items": self.todo_items}
@@ -478,6 +507,7 @@ def available_tool_names() -> list[str]:
         "grep_files",
         "find_files",
         "bash",
+        "web_search",
         "fetch_url",
         "todo_read",
         "todo_write",
@@ -500,11 +530,83 @@ def tool_schema(name: str, description: str, properties: dict[str, Any], require
     }
 
 
+def tavily_search(
+    *,
+    api_key: str,
+    query: str,
+    max_results: int,
+    include_domains: list[str],
+    exclude_domains: list[str],
+) -> dict[str, Any]:
+    max_results = min(max(max_results, 1), 10)
+    payload: dict[str, Any] = {
+        "query": query,
+        "max_results": max_results,
+        "search_depth": "basic",
+        "include_answer": False,
+        "include_raw_content": False,
+    }
+    if include_domains:
+        payload["include_domains"] = include_domains
+    if exclude_domains:
+        payload["exclude_domains"] = exclude_domains
+    request = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "hooky-agent-runtime/0.1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        return {"ok": False, "provider": "tavily", "query": query, "status": exc.code, "error": detail[:2000]}
+    except urllib.error.URLError as exc:
+        return {"ok": False, "provider": "tavily", "query": query, "error": str(exc.reason)}
+    results = []
+    for item in data.get("results") or []:
+        results.append(
+            {
+                "title": item.get("title") or "",
+                "url": item.get("url") or "",
+                "snippet": item.get("content") or "",
+                "content": None,
+                "score": item.get("score"),
+            }
+        )
+    return {
+        "ok": True,
+        "provider": "tavily",
+        "query": query,
+        "results": results,
+    }
+
+
 def string_schema(default: str | None = None) -> dict[str, Any]:
     schema = {"type": "string"}
     if default is not None:
         schema["default"] = default
     return schema
+
+
+def integer_schema(default: int | None = None, minimum: int | None = None, maximum: int | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "integer"}
+    if default is not None:
+        schema["default"] = default
+    if minimum is not None:
+        schema["minimum"] = minimum
+    if maximum is not None:
+        schema["maximum"] = maximum
+    return schema
+
+
+def string_array_schema() -> dict[str, Any]:
+    return {"type": "array", "items": {"type": "string"}, "default": []}
 
 
 def relative_to(path: Path, root: Path) -> str:
