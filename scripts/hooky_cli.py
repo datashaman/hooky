@@ -146,6 +146,40 @@ def set_stage_status(workspace: Path, state: dict[str, Any], stage: str, status:
         **extra,
     }
     save_task_state(workspace, state)
+    append_pipeline_event(
+        workspace,
+        "stage",
+        task=state.get("task_id"),
+        stage=stage,
+        status=status,
+        trace=stage_runtime_events_path(workspace, stage, state),
+        **extra,
+    )
+
+
+def pipeline_log_path(workspace: Path) -> Path:
+    return workflow_dir(workspace) / "runtime_events.log"
+
+
+def append_pipeline_event(workspace: Path, event: str, **fields: Any) -> None:
+    path = pipeline_log_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parts = [utc_now(), event]
+    for key, value in fields.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={quote_log_value(value)}")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(" ".join(parts) + "\n")
+
+
+def quote_log_value(value: Any) -> str:
+    text = str(value)
+    if not text:
+        return '""'
+    if any(char.isspace() for char in text) or '"' in text:
+        return '"' + " ".join(text.split()).replace('"', '\\"')[:500] + '"'
+    return text
 
 
 def ensure_initialized(workspace: Path) -> None:
@@ -275,7 +309,7 @@ def run_spec(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
         set_stage_status(workspace, state, "spec", "failed", error=str(exc))
         raise
     state["artifacts"]["spec"] = {"artifact_dir": artifact_dir.as_posix(), "contract": (artifact_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "spec", "passed", contract=(artifact_dir / "contract.json").as_posix())
+    set_stage_status(workspace, state, "spec", "passed", contract=(artifact_dir / "contract.json").as_posix(), cost=usage.get("cost"))
     save_task_state(workspace, state)
     typer.echo(f"spec artifacts: {artifact_dir}")
     typer.echo("next: hooky approve spec")
@@ -300,6 +334,7 @@ def approve_stage(ctx: typer.Context, stage: str, next_message: str, task: str |
         raise typer.BadParameter(f"cannot approve {stage}: stage has not run")
     state.setdefault("approvals", {})[stage] = {"approved_at": utc_now()}
     save_task_state(workspace, state)
+    append_pipeline_event(workspace, "approval", task=state.get("task_id"), stage=stage, status="approved")
     typer.echo(f"approved: {stage}")
     typer.echo(next_message)
 
@@ -334,7 +369,7 @@ def run_test(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
         "fixtures": [item["path"] for item in contract.get("fixtures", [])],
         "usage": usage,
     }
-    set_stage_status(workspace, state, "test", "passed", contract=(report_dir / "contract.json").as_posix())
+    set_stage_status(workspace, state, "test", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
     save_task_state(workspace, state)
     typer.echo(f"test report: {report_dir}")
     typer.echo("next: hooky approve test")
@@ -355,7 +390,7 @@ def run_builder(ctx: typer.Context, task: Annotated[str | None, typer.Option(hel
         set_stage_status(workspace, state, "builder", "failed", error=str(exc))
         raise
     state["artifacts"]["builder"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "builder", "passed", contract=(report_dir / "contract.json").as_posix())
+    set_stage_status(workspace, state, "builder", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
     save_task_state(workspace, state)
     typer.echo(f"builder report: {report_dir}")
     typer.echo("next: hooky run verifier")
@@ -376,7 +411,7 @@ def run_verifier(ctx: typer.Context, task: Annotated[str | None, typer.Option(he
         set_stage_status(workspace, state, "verifier", "failed", error=str(exc))
         raise
     state["artifacts"]["verifier"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "verifier", "passed", contract=(report_dir / "contract.json").as_posix())
+    set_stage_status(workspace, state, "verifier", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
     save_task_state(workspace, state)
     typer.echo(f"verifier report: {report_dir}")
     typer.echo("next: hooky run eval")
@@ -397,7 +432,7 @@ def run_eval(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
         set_stage_status(workspace, state, "eval", "failed", error=str(exc))
         raise
     state["artifacts"]["eval"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "eval", "passed", contract=(report_dir / "contract.json").as_posix())
+    set_stage_status(workspace, state, "eval", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
     save_task_state(workspace, state)
     typer.echo(f"eval report: {report_dir}")
     typer.echo("next: hooky report")
@@ -412,13 +447,21 @@ def run_pipeline(
     """Run all stages for the current task."""
     if not auto_approve:
         raise typer.BadParameter("run pipeline requires --auto-approve. Use individual `hooky run ...` commands for human-gated flow.")
-    run_spec(ctx, task=task)
-    approve_stage(ctx, "spec", "running test...", task)
-    run_test(ctx, task=task)
-    approve_stage(ctx, "test", "running builder...", task)
-    run_builder(ctx, task=task)
-    run_verifier(ctx, task=task)
-    run_eval(ctx, task=task)
+    workspace = workspace_from_ctx(ctx)
+    state = load_task_state(workspace, task)
+    append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="running")
+    try:
+        run_spec(ctx, task=task)
+        approve_stage(ctx, "spec", "running test...", task)
+        run_test(ctx, task=task)
+        approve_stage(ctx, "test", "running builder...", task)
+        run_builder(ctx, task=task)
+        run_verifier(ctx, task=task)
+        run_eval(ctx, task=task)
+    except Exception as exc:
+        append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="failed", error=str(exc))
+        raise
+    append_pipeline_event(workspace, "pipeline", task=state.get("task_id"), status="passed")
 
 
 def require_approval(state: dict[str, Any], stage: str) -> None:
@@ -432,6 +475,8 @@ def require_artifact(state: dict[str, Any], stage: str) -> None:
 
 
 def runtime_log_dir(workspace: Path, stage: str, state: dict[str, Any]) -> Path:
+    if stage == "pipeline":
+        return workflow_dir(workspace)
     if stage == "spec":
         return workspace / ".workflow/artifacts/specs/_runtime"
     artifact = state.get("artifacts", {}).get(stage, {})
@@ -446,6 +491,10 @@ def runtime_log_dir(workspace: Path, stage: str, state: dict[str, Any]) -> Path:
     if stage in defaults:
         return workspace / defaults[stage]
     raise typer.BadParameter(f"unknown stage: {stage}")
+
+
+def stage_runtime_events_path(workspace: Path, stage: str, state: dict[str, Any]) -> str:
+    return (runtime_log_dir(workspace, stage, state) / "runtime_events.log").relative_to(workspace).as_posix()
 
 
 @app.command()
@@ -478,7 +527,7 @@ def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Ta
 @app.command()
 def trace(
     ctx: typer.Context,
-    stage: Annotated[str, typer.Argument(help="Stage to inspect: spec, test, builder, verifier, or eval.")],
+    stage: Annotated[str, typer.Argument(help="Stage to inspect: pipeline, spec, test, builder, verifier, or eval.")],
     task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
     raw_path: Annotated[bool, typer.Option("--path", help="Only print the tool-call summary file path.")] = False,
     tail_path: Annotated[bool, typer.Option("--tail-path", help="Only print the append-only runtime log path.")] = False,
@@ -493,7 +542,7 @@ def trace(
     summary_path = log_dir / "runtime_timeline.md"
     tail_file = log_dir / "runtime_events.log"
     if raw_path:
-        typer.echo(summary_path)
+        typer.echo(tail_file if stage == "pipeline" else summary_path)
         return
     if tail_path:
         typer.echo(tail_file)
@@ -502,6 +551,11 @@ def trace(
         tail_file.parent.mkdir(parents=True, exist_ok=True)
         tail_file.touch(exist_ok=True)
         subprocess.run(["tail", "-f", str(tail_file)], check=False)
+        return
+    if stage == "pipeline":
+        if not tail_file.exists():
+            raise typer.BadParameter(f"pipeline event log not found: {tail_file}")
+        typer.echo(tail_file.read_text(encoding="utf-8").rstrip())
         return
     metadata_path = log_dir / "runtime_metadata.json"
     if metadata_path.exists():
