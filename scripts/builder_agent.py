@@ -14,6 +14,7 @@ from typing import Any
 import eval_runtime
 import spec_agent
 import test_agent
+from agent_runtime import build_runtime_metadata
 
 
 REPORT_ROOT = Path(".workflow/artifacts/builder-agent")
@@ -137,6 +138,7 @@ def generate_contract_with_openrouter(
         result.tool_events,
         result.compaction_events,
         result.pre_compaction_archives,
+        metadata=build_runtime_metadata("builder", model, agent_context["selected_model"], result),
     )
     return result.final_report, result.usage
 

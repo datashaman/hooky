@@ -13,7 +13,7 @@ from typing import Any
 
 import eval_runtime
 import spec_agent
-from agent_runtime import ToolRuntime, run_tool_agent, write_runtime_log
+from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
 REPORT_ROOT = Path(".workflow/artifacts/eval-agent")
@@ -134,6 +134,7 @@ def generate_contract_with_openrouter(
         result.tool_events,
         result.compaction_events,
         result.pre_compaction_archives,
+        metadata=build_runtime_metadata("eval", model, agent_context["selected_model"], result),
     )
     return result.final_report, result.usage
 

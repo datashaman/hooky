@@ -150,7 +150,7 @@ def generate_contract(
 def generate_contract_with_openrouter(
     dynamic_context: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from agent_runtime import ToolRuntime, run_tool_agent, write_runtime_log
+    from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
     model = selected_model()
     agent_context = load_agent_context()
@@ -174,6 +174,7 @@ def generate_contract_with_openrouter(
         result.tool_events,
         result.compaction_events,
         result.pre_compaction_archives,
+        metadata=build_runtime_metadata("spec", model, agent_context["selected_model"], result),
     )
     return result.final_report, result.usage
 

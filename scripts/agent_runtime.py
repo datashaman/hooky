@@ -9,6 +9,7 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,6 +28,8 @@ class AgentRunResult:
     tool_events: list[dict[str, Any]]
     compaction_events: list[dict[str, Any]]
     pre_compaction_archives: list[dict[str, Any]]
+    started_at: str
+    ended_at: str
 
 
 @dataclass
@@ -194,6 +197,7 @@ def run_tool_agent(
     compaction_events: list[dict[str, Any]] = []
     pre_compaction_archives: list[dict[str, Any]] = []
     total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    started_at = utc_timestamp()
 
     with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
         while runtime.final_report is None:
@@ -254,7 +258,16 @@ def run_tool_agent(
                     }
                 )
 
-    return AgentRunResult(runtime.final_report, total_usage, transcript, tool_events, compaction_events, pre_compaction_archives)
+    return AgentRunResult(
+        runtime.final_report,
+        total_usage,
+        transcript,
+        tool_events,
+        compaction_events,
+        pre_compaction_archives,
+        started_at,
+        utc_timestamp(),
+    )
 
 
 def maybe_compact_messages(
@@ -387,12 +400,41 @@ def write_runtime_log(
     tool_events: list[dict[str, Any]],
     compaction_events: list[dict[str, Any]],
     pre_compaction_archives: list[dict[str, Any]],
+    *,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     report_root.mkdir(parents=True, exist_ok=True)
     (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "runtime_metadata.json").write_text(
+        json.dumps(metadata or {"schema_version": 1, "written_at": utc_timestamp()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def build_runtime_metadata(agent_name: str, model: str, selected_model: dict[str, Any], result: AgentRunResult) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "agent_name": agent_name,
+        "model": model,
+        "variant_id": selected_model.get("variant_id", model),
+        "reasoning_request": selected_model.get("reasoning_request"),
+        "started_at": result.started_at,
+        "ended_at": result.ended_at,
+        "written_at": utc_timestamp(),
+        "usage": result.usage,
+        "events": {
+            "tool_calls": len(result.tool_events),
+            "compactions": len(result.compaction_events),
+            "pre_compaction_archives": len(result.pre_compaction_archives),
+        },
+    }
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def openrouter_timeout_ms() -> int:
