@@ -9,6 +9,13 @@ github:
 artifacts:
   root: docs/specs
   generated_marker: "<!-- generated-by: hooky-spec-agent -->"
+  stage_roots:
+    spec_public: docs/specs
+    spec_sidecar: .workflow/artifacts/specs
+    test: .workflow/artifacts/test-agent
+    builder: .workflow/artifacts/builder-agent
+    verifier: .workflow/artifacts/verifier-agent
+    eval: .workflow/artifacts/eval-agent
 
 agents:
   spec:
@@ -37,6 +44,19 @@ agents:
       - invent_requirements
       - omit_human_approval
     requires_human_approval: true
+    artifacts:
+      writes:
+        - docs/specs/<spec-id>/spec.md
+        - docs/specs/<spec-id>/acceptance_tests.md
+        - docs/specs/<spec-id>/risk_register.md
+        - docs/specs/<spec-id>/cost_plan.md
+        - docs/specs/<spec-id>/contract.json
+        - docs/specs/<spec-id>/dynamic_context.json
+        - docs/specs/<spec-id>/context_snapshot.md
+        - docs/specs/<spec-id>/pull_request_body.md
+      forbids:
+        - production_code
+        - executable_tests
   test:
     context:
       project_files:
@@ -61,6 +81,18 @@ agents:
       - invent_requirements
       - ignore_acceptance_criteria
     requires_human_approval: true
+    artifacts:
+      reads:
+        - docs/specs/<spec-id>/contract.json
+      writes:
+        - tests/generated/<approved-spec>/*
+        - .workflow/artifacts/test-agent/<approved-spec>/contract.json
+        - .workflow/artifacts/test-agent/<approved-spec>/dynamic_context.json
+        - .workflow/artifacts/test-agent/<approved-spec>/context_snapshot.md
+        - .workflow/artifacts/test-agent/<approved-spec>/test_report.md
+      forbids:
+        - production_code
+        - dependency_manifests
   builder:
     context:
       project_files:
@@ -89,3 +121,99 @@ agents:
       - hidden_dependencies
       - deployments
     requires_verifier: true
+    artifacts:
+      reads:
+        - .workflow/artifacts/test-agent/<approved-spec>/contract.json
+        - tests/generated/<approved-spec>/*
+      writes:
+        - .workflow/artifacts/builder-agent/contract.json
+        - .workflow/artifacts/builder-agent/dynamic_context.json
+        - .workflow/artifacts/builder-agent/context_snapshot.md
+        - .workflow/artifacts/builder-agent/build_report.md
+      protected:
+        - tests/**
+        - .workflow/artifacts/test-agent/**
+  verifier:
+    context:
+      project_files:
+        - AGENTS.md
+        - README.md
+        - package.json
+      static_root: .workflow/agents/verifier/static
+      templates_root: .workflow/agents/verifier/templates
+      selected_model: .workflow/agents/verifier/selected_model.json
+      dynamic_snapshot_files:
+        - dynamic_context.json
+        - context_snapshot.md
+    responsibilities:
+      - validate_implementation_scope
+      - run_test_suite
+      - verify_test_integrity
+      - check_acceptance_criteria_coverage
+      - run_lint_static_security_checks
+      - produce_verification_report
+    forbidden:
+      - edit_code
+      - edit_tests
+      - auto_fix_failures
+      - pass_failed_checks
+    artifacts:
+      reads:
+        - .workflow/artifacts/test-agent/**/contract.json
+        - .workflow/artifacts/builder-agent/contract.json
+      writes:
+        - .workflow/artifacts/verifier-agent/contract.json
+        - .workflow/artifacts/verifier-agent/dynamic_context.json
+        - .workflow/artifacts/verifier-agent/context_snapshot.md
+        - .workflow/artifacts/verifier-agent/verification_report.md
+      protected:
+        - tests/**
+        - src/**
+        - package.json
+        - .workflow/artifacts/test-agent/**
+        - .workflow/artifacts/builder-agent/**
+  eval:
+    context:
+      project_files:
+        - AGENTS.md
+        - README.md
+        - package.json
+      static_root: .workflow/agents/eval/static
+      templates_root: .workflow/agents/eval/templates
+      selected_model: .workflow/agents/eval/selected_model.json
+      dynamic_snapshot_files:
+        - dynamic_context.json
+        - context_snapshot.md
+    responsibilities:
+      - score_specification_alignment
+      - score_maintainability
+      - score_architecture_fit
+      - evaluate_agent_trajectory
+      - detect_hidden_assumptions
+      - detect_overengineering
+      - recommend_human_review
+    forbidden:
+      - edit_code
+      - edit_tests
+      - pass_failed_verification
+    artifacts:
+      reads:
+        - docs/specs/**/contract.json
+        - .workflow/artifacts/specs/**/contract.json
+        - .workflow/artifacts/test-agent/**/contract.json
+        - .workflow/artifacts/builder-agent/contract.json
+        - .workflow/artifacts/verifier-agent/contract.json
+      writes:
+        - .workflow/artifacts/eval-agent/contract.json
+        - .workflow/artifacts/eval-agent/dynamic_context.json
+        - .workflow/artifacts/eval-agent/context_snapshot.md
+        - .workflow/artifacts/eval-agent/eval_report.md
+      protected:
+        - src/**
+        - tests/**
+        - package.json
+        - docs/specs/**
+        - .workflow/artifacts/specs/**
+        - .workflow/artifacts/test-agent/**
+        - .workflow/artifacts/builder-agent/**
+        - .workflow/artifacts/verifier-agent/**

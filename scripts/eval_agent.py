@@ -22,7 +22,7 @@ STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
 TEMPLATE_ROOT = AGENT_ROOT / "templates"
 SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
 PROJECT_CONTEXT_FILES = [Path("AGENTS.md"), Path("README.md"), Path("package.json")]
-SPEC_REPORT_ROOT = Path(".workflow/artifacts/spec-agent")
+SPEC_REPORT_ROOTS = [Path("docs/specs"), Path(".workflow/artifacts/specs"), Path(".workflow/artifacts/spec-agent")]
 TEST_REPORT_ROOT = Path(".workflow/artifacts/test-agent")
 BUILDER_REPORT_ROOT = Path(".workflow/artifacts/builder-agent")
 VERIFIER_REPORT_ROOT = Path(".workflow/artifacts/verifier-agent")
@@ -74,7 +74,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         "workspace": {
             "working_folder": working_folder.as_posix(),
             "report_root": report_root.as_posix(),
-            "spec_report_root": SPEC_REPORT_ROOT.as_posix(),
+            "spec_report_roots": [root.as_posix() for root in SPEC_REPORT_ROOTS],
             "test_report_root": TEST_REPORT_ROOT.as_posix(),
             "builder_report_root": BUILDER_REPORT_ROOT.as_posix(),
             "verifier_report_root": VERIFIER_REPORT_ROOT.as_posix(),
@@ -92,7 +92,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
             ],
             "todo_required": True,
         },
-        "spec_reports": read_json_files(working_folder / SPEC_REPORT_ROOT, "contract.json"),
+        "spec_reports": read_json_files_from_roots([working_folder / root for root in SPEC_REPORT_ROOTS], "contract.json"),
         "test_reports": read_json_files(working_folder / TEST_REPORT_ROOT, "contract.json"),
         "builder_reports": read_json_files(working_folder / BUILDER_REPORT_ROOT, "contract.json"),
         "verifier_reports": read_json_files(working_folder / VERIFIER_REPORT_ROOT, "contract.json"),
@@ -333,6 +333,14 @@ def read_json_files(root: Path, name: str) -> dict[str, Any]:
     results = {}
     for path in sorted(root.rglob(name)):
         results[path.relative_to(root).as_posix()] = spec_agent.read_json(path)
+    return results
+
+
+def read_json_files_from_roots(roots: list[Path], name: str) -> dict[str, Any]:
+    results = {}
+    for root in roots:
+        for path, payload in read_json_files(root, name).items():
+            results[f"{root.as_posix()}/{path}"] = payload
     return results
 
 

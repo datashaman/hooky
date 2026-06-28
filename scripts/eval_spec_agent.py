@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import artifact_policy
 import spec_agent
 
 
@@ -412,6 +413,7 @@ def run_attempt(
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
         cached.setdefault("tool_use", tool_use_summary(Path(cached["artifact_dir"]) if cached.get("artifact_dir") else None))
+        cached.setdefault("artifact_policy", {})
         return cached
 
     issue = fixture["issue"]
@@ -448,6 +450,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": tool_use_summary(runtime_root),
+            "artifact_policy": {},
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
@@ -471,6 +474,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": tool_use_summary(runtime_root),
+            "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(artifact_dir),
@@ -495,6 +499,7 @@ def run_attempt(
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
         "tool_use": tool_use_summary(runtime_root),
+        "artifact_policy": deterministic.get("artifact_policy", {}),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(artifact_dir),
@@ -568,12 +573,10 @@ def deterministic_eval(contract: dict[str, Any], artifact_dir: Path, expect: dic
         "dynamic_context.json",
         "context_snapshot.md",
     }
-    produced = {path.name for path in artifact_dir.glob("*") if path.is_file()}
-    unexpected = produced - allowed
-    if unexpected:
-        findings.append(f"unexpected artifact files: {sorted(unexpected)}")
+    artifact_report = artifact_policy.validate_files(artifact_dir, required_files=allowed, allowed_files=allowed)
+    findings.extend(artifact_report["findings"])
 
-    return {"status": "fail" if findings else "pass", "findings": findings}
+    return {"status": "fail" if findings else "pass", "findings": findings, "artifact_policy": artifact_report}
 
 
 def judge_eval(judge_model: str, fixture: dict[str, Any], contract: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -674,6 +677,11 @@ def print_attempt(attempt: dict[str, Any]) -> None:
         print("deterministic_findings:")
         for finding in deterministic["findings"]:
             print(f"- {finding}")
+    artifact_report = attempt.get("artifact_policy") or {}
+    if artifact_report.get("findings"):
+        print("artifact_policy_findings:")
+        for finding in artifact_report["findings"]:
+            print(f"- {finding}")
     judge = attempt.get("judge")
     if judge:
         print(f"judge_status: {judge.get('status')}")
@@ -742,6 +750,7 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
         spec_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
+        Path("scripts/artifact_policy.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/eval_spec_agent.py"),
     ]

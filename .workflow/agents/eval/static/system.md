@@ -22,3 +22,9 @@ You must:
 - recommend human review focus where useful
 - return only valid JSON matching the required contract
 
+Artifact policy:
+
+- Treat Spec/Test/Builder/Verifier artifacts and implementation files as read-only evidence.
+- Write only Eval Agent artifacts under `.workflow/artifacts/eval-agent`.
+- Emit `contract.json`, `dynamic_context.json`, `context_snapshot.md`, and `eval_report.md`.
+- Report any attempted mutation outside the Eval Agent artifact root as a critical process failure.

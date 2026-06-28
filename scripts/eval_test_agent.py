@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import eval_spec_agent
+import artifact_policy
 import spec_agent
 import test_agent
 
@@ -121,6 +122,7 @@ def run_attempt(
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
         cached.setdefault("tool_use", eval_spec_agent.tool_use_summary(Path(cached["artifact_dir"]) if cached.get("artifact_dir") else None))
+        cached.setdefault("artifact_policy", {})
         return cached
 
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id)
@@ -152,6 +154,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+            "artifact_policy": {},
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(attempt_dir),
@@ -175,6 +178,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+            "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(output_dir),
@@ -197,6 +201,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+            "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(output_dir),
@@ -216,6 +221,7 @@ def run_attempt(
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
         "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+        "artifact_policy": deterministic.get("artifact_policy", {}),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(output_dir),
@@ -284,10 +290,15 @@ def deterministic_eval(
     missing = approved - covered
     if missing:
         findings.append(f"missing covered criteria: {len(missing)}")
-    produced = [path for path in output_dir.glob("*") if path.is_file()]
-    if not produced:
+    required_artifacts = sorted(
+        {Path(item["path"]).name for item in contract.get("test_files", [])}
+        | {Path(item["path"]).name for item in contract.get("fixtures", [])}
+    )
+    artifact_report = artifact_policy.validate_files(output_dir, required_files=required_artifacts)
+    if not artifact_report.get("produced_files"):
         findings.append("no generated test files written")
-    return {"status": "fail" if findings else "pass", "findings": findings}
+    findings.extend(artifact_report["findings"])
+    return {"status": "fail" if findings else "pass", "findings": findings, "artifact_policy": artifact_report}
 
 
 def count_test_cases(contract: dict[str, Any]) -> int:
@@ -428,6 +439,7 @@ def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) 
         test_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
+        Path("scripts/artifact_policy.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/test_agent.py"),
         Path("scripts/eval_test_agent.py"),

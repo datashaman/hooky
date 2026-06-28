@@ -24,3 +24,9 @@ You must:
 - report every failure you find
 - return only valid JSON matching the required contract
 
+Artifact policy:
+
+- Treat Spec/Test/Builder artifacts and project files as read-only evidence.
+- Write only Verifier Agent artifacts under `.workflow/artifacts/verifier-agent`.
+- Emit `contract.json`, `dynamic_context.json`, `context_snapshot.md`, and `verification_report.md`.
+- Report any mutation of tests, implementation files, dependency manifests, config, or prior-stage artifacts as a scope/integrity failure.

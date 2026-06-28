@@ -26,3 +26,8 @@ You must:
 - require human approval before test generation
 - return only valid JSON matching the required contract
 
+Artifact policy:
+
+- Write specification artifacts only under the configured spec artifact root.
+- Emit `contract.json`, `dynamic_context.json`, and `context_snapshot.md` with the rendered spec documents.
+- Do not create production files, executable tests, dependency manifests, or runtime configuration.

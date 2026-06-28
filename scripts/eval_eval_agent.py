@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import eval_agent
+import artifact_policy
 import eval_spec_agent
 import spec_agent
 import test_agent
@@ -134,6 +135,7 @@ def run_attempt(
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
         cached.setdefault("tool_use", combined_tool_use(cached.get("cases", [])))
+        cached.setdefault("artifact_policy", combined_artifact_policy(cached.get("cases", [])))
         return cached
 
     previous_model = os.environ.get("OPENROUTER_MODEL")
@@ -165,6 +167,7 @@ def run_attempt(
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
         "tool_use": combined_tool_use(case_results),
+        "artifact_policy": combined_artifact_policy(case_results),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(run_root / eval_spec_agent.safe_name(variant_id)),
@@ -184,7 +187,7 @@ def run_case(model_info: dict[str, Any], case: dict[str, Any], run_root: Path) -
     case_name = case["manifest"]["name"]
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id) / case_name
     shutil.copytree(case["path"], attempt_dir, dirs_exist_ok=True)
-    before = workspace_hashes(attempt_dir)
+    before = artifact_policy.snapshot(attempt_dir, exclude_prefixes=[".workflow/artifacts/eval-agent"])
     with attempt_time_limit("evaluation"):
         report_dir, contract, usage = eval_agent.generate_eval_artifacts(
             working_folder=attempt_dir,
@@ -198,6 +201,7 @@ def run_case(model_info: dict[str, Any], case: dict[str, Any], run_root: Path) -
         "status": deterministic["status"],
         "artifact_dir": str(report_dir),
         "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+        "artifact_policy": deterministic["artifact_policy"],
         "findings": deterministic["findings"],
         "contract": contract,
     }, usage
@@ -225,10 +229,14 @@ def deterministic_case_eval(
     for topic in manifest.get("expected_topics", []):
         if not mentions_text(contract, topic):
             findings.append(f"missing expected topic: {topic}")
-    changed = changed_files(working_folder, before)
-    if changed:
-        findings.append(f"Eval Agent modified files outside its report area: {changed}")
-    return {"status": "fail" if findings else "pass", "findings": findings}
+    artifact_report = artifact_policy.protected_changes(
+        working_folder,
+        before,
+        exclude_prefixes=[".workflow/artifacts/eval-agent"],
+    )
+    if artifact_report["protected_changes"]:
+        findings.append(f"Eval Agent modified files outside its report area: {artifact_report['protected_changes']}")
+    return {"status": "fail" if findings else "pass", "findings": findings, "artifact_policy": artifact_report}
 
 
 def score_gate_findings(contract: dict[str, Any]) -> list[str]:
@@ -274,26 +282,6 @@ def verifier_status(working_folder: Path) -> str | None:
     return spec_agent.read_json(contracts[0]).get("status")
 
 
-def workspace_hashes(root: Path) -> dict[str, str]:
-    hashes = {}
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and not is_eval_artifact(path, root):
-            hashes[path.relative_to(root).as_posix()] = hash_file(path)
-    return hashes
-
-
-def changed_files(root: Path, before: dict[str, str]) -> list[str]:
-    after = workspace_hashes(root)
-    changed = [path for path, digest in before.items() if after.get(path) != digest]
-    added = [path for path in after if path not in before]
-    return sorted(changed + added)
-
-
-def is_eval_artifact(path: Path, root: Path) -> bool:
-    relative = path.relative_to(root)
-    return len(relative.parts) >= 3 and relative.parts[:3] == (".workflow", "artifacts", "eval-agent")
-
-
 def mentions_text(value: Any, needle: str) -> bool:
     return needle.lower() in json.dumps(value, sort_keys=True).lower()
 
@@ -316,6 +304,10 @@ def combined_tool_use(case_results: list[dict[str, Any]]) -> dict[str, Any]:
         for name, count in (tool_use.get("tools") or {}).items():
             summary["tools"][name] = summary["tools"].get(name, 0) + int(count)
     return summary
+
+
+def combined_artifact_policy(case_results: list[dict[str, Any]]) -> dict[str, Any]:
+    return artifact_policy.merge_reports(*(result.get("artifact_policy") or {} for result in case_results))
 
 
 def fixture_for_ladder(cases: list[dict[str, Any]]) -> dict[str, Any]:
@@ -355,6 +347,7 @@ def eval_cache_key(cases_root: Path, judge_model: str) -> str:
         eval_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
+        Path("scripts/artifact_policy.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/eval_agent.py"),
         Path("scripts/eval_eval_agent.py"),
@@ -390,14 +383,6 @@ def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model
     }
     eval_agent.SELECTED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     eval_agent.SELECTED_MODEL_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
 class attempt_time_limit:
     def __init__(self, label: str):
         self.label = label

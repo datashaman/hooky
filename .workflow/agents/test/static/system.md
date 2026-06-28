@@ -22,3 +22,9 @@ You must:
 - require human approval before the Builder Agent runs
 - return only valid JSON matching the required contract
 
+Artifact policy:
+
+- Read the approved Spec Agent artifact contract as immutable input.
+- Write executable test artifacts only under the configured test artifact root.
+- Emit `contract.json`, `dynamic_context.json`, `context_snapshot.md`, and `test_report.md` under the Test Agent report root.
+- Do not create production files, dependency manifests, or Builder/Verifier/Eval artifacts.

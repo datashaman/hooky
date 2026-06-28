@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import artifact_policy
 import builder_agent
 import eval_spec_agent
 import eval_test_agent
@@ -127,6 +128,7 @@ def run_attempt(
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
         cached.setdefault("tool_use", eval_spec_agent.tool_use_summary(Path(cached["artifact_dir"]) if cached.get("artifact_dir") else None))
+        cached.setdefault("artifact_policy", {})
         return cached
 
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id)
@@ -164,6 +166,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+            "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(report_dir),
@@ -186,6 +189,7 @@ def run_attempt(
             "reasoning_request": model_info.get("reasoning_request"),
             "context_length": model_info.get("context_length"),
             "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+            "artifact_policy": deterministic.get("artifact_policy", {}),
             "estimated_cost": model_info.get("estimated_cost"),
             "status": "fail",
             "artifact_dir": str(report_dir),
@@ -205,6 +209,7 @@ def run_attempt(
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
         "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+        "artifact_policy": deterministic.get("artifact_policy", {}),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(report_dir),
@@ -225,6 +230,7 @@ def failed_attempt(model: str, model_info: dict[str, Any], attempt_dir: Path, fi
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
         "tool_use": eval_spec_agent.tool_use_summary(attempt_dir),
+        "artifact_policy": {},
         "estimated_cost": model_info.get("estimated_cost"),
         "status": "fail",
         "artifact_dir": str(attempt_dir),
@@ -259,18 +265,7 @@ def prepare_attempt_workspace(workspace_fixture: Path, attempt_dir: Path) -> Non
 
 
 def protected_file_hashes(working_folder: Path) -> dict[str, str]:
-    protected_roots = [
-        working_folder / "tests",
-        working_folder / ".workflow/artifacts/test-agent",
-    ]
-    hashes = {}
-    for root in protected_roots:
-        if not root.exists():
-            continue
-        for path in sorted(root.rglob("*")):
-            if path.is_file():
-                hashes[path.relative_to(working_folder).as_posix()] = hash_file(path)
-    return hashes
+    return artifact_policy.snapshot(working_folder, include_prefixes=builder_protected_prefixes())
 
 
 def deterministic_eval(
@@ -284,9 +279,13 @@ def deterministic_eval(
         findings.append("requires_verifier must be true")
     if contract.get("tests_passing") is not True:
         findings.append("builder did not claim tests_passing true")
-    changed_protected = changed_protected_files(working_folder, protected_hashes)
-    if changed_protected:
-        findings.append(f"approved tests or prior-stage artifacts changed: {changed_protected}")
+    artifact_report = artifact_policy.protected_changes(
+        working_folder,
+        protected_hashes,
+        include_prefixes=builder_protected_prefixes(),
+    )
+    if artifact_report["protected_changes"]:
+        findings.append(f"approved tests or prior-stage artifacts changed: {artifact_report['protected_changes']}")
     implementation_files = [item["path"] for item in contract.get("file_writes", [])]
     if not implementation_files:
         findings.append("no production implementation files written")
@@ -303,17 +302,16 @@ def deterministic_eval(
             "npm install": redact_command_result(install),
             "npm test": redact_command_result(test_result),
         },
+        "artifact_policy": artifact_report,
         "implementation_files": implementation_files,
     }
 
 
-def changed_protected_files(working_folder: Path, expected: dict[str, str]) -> list[str]:
-    changed = []
-    for relative, digest in expected.items():
-        path = working_folder / relative
-        if not path.exists() or hash_file(path) != digest:
-            changed.append(relative)
-    return changed
+def builder_protected_prefixes() -> list[str]:
+    return [
+        "tests",
+        ".workflow/artifacts/test-agent",
+    ]
 
 
 def run_command(command: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
@@ -475,6 +473,7 @@ def eval_cache_key(workspace_fixture: Path, judge_model: str) -> str:
         builder_agent.SELECTED_MODEL_PATH,
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
+        Path("scripts/artifact_policy.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/builder_agent.py"),
         Path("scripts/eval_builder_agent.py"),
@@ -508,13 +507,5 @@ def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model
     }
     builder_agent.SELECTED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     builder_agent.SELECTED_MODEL_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

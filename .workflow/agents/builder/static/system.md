@@ -23,3 +23,9 @@ You must:
 - stop within the configured iteration budget
 - return only valid JSON matching the required contract
 
+Artifact policy:
+
+- Treat approved Spec/Test artifacts and generated tests as immutable input.
+- Write production implementation files only when needed for the approved tests.
+- Emit `contract.json`, `dynamic_context.json`, `context_snapshot.md`, and `build_report.md` under the Builder Agent report root.
+- Do not mutate tests, prior-stage artifacts, dependency manifests, runtime configuration, Verifier artifacts, or Eval artifacts.
