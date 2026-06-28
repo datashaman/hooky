@@ -7,7 +7,7 @@ module.exports = defineConfig({
     timeout: 2000,
   },
   webServer: {
-    command: 'python3 -m http.server 4173',
+    command: 'npm run dev',
     port: 4173,
     reuseExistingServer: false,
   },

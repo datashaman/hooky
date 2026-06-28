@@ -47,9 +47,13 @@ This fixture represents a React TodoMVC project used to evaluate SDLC agents.
 - `python3` is available for simple static hosting through `python3 -m http.server`.
 - `node`, `npm`, and `npx` are available for project-defined JavaScript commands.
 - `git` is available for repository inspection when needed.
-- The project declares `@playwright/test` in `package.json` and `npm test` maps to `playwright test`.
-- The Playwright config starts a local static server on port 4173 and uses `http://127.0.0.1:4173` as `baseURL`.
-- Dependency installation is outside the Test Agent role. If dependencies are missing in a particular working folder, report discovery as skipped instead of installing them.
+- The project declares React, ReactDOM, Vite, the Vite React plugin, and Playwright in `package.json`.
+- `npm run dev` starts the Vite development server on port 4173.
+- `npm test` maps to `playwright test`.
+- The Playwright config starts the Vite dev server and uses `http://127.0.0.1:4173` as `baseURL`.
+- The Test Agent may run setup commands for dependencies already declared in `package.json`, such as `npm install --package-lock=false` or `npm ci` when a lockfile exists.
+- The Test Agent may run generated tests to prove the suite is red before implementation. It must report failing tests and must not fix production code.
+- The Test Agent must not add new dependencies or edit dependency manifests.
 
 ## Project Boundaries
 

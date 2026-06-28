@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
@@ -78,26 +79,15 @@ TOOLCHAIN_FILE_NAMES = {
     "vite.config.ts",
     "yarn.lock",
 }
-INSTALL_COMMAND_BLOCKLIST = [
-    "bundle install",
-    "cargo install",
-    "composer install",
+DEPENDENCY_ADD_COMMAND_BLOCKLIST = [
+    "bun add",
     "composer require",
     "go get ",
-    "mix deps.get",
     "npm add",
-    "npm i ",
-    "npm install",
-    "pip install",
-    "playwright install",
     "pnpm add",
-    "pnpm install",
     "poetry add",
-    "poetry install",
     "uv add",
-    "uv pip install",
     "yarn add",
-    "yarn install",
 ]
 
 
@@ -182,13 +172,15 @@ def generate_contract_with_openrouter(
         working_folder=dynamic_context["workspace"]["working_folder"],
         final_report_schema=test_agent_contract_schema(),
         max_cost_usd=float(os.environ.get("TEST_AGENT_MAX_COST_USD", "0.25")),
-        max_seconds=int(os.environ.get("TEST_AGENT_MAX_SECONDS", "300")),
+        max_seconds=int(os.environ.get("TEST_AGENT_MAX_SECONDS", "600")),
+        bash_timeout_seconds=int(os.environ.get("TEST_AGENT_BASH_TIMEOUT_SECONDS", "120")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         live_log_root=report_root,
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
         write_blocked_names=sorted(TOOLCHAIN_FILE_NAMES),
-        bash_blocked_substrings=INSTALL_COMMAND_BLOCKLIST,
+        bash_blocked_substrings=DEPENDENCY_ADD_COMMAND_BLOCKLIST,
+        bash_command_validator=test_agent_bash_policy_violation,
     )
     runtime.final_validator = lambda contract: validate_contract_with_tool_events(
         contract,
@@ -404,9 +396,10 @@ Dynamic Context:
 You have filesystem and shell tools scoped to the working folder. Use the todo tools to plan and track work.
 Inspect the project context and existing files as needed. Write executable test artifacts at project-native relative paths that match the app's conventions.
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
-You may run commands to check syntax or test discovery when useful. Do not write production implementation.
-If you run any syntax, discovery, or test command, include it in test_execution_checks with its actual status. A command that cannot run because project dependencies are missing must be `skipped` with a missing-dependency reason. Do not install dependencies.
-Do not write package manifests, lockfiles, framework config, workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
+You may run commands to set up declared project test dependencies, check syntax, discover tests, and run tests. Do not write production implementation.
+If you run any setup, syntax, discovery, or test command, include it in test_execution_checks with its actual status. Test failures are expected before Builder runs; report them as failed, not fixed.
+You may install or sync dependencies already declared by project manifests or lockfiles. Do not add new dependencies or edit dependency manifests. Prefer setup commands that avoid creating or changing lockfiles when the package manager supports that.
+Do not write package manifests, framework config, workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
 In acceptance_criteria_covered, acceptance_criteria_uncovered, and untestable_requirements, include only exact full strings copied from approved_spec.acceptance_criteria. Each list item must contain exactly one approved criterion.
 Do not claim a criterion is covered unless at least one generated test directly asserts that behavior without contradicting another approved criterion.
 Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created, including each file's content.
@@ -471,12 +464,12 @@ def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool
     for event in bash_events:
         command = str(event.get("arguments", {}).get("command") or "")
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
-        if is_blocked_install_event(command, result):
-            raise ValueError(f"blocked install command attempted by Test Agent: {command}")
-        if is_test_execution_command(command):
+        if is_blocked_dependency_mutation_event(result):
+            raise ValueError(f"blocked dependency mutation command attempted by Test Agent: {command}")
+        if is_reportable_test_command(command):
             matching_checks = [check for check in checks if commands_match(str(check.get("command") or ""), command)]
             if not matching_checks:
-                raise ValueError(f"test execution command missing from test_execution_checks: {command}")
+                raise ValueError(f"setup or test command missing from test_execution_checks: {command}")
             validate_matching_execution_checks(command, result, matching_checks)
 
     for check in checks:
@@ -495,6 +488,14 @@ def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool
 
 
 def validate_matching_execution_checks(command: str, result: dict[str, Any], checks: list[dict[str, Any]]) -> None:
+    if command_masks_failure(command):
+        if command_failed_due_missing_dependency(result):
+            if not any(check.get("status") == "skipped" and has_missing_dependency_reason(str(check.get("reason") or "")) for check in checks):
+                raise ValueError(f"missing-dependency test execution command must be reported as skipped with reason: {command}")
+            return
+        if not any(check.get("status") == "failed" for check in checks):
+            raise ValueError(f"masked setup or test command must be reported as failed unless a missing dependency makes it skipped: {command}")
+        return
     if bash_result_passed(result):
         if not any(check.get("status") == "passed" for check in checks):
             raise ValueError(f"passing test execution command must be reported as passed: {command}")
@@ -507,20 +508,37 @@ def validate_matching_execution_checks(command: str, result: dict[str, Any], che
         raise ValueError(f"failed test execution command must be reported as failed: {command}")
 
 
-def is_blocked_install_event(command: str, result: dict[str, Any]) -> bool:
+def is_blocked_dependency_mutation_event(result: dict[str, Any]) -> bool:
     error = str(result.get("error") or "")
-    if "bash command blocked by agent policy" not in error:
-        return False
-    lowered = command.lower()
-    return any(blocked.lower() in lowered for blocked in INSTALL_COMMAND_BLOCKLIST)
+    return "bash command blocked by agent policy" in error
 
 
-def is_test_execution_command(command: str) -> bool:
+def is_reportable_test_command(command: str) -> bool:
     lowered = command.lower()
     markers = (
-        "playwright test",
+        "bundle install",
+        "bun install",
+        "cargo fetch",
+        "composer install",
+        "go mod download",
+        "mix deps.get",
+        "npm ci",
+        "npm install",
+        "node --check",
         "npm test",
+        "npm run test",
+        "npx playwright install",
+        "playwright test",
+        "playwright install",
+        "pnpm install",
         "pnpm test",
+        "poetry install",
+        "pip install -r",
+        "pip install --requirement",
+        "uv sync",
+        "uv pip install -r",
+        "uv pip install --requirement",
+        "yarn install",
         "yarn test",
         "bun test",
         "vitest",
@@ -533,6 +551,77 @@ def is_test_execution_command(command: str) -> bool:
         "mix test",
     )
     return any(marker in lowered for marker in markers)
+
+
+def command_masks_failure(command: str) -> bool:
+    return "|| true" in command.lower()
+
+
+def test_agent_bash_policy_violation(command: str) -> str | None:
+    for segment in split_shell_segments(command):
+        tokens = shell_tokens(segment)
+        if not tokens:
+            continue
+        violation = dependency_mutation_violation(tokens)
+        if violation:
+            return violation
+    return None
+
+
+def split_shell_segments(command: str) -> list[str]:
+    return [part.strip() for part in re.split(r"\s*(?:&&|\|\||;)\s*", command) if part.strip()]
+
+
+def shell_tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def dependency_mutation_violation(tokens: list[str]) -> str | None:
+    executable = Path(tokens[0]).name
+    if executable == "npm" and len(tokens) >= 2:
+        subcommand = tokens[1]
+        if subcommand == "add":
+            return "npm add"
+        if subcommand in {"install", "i"} and npm_install_adds_packages(tokens[2:]):
+            return "npm install with explicit packages"
+    if executable == "pnpm" and len(tokens) >= 2 and tokens[1] == "add":
+        return "pnpm add"
+    if executable == "yarn" and len(tokens) >= 2 and tokens[1] == "add":
+        return "yarn add"
+    if executable == "bun" and len(tokens) >= 2 and tokens[1] == "add":
+        return "bun add"
+    if executable == "composer" and len(tokens) >= 2 and tokens[1] == "require":
+        return "composer require"
+    if executable == "poetry" and len(tokens) >= 2 and tokens[1] == "add":
+        return "poetry add"
+    if executable == "uv" and len(tokens) >= 2 and tokens[1] == "add":
+        return "uv add"
+    if executable == "go" and len(tokens) >= 2 and tokens[1] == "get":
+        return "go get"
+    if executable == "pip" and len(tokens) >= 2 and tokens[1] == "install" and pip_install_adds_packages(tokens[2:]):
+        return "pip install with explicit packages"
+    if executable == "uv" and len(tokens) >= 4 and tokens[1:3] == ["pip", "install"] and pip_install_adds_packages(tokens[3:]):
+        return "uv pip install with explicit packages"
+    return None
+
+
+def npm_install_adds_packages(args: list[str]) -> bool:
+    return any(is_package_argument(arg) for arg in args)
+
+
+def pip_install_adds_packages(args: list[str]) -> bool:
+    if "-r" in args or "--requirement" in args:
+        return False
+    return any(is_package_argument(arg) for arg in args)
+
+
+def is_package_argument(arg: str) -> bool:
+    if not arg or arg.startswith("-"):
+        return False
+    return not arg.endswith((".json", ".lock", ".txt", ".in", ".toml"))
 
 
 def commands_match(reported: str, actual: str) -> bool:

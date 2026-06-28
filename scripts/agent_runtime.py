@@ -60,6 +60,7 @@ class ToolRuntime:
     write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
     write_blocked_names: list[str] = field(default_factory=list)
     bash_blocked_substrings: list[str] = field(default_factory=list)
+    bash_command_validator: Callable[[str], str | None] | None = None
     todo_items: list[dict[str, Any]] = field(default_factory=list)
     tool_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -202,6 +203,10 @@ class ToolRuntime:
         for blocked in self.bash_blocked_substrings:
             if blocked.lower() in lowered:
                 return {"ok": False, "error": f"bash command blocked by agent policy: {blocked}"}
+        if self.bash_command_validator:
+            violation = self.bash_command_validator(command)
+            if violation:
+                return {"ok": False, "error": f"bash command blocked by agent policy: {violation}"}
         completed = subprocess.run(
             command,
             cwd=self.working_folder,

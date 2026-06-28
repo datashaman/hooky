@@ -66,7 +66,9 @@
             "Use Playwright end-to-end tests for TodoMVC UI workflows.",
             "Navigate through the project-configured baseURL or `/` instead of hardcoded filesystem paths.",
             "Interact only with public TodoMVC controls and standard TodoMVC selectors.",
-            "Cover localStorage persistence and route filtering."
+            "Cover localStorage persistence and route filtering.",
+            "Install or sync already-declared project dependencies when needed for Playwright discovery or execution.",
+            "Run generated Playwright tests to prove the suite is red before Builder implementation, and report failures without fixing production code."
         ]
     },
     "expect": {
