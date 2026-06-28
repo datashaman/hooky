@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import artifact_policy
+import eval_runtime
 import spec_agent
 
 
@@ -96,7 +97,7 @@ def print_ladder_summary(ladder: list[dict[str, Any]]) -> None:
 
 
 def model_display_name(model_info: dict[str, Any]) -> str:
-    return str(model_info.get("variant_id") or model_info.get("id") or model_info["model"])
+    return eval_runtime.model_display_name(model_info)
 
 
 def write_report(
@@ -108,16 +109,16 @@ def write_report(
     winner: dict[str, Any] | None,
     final: bool,
 ) -> None:
-    report = {
-        "status": "pass" if winner else "fail" if final else "running",
-        "fixture": fixture["name"],
-        "judge_model": judge_model,
-        "winner_model": model_display_name(winner) if winner else None,
-        "model_ladder": ladder_report,
-        "total_cost": sum_costs(attempts),
-        "attempts": attempts,
-    }
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    eval_runtime.write_report(
+        report_path,
+        status=eval_runtime.report_status(winner, final),
+        fixture=fixture["name"],
+        judge_model=judge_model,
+        ladder_report=ladder_report,
+        attempts=attempts,
+        winner=winner,
+        total_cost=sum_costs(attempts),
+    )
 
 
 def resolve_model_ladder(
@@ -767,21 +768,7 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
 
 
 def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model: str) -> None:
-    payload = {
-        "model": winner["model"],
-        "variant_id": winner.get("variant_id", winner["model"]),
-        "reasoning_request": winner.get("reasoning_request"),
-        "context_length": winner.get("context_length"),
-        "source": "eval",
-        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "report": report_path.as_posix(),
-        "judge_model": judge_model,
-        "estimated_cost": winner.get("estimated_cost"),
-        "actual_cost": winner.get("original_cost", winner.get("cost")),
-        "cached": winner.get("cached", False),
-    }
-    spec_agent.SELECTED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    spec_agent.SELECTED_MODEL_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    eval_runtime.write_selected_model(spec_agent.SELECTED_MODEL_PATH, winner, report_path, judge_model)
 
 
 def restore_model(previous_model: str | None) -> None:

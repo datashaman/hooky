@@ -16,6 +16,7 @@ from typing import Any
 
 import eval_spec_agent
 import artifact_policy
+import eval_runtime
 import spec_agent
 import test_agent
 
@@ -63,7 +64,7 @@ def main() -> int:
     winner = None
     report_path = run_root / "report.json"
     for model_info in runnable_ladder:
-        print(f"\nstarting_model: {eval_spec_agent.model_display_name(model_info)}", flush=True)
+        print(f"\nstarting_model: {eval_runtime.model_display_name(model_info)}", flush=True)
         attempt = run_attempt(fixture, model_info, judge_model, run_root, cache_root, args.project_fixture, args.no_cache)
         attempts.append(attempt)
         eval_spec_agent.print_attempt(attempt)
@@ -79,7 +80,7 @@ def main() -> int:
     print(f"\nreport: {report_path}")
     eval_spec_agent.cleanup_runs(args.run_root, args.keep_runs)
     if winner:
-        print(f"passed_with: {eval_spec_agent.model_display_name(winner)}")
+        print(f"passed_with: {eval_runtime.model_display_name(winner)}")
         return 0
     return 1
 
@@ -420,16 +421,16 @@ def write_report(
     winner: dict[str, Any] | None,
     final: bool,
 ) -> None:
-    report = {
-        "status": "pass" if winner else "fail" if final else "running",
-        "fixture": fixture["name"],
-        "judge_model": judge_model,
-        "winner_model": eval_spec_agent.model_display_name(winner) if winner else None,
-        "model_ladder": ladder_report,
-        "total_cost": eval_spec_agent.sum_costs(attempts),
-        "attempts": attempts,
-    }
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    eval_runtime.write_report(
+        report_path,
+        status=eval_runtime.report_status(winner, final),
+        fixture=fixture["name"],
+        judge_model=judge_model,
+        ladder_report=ladder_report,
+        attempts=attempts,
+        winner=winner,
+        total_cost=eval_spec_agent.sum_costs(attempts),
+    )
 
 
 def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) -> str:
@@ -460,19 +461,7 @@ def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) 
 
 
 def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model: str) -> None:
-    payload = {
-        "model": winner["model"],
-        "source": "eval",
-        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "report": report_path.as_posix(),
-        "judge_model": judge_model,
-        "estimated_cost": winner.get("estimated_cost"),
-        "actual_cost": winner.get("original_cost", winner.get("cost")),
-        "cached": winner.get("cached", False),
-        "context_length": winner.get("context_length"),
-    }
-    test_agent.SELECTED_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    test_agent.SELECTED_MODEL_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    eval_runtime.write_selected_model(test_agent.SELECTED_MODEL_PATH, winner, report_path, judge_model)
 
 
 if __name__ == "__main__":
