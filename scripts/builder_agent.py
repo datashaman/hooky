@@ -159,6 +159,7 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("BUILDER_AGENT_MAX_SECONDS", "420")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_contract,
+        live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
     )
     try:
         result = run_tool_agent(

@@ -53,6 +53,7 @@ class ToolRuntime:
     compaction_threshold: float = 0.65
     compaction_keep_recent_messages: int = 16
     compaction_prompt_path: Path = Path(".workflow/agents/common/static/compaction.md")
+    live_log_root: Path | None = None
     todo_items: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -275,6 +276,36 @@ def run_tool_agent(
             utc_timestamp(),
         )
 
+    def flush_live_log(status: str = "running", error: str | None = None) -> None:
+        if not runtime.live_log_root:
+            return
+        result = current_result()
+        write_runtime_log(
+            runtime.live_log_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata={
+                "schema_version": 1,
+                "status": status,
+                "model": model,
+                "started_at": result.started_at,
+                "ended_at": result.ended_at,
+                "written_at": utc_timestamp(),
+                "error": error,
+                "final_report_present": result.final_report is not None,
+                "usage": result.usage,
+                "events": {
+                    "tool_calls": len(result.tool_events),
+                    "compactions": len(result.compaction_events),
+                    "pre_compaction_archives": len(result.pre_compaction_archives),
+                },
+            },
+        )
+
+    append_live_event(runtime.live_log_root, f"{utc_timestamp()} run start model={model}")
+    flush_live_log()
     try:
         with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
             while runtime.final_report is None:
@@ -287,11 +318,13 @@ def run_tool_agent(
                 if pre_compaction_archive:
                     pre_compaction_archives.append(pre_compaction_archive)
                     transcript.append({"role": "pre_compaction", **pre_compaction_archive})
+                    flush_live_log()
                 if compaction_event:
                     usage = compaction_event.get("usage") or {}
                     accumulate_usage(total_usage, usage)
                     compaction_events.append(compaction_event)
                     transcript.append({"role": "compaction", **compaction_event})
+                    flush_live_log()
                     if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
                         raise AgentRunError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget after compaction", current_result())
 
@@ -321,6 +354,8 @@ def run_tool_agent(
                         "duration_ms": assistant_duration_ms,
                     }
                 )
+                append_live_event(runtime.live_log_root, format_runtime_event_line(transcript[-1]))
+                flush_live_log()
 
                 tool_calls = getattr(message, "tool_calls", None) or []
                 if not tool_calls:
@@ -349,6 +384,8 @@ def run_tool_agent(
                     }
                     tool_events.append(event)
                     transcript.append({"role": "tool", **event})
+                    append_live_event(runtime.live_log_root, format_runtime_event_line(transcript[-1]))
+                    flush_live_log()
                     messages.append(
                         {
                             "role": "tool",
@@ -357,11 +394,17 @@ def run_tool_agent(
                             "content": json.dumps(result, sort_keys=True),
                         }
                     )
-    except AgentRunError:
+    except AgentRunError as exc:
+        append_live_event(runtime.live_log_root, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
+        flush_live_log(status="error", error=str(exc))
         raise
     except Exception as exc:
+        append_live_event(runtime.live_log_root, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
+        flush_live_log(status="error", error=str(exc))
         raise AgentRunError(str(exc), current_result()) from exc
 
+    append_live_event(runtime.live_log_root, f"{utc_timestamp()} run success tool_calls={len(tool_events)} cost=${float(total_usage.get('cost') or 0):.8f}")
+    flush_live_log(status="success")
     return current_result()
 
 
@@ -503,12 +546,110 @@ def write_runtime_log(
     (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "tool_calls.md").write_text(render_tool_calls_markdown(tool_events), encoding="utf-8")
     (report_root / "runtime_timeline.md").write_text(render_runtime_timeline_markdown(transcript), encoding="utf-8")
+    (report_root / "runtime_events.snapshot.log").write_text(render_runtime_events_log(transcript), encoding="utf-8")
     (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "runtime_metadata.json").write_text(
         json.dumps(metadata or {"schema_version": 1, "written_at": utc_timestamp()}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def append_live_event(report_root: Path | None, line: str) -> None:
+    if report_root is None:
+        return
+    report_root.mkdir(parents=True, exist_ok=True)
+    with (report_root / "runtime_events.log").open("a", encoding="utf-8") as handle:
+        handle.write(line.rstrip() + "\n")
+
+
+def render_runtime_events_log(transcript: list[dict[str, Any]]) -> str:
+    lines = [format_runtime_event_line(item) for item in transcript if item.get("role") in {"assistant", "tool", "compaction", "pre_compaction"}]
+    return "\n".join(line for line in lines if line) + ("\n" if lines else "")
+
+
+def format_runtime_event_line(item: dict[str, Any]) -> str:
+    role = str(item.get("role") or "event")
+    timestamp = str(item.get("ended_at") or item.get("started_at") or utc_timestamp())
+    duration = format_duration(item.get("duration_ms"))
+    if role == "assistant":
+        message = item.get("message") if isinstance(item.get("message"), dict) else {}
+        tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+        usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+        names = [
+            str(call.get("function", {}).get("name"))
+            for call in tool_calls
+            if isinstance(call, dict) and isinstance(call.get("function"), dict) and call.get("function", {}).get("name")
+        ]
+        return (
+            f"{timestamp} assistant duration={duration} cost=${float(usage.get('cost') or 0):.8f} "
+            f"tokens={int(usage.get('total_tokens') or 0)} tool_calls={len(tool_calls)}"
+            + (f" tools={','.join(names)}" if names else "")
+        )
+    if role == "tool":
+        name = str(item.get("name") or "unknown")
+        result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+        status = "ok" if result.get("ok") is True else "error" if result.get("ok") is False else "unknown"
+        return f"{timestamp} tool name={name} status={status} duration={duration} {tail_detail(name, arguments, result)}".rstrip()
+    return f"{timestamp} {role}"
+
+
+def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> str:
+    if result.get("error"):
+        return "error=" + quote_value(str(result["error"]), 220)
+    if name in {"read_file", "write_file"}:
+        path = result.get("path") or arguments.get("path")
+        size_key = "bytes_written" if name == "write_file" else "bytes_read"
+        size_value = result.get("bytes") if name == "write_file" else len(str(result.get("content") or "").encode("utf-8"))
+        return f"path={quote_value(str(path), 180)} {size_key}={size_value}"
+    if name == "bash":
+        stdout = single_line(str(result.get("stdout") or ""), 180)
+        stderr = single_line(str(result.get("stderr") or ""), 180)
+        detail = f"command={quote_value(str(arguments.get('command') or ''), 180)} returncode={result.get('returncode')}"
+        if stdout:
+            detail += f" stdout={quote_value(stdout, 180)}"
+        if stderr:
+            detail += f" stderr={quote_value(stderr, 180)}"
+        return detail
+    if name in {"list_files", "find_files"}:
+        entries = result.get("entries") if name == "list_files" else result.get("matches")
+        count = len(entries) if isinstance(entries, list) else 0
+        path = arguments.get("path")
+        pattern = arguments.get("pattern")
+        parts = [f"count={count}"]
+        if path:
+            parts.append(f"path={quote_value(str(path), 120)}")
+        if pattern:
+            parts.append(f"pattern={quote_value(str(pattern), 120)}")
+        return " ".join(parts)
+    if name == "grep_files":
+        matches = result.get("matches") if isinstance(result.get("matches"), list) else []
+        return f"matches={len(matches)} pattern={quote_value(str(arguments.get('pattern') or ''), 120)}"
+    if name in {"todo_read", "todo_write"}:
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        return f"items={len(items)}"
+    if name == "web_search":
+        results = result.get("results") if isinstance(result.get("results"), list) else []
+        return f"results={len(results)} query={quote_value(str(arguments.get('query') or ''), 160)}"
+    if name == "fetch_url":
+        return f"url={quote_value(str(result.get('url') or arguments.get('url') or ''), 180)} status={result.get('status')}"
+    if name == "final_report":
+        return "submitted=true"
+    return ""
+
+
+def format_duration(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    duration_ms = float(value)
+    if duration_ms >= 1000:
+        return f"{duration_ms / 1000:.2f}s"
+    return f"{duration_ms:.2f}ms"
+
+
+def quote_value(value: str, max_chars: int) -> str:
+    return '"' + single_line(value, max_chars).replace('"', '\\"') + '"'
 
 
 def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:

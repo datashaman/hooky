@@ -103,6 +103,7 @@ def generate_contract_with_openrouter(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     model = selected_model()
     agent_context = load_agent_context(project_root)
+    report_root = resolved_report_root(dynamic_context)
     runtime = ToolRuntime(
         working_folder=dynamic_context["workspace"]["working_folder"],
         final_report_schema=test_agent_contract_schema(),
@@ -110,8 +111,8 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("TEST_AGENT_MAX_SECONDS", "300")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract(contract, dynamic_context["approved_spec"]),
+        live_log_root=report_root,
     )
-    report_root = resolved_report_root(dynamic_context)
     try:
         result = run_tool_agent(
             model=model,

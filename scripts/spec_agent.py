@@ -164,6 +164,7 @@ def generate_contract_with_openrouter(
         final_validator=validate_contract,
     )
     runtime_root = Path(dynamic_context["workspace"]["runtime_root"])
+    runtime.live_log_root = runtime_root
     try:
         result = run_tool_agent(
             model=model,

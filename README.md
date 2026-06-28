@@ -93,6 +93,7 @@ uv run hooky run verifier
 uv run hooky run eval
 uv run hooky status
 uv run hooky trace test
+uv run hooky trace test --follow
 uv run hooky report
 ```
 
@@ -104,7 +105,7 @@ uv run hooky -C /tmp/todomvc task create --title "Implement TodoMVC" --body-file
 uv run hooky -C /tmp/todomvc run pipeline --auto-approve
 ```
 
-The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths. `hooky status` shows per-stage state, errors, report paths, and approved test file paths. `hooky trace <stage>` shows the readable tool-call timeline for a stage.
+The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths. `hooky status` shows per-stage state, errors, report paths, and approved test file paths. `hooky trace <stage>` shows the readable runtime timeline for a stage and can be run while an agent is still in progress. `hooky trace <stage> --follow` tails the append-only `runtime_events.log`; `--tail-path` prints that log path for external `tail -f`.
 
 The Test Agent writes executable tests and fixtures at project-native paths chosen from the workspace context. Hooky reports, contracts, context snapshots, and runtime transcripts stay under `.workflow`.
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -480,6 +481,8 @@ def trace(
     stage: Annotated[str, typer.Argument(help="Stage to inspect: spec, test, builder, verifier, or eval.")],
     task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
     raw_path: Annotated[bool, typer.Option("--path", help="Only print the tool-call summary file path.")] = False,
+    tail_path: Annotated[bool, typer.Option("--tail-path", help="Only print the append-only runtime log path.")] = False,
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Follow the append-only runtime log.")] = False,
     refresh: Annotated[bool, typer.Option("--refresh", help="Regenerate the summary from tool_events.json.")] = False,
 ) -> None:
     """Show a readable tool-call timeline for an agent stage."""
@@ -488,8 +491,17 @@ def trace(
     state = load_task_state(workspace, task)
     log_dir = runtime_log_dir(workspace, stage, state)
     summary_path = log_dir / "runtime_timeline.md"
+    tail_file = log_dir / "runtime_events.log"
     if raw_path:
         typer.echo(summary_path)
+        return
+    if tail_path:
+        typer.echo(tail_file)
+        return
+    if follow:
+        tail_file.parent.mkdir(parents=True, exist_ok=True)
+        tail_file.touch(exist_ok=True)
+        subprocess.run(["tail", "-f", str(tail_file)], check=False)
         return
     metadata_path = log_dir / "runtime_metadata.json"
     if metadata_path.exists():
