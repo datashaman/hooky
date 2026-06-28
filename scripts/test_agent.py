@@ -53,32 +53,6 @@ PROJECT_CONTEXT_FILES = [
     Path("playwright.config.cjs"),
     Path("playwright.config.mjs"),
 ]
-TOOLCHAIN_FILE_NAMES = {
-    "bun.lockb",
-    "Cargo.lock",
-    "Cargo.toml",
-    "composer.json",
-    "composer.lock",
-    "deno.json",
-    "Gemfile",
-    "Gemfile.lock",
-    "go.mod",
-    "go.sum",
-    "mix.exs",
-    "package-lock.json",
-    "package.json",
-    "playwright.config.cjs",
-    "playwright.config.js",
-    "playwright.config.mjs",
-    "pnpm-lock.yaml",
-    "pyproject.toml",
-    "requirements.txt",
-    "uv.lock",
-    "vite.config.js",
-    "vite.config.mjs",
-    "vite.config.ts",
-    "yarn.lock",
-}
 def main() -> int:
     args = parse_args()
     os.environ["OPENROUTER_TIMEOUT_MS"] = str(args.request_timeout_ms)
@@ -124,7 +98,7 @@ def generate_test_artifacts(
         report_root=report_root,
     )
     contract, usage = generate_contract(dynamic_context=dynamic_context, project_root=project_root)
-    validate_contract(contract, approved_spec)
+    validate_contract(contract, approved_spec, Path(working_folder))
 
     slug = report_slug(spec_source, approved_spec)
     report_dir = report_root / slug
@@ -166,12 +140,12 @@ def generate_contract_with_openrouter(
         live_log_root=report_root,
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
-        write_blocked_names=sorted(TOOLCHAIN_FILE_NAMES),
     )
     runtime.final_validator = lambda contract: validate_contract_with_tool_events(
         contract,
         dynamic_context["approved_spec"],
         runtime.tool_events,
+        runtime.working_folder,
     )
     try:
         result = run_tool_agent(
@@ -217,7 +191,7 @@ def artifact_array_schema() -> dict[str, Any]:
         "items": {
             "type": "object",
             "additionalProperties": True,
-            "required": ["path", "purpose", "content"],
+            "required": ["path", "purpose"],
             "properties": {
                 "path": {"type": "string"},
                 "purpose": {"type": "string"},
@@ -333,6 +307,7 @@ def build_dynamic_context(
             "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
+        "remediation": agent_runtime.read_remediation_context(working_folder, "test"),
         "generated_at": generated_at,
     }
 
@@ -403,16 +378,19 @@ Inspect the project context and existing files as needed. Write executable test 
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 You may run commands to set up declared project test dependencies, check syntax, discover tests, and run tests. Do not write production implementation.
 If you run any setup, syntax, discovery, or test command, include it in test_execution_checks with its actual status. Test failures are expected before Builder runs; report them as failed, not fixed.
+Before running browser or end-to-end tests, inspect whether the project has the production app entrypoint those tests need, such as index.html and the referenced source files. If the production app entrypoint is absent because Builder has not run yet, do not run the browser suite; run static syntax/discovery checks that can execute without the app, and include the browser test command as skipped with a reason that the production app implementation is not present yet. Do not try to force a red phase from server error pages, browser security errors, missing selectors caused by an absent app, or other harness/runtime failures.
 You may install required test tooling and add testing-only dependencies when the approved test strategy or project context requires them. Record every dependency addition, removal, or version change in dependency_changes.
 Do not add production implementation dependencies unless the approved spec or project context explicitly defines them as part of the test target. Do not change dependencies silently.
 Do not write workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
 In acceptance_criteria_covered, acceptance_criteria_uncovered, and untestable_requirements, include only exact full strings copied from approved_spec.acceptance_criteria. Each list item must contain exactly one approved criterion.
 Do not claim a criterion is covered unless at least one generated test directly asserts that behavior without contradicting another approved criterion.
-Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created, including each file's content.
+Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created by path and purpose. Do not include large file contents in final_report; Hooky reads already-written files from the filesystem. Include content only for tiny artifacts that were not already written.
 """
 
 
-def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -> None:
+def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any], working_folder: Path | None = None) -> None:
+    if working_folder is not None:
+        hydrate_artifact_contents(contract, working_folder)
     required = [
         "summary",
         "test_files",
@@ -446,8 +424,9 @@ def validate_contract_with_tool_events(
     contract: dict[str, Any],
     approved_spec: dict[str, Any],
     tool_events: list[dict[str, Any]],
+    working_folder: Path,
 ) -> None:
-    validate_contract(contract, approved_spec)
+    validate_contract(contract, approved_spec, working_folder)
     validate_execution_checks_against_tool_events(contract, tool_events)
 
 
@@ -719,7 +698,7 @@ def validate_coverage_lists(contract: dict[str, Any], approved_spec: dict[str, A
 
 
 def validate_test_artifact_path(item: dict[str, Any], label: str) -> None:
-    for field in ("path", "purpose", "content"):
+    for field in ("path", "purpose"):
         if field not in item:
             raise ValueError(f"{label} missing required field: {field}")
     path = Path(str(item["path"]))
@@ -727,8 +706,22 @@ def validate_test_artifact_path(item: dict[str, Any], label: str) -> None:
         raise ValueError(f"{label} path must be relative and stay inside working folder: {path}")
     if path.parts and path.parts[0] == ".workflow":
         raise ValueError(f"{label} must not be written under .workflow: {path}")
-    if path.name in TOOLCHAIN_FILE_NAMES:
-        raise ValueError(f"{label} must not modify dependency or config files: {path}")
+
+
+def hydrate_artifact_contents(contract: dict[str, Any], working_folder: Path) -> None:
+    for field in ("test_files", "fixtures"):
+        for item in contract.get(field, []) or []:
+            if item.get("content"):
+                continue
+            relative_path = Path(str(item.get("path") or ""))
+            validate_test_artifact_path(item, "artifact")
+            full_path = (working_folder / relative_path).resolve()
+            working_root = working_folder.resolve()
+            if full_path != working_root and working_root not in full_path.parents:
+                raise ValueError(f"artifact path escapes working folder: {relative_path}")
+            if not full_path.exists():
+                raise FileNotFoundError(f"artifact content omitted but file does not exist: {relative_path}")
+            item["content"] = full_path.read_text(encoding="utf-8")
 
 
 def validate_test_content(item: dict[str, Any], approved_spec: dict[str, Any]) -> None:
@@ -787,13 +780,15 @@ def write_artifacts(
 
     for test_file in contract.get("test_files", []):
         path = working_folder / test_file["path"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(test_file["content"], encoding="utf-8")
+        if "content" in test_file:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(test_file["content"], encoding="utf-8")
 
     for fixture in contract.get("fixtures", []):
         path = working_folder / fixture["path"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(fixture["content"], encoding="utf-8")
+        if "content" in fixture:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(fixture["content"], encoding="utf-8")
 
     (report_dir / "contract.json").write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_dir / "dynamic_context.json").write_text(json.dumps(dynamic_context, indent=2, sort_keys=True) + "\n", encoding="utf-8")

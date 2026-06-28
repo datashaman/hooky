@@ -123,6 +123,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         "test_reports": read_contract_summaries(working_folder / TEST_REPORT_ROOT, "contract.json"),
         "builder_reports": read_contract_summaries(working_folder / BUILDER_REPORT_ROOT, "contract.json"),
         "verifier_reports": read_contract_summaries(working_folder / VERIFIER_REPORT_ROOT, "contract.json"),
+        "upstream_evidence": agent_runtime.upstream_evidence_context(working_folder),
         "pipeline_state": read_pipeline_state(working_folder),
         "runtime_metadata": read_runtime_metadata(working_folder),
         "runtime_forensics": read_runtime_forensics(working_folder),

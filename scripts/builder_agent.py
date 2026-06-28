@@ -113,6 +113,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         "approved_test_contract_path": display_path(approved_contract_path, working_folder),
         "approved_test_contract": approved_contract,
         "approved_tests": approved_tests,
+        "remediation": agent_runtime.read_remediation_context(working_folder, "builder"),
         "generated_at": generated_at,
     }
 

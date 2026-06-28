@@ -9,14 +9,14 @@ Return only JSON matching this shape:
     {
       "path": "string",
       "purpose": "string",
-      "content": "string"
+      "content": "optional string for tiny artifacts only"
     }
   ],
   "fixtures": [
     {
       "path": "string",
       "purpose": "string",
-      "content": "string"
+      "content": "optional string for tiny artifacts only"
     }
   ],
   "coverage_targets": ["string"],
@@ -46,6 +46,7 @@ Return only JSON matching this shape:
 
 - `requires_human_approval` must be `true`.
 - `test_files` must be non-empty.
+- Test and fixture artifacts should be written to the filesystem first; the contract should list `path` and `purpose`. Do not include large file contents in the final JSON payload.
 - `test_execution_checks` must list every setup, syntax, discovery, or test command the agent ran.
 - `dependency_changes` must list every dependency addition, removal, or version change caused by the Test Agent.
 - The Test Agent may add test tooling or test-only dependencies required by the approved test strategy.
@@ -55,4 +56,4 @@ Return only JSON matching this shape:
 - A command may be reported as `passed` only when the matching shell command actually exited successfully.
 - Every approved acceptance criterion must be listed in either `acceptance_criteria_covered` or `acceptance_criteria_uncovered`.
 - `acceptance_criteria_uncovered` must be empty for a passing output unless the requirement is genuinely untestable.
-- Test file content must be executable test code, not prose.
+- Test file content on disk must be executable test code, not prose.

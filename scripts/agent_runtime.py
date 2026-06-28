@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -22,6 +23,15 @@ import spec_agent
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
 FinalValidator = Callable[[dict[str, Any]], None]
+DISPOSABLE_RUNTIME_DIR_NAMES = {
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".tox",
+    "__pycache__",
+    "coverage",
+    "test-results",
+}
 
 
 @dataclass
@@ -57,6 +67,7 @@ class ToolRuntime:
     live_log_root: Path | None = None
     live_event_log_paths: list[Path] = field(default_factory=list)
     live_event_prefix: str = ""
+    heartbeat_seconds: int = 20
     write_enabled: bool = True
     write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
     write_blocked_names: list[str] = field(default_factory=list)
@@ -81,6 +92,8 @@ class ToolRuntime:
         self.started_at = time.monotonic()
         self.final_report: dict[str, Any] | None = None
         self.anchored_summary = ""
+        if os.environ.get("AGENT_HEARTBEAT_SECONDS"):
+            self.heartbeat_seconds = int(os.environ["AGENT_HEARTBEAT_SECONDS"])
 
     def tools(self) -> list[dict[str, Any]]:
         return [
@@ -466,6 +479,8 @@ def run_tool_agent(
 
     append_live_event(runtime, f"{utc_timestamp()} run start model={model}")
     flush_live_log()
+    stop_heartbeat = threading.Event()
+    heartbeat_thread = start_heartbeat_thread(runtime, model, total_usage, stop_heartbeat)
     try:
         with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
             while runtime.final_report is None:
@@ -564,11 +579,33 @@ def run_tool_agent(
         flush_live_log(status="error", error=str(exc))
         raise AgentRunError(str(exc), current_result()) from exc
     finally:
+        stop_heartbeat.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1)
         runtime.cleanup_processes()
 
     append_live_event(runtime, f"{utc_timestamp()} run success tool_calls={len(tool_events)} cost=${float(total_usage.get('cost') or 0):.8f}")
     flush_live_log(status="success")
     return current_result()
+
+
+def start_heartbeat_thread(
+    runtime: ToolRuntime,
+    model: str,
+    total_usage: dict[str, Any],
+    stop_event: threading.Event,
+) -> threading.Thread | None:
+    if runtime.heartbeat_seconds <= 0:
+        return None
+
+    def emit_heartbeats() -> None:
+        while not stop_event.wait(runtime.heartbeat_seconds):
+            elapsed = int(time.monotonic() - runtime.started_at)
+            append_live_event(runtime, f"{utc_timestamp()} heartbeat source=local model={model} elapsed_seconds={elapsed}")
+
+    thread = threading.Thread(target=emit_heartbeats, name="hooky-agent-heartbeat", daemon=True)
+    thread.start()
+    return thread
 
 
 def maybe_compact_messages(
@@ -1200,6 +1237,7 @@ def close_process_log(process: subprocess.Popen[str]) -> None:
 
 
 def snapshot_protected_paths(root: Path, prefixes: list[str]) -> dict[str, bytes | None]:
+    root = root.resolve()
     snapshot: dict[str, bytes | None] = {}
     for prefix in prefixes:
         protected = (root / prefix).resolve()
@@ -1217,23 +1255,31 @@ def snapshot_protected_paths(root: Path, prefixes: list[str]) -> dict[str, bytes
 def protected_path_changes(root: Path, prefixes: list[str], before: dict[str, bytes | None]) -> list[str]:
     if not prefixes:
         return []
+    root = root.resolve()
     after = snapshot_protected_paths(root, prefixes)
     changes: list[str] = []
     before_keys = set(before)
     after_keys = set(after)
     for path in sorted(after_keys - before_keys):
+        if is_disposable_runtime_output(path):
+            continue
         if after[path] is not None:
             changes.append(path)
     for path in sorted(before_keys - after_keys):
+        if is_disposable_runtime_output(path):
+            continue
         if before[path] is not None:
             changes.append(path)
     for path in sorted(before_keys & after_keys):
+        if is_disposable_runtime_output(path):
+            continue
         if before[path] != after[path]:
             changes.append(path)
     return changes
 
 
 def restore_protected_paths(root: Path, before: dict[str, bytes | None], changes: list[str]) -> None:
+    root = root.resolve()
     for relative in changes:
         path = (root / relative).resolve()
         if path != root and root not in path.parents:
@@ -1245,6 +1291,105 @@ def restore_protected_paths(root: Path, before: dict[str, bytes | None], changes
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+
+
+def is_disposable_runtime_output(relative: str) -> bool:
+    for part in Path(relative).parts:
+        if part in DISPOSABLE_RUNTIME_DIR_NAMES:
+            return True
+        if part.endswith("-report") or part.endswith("-reports"):
+            return True
+    return False
+
+
+def read_remediation_context(working_folder: Path, stage: str) -> dict[str, Any] | None:
+    path = Path(working_folder) / ".workflow/artifacts/remediation/current.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if payload.get("root_cause_stage") != stage:
+        return None
+    return payload
+
+
+def read_task_state(working_folder: Path) -> dict[str, Any]:
+    workflow_state_path = Path(working_folder) / ".workflow/state.json"
+    if not workflow_state_path.exists():
+        return {}
+    try:
+        workflow_state = json.loads(workflow_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    current_task = workflow_state.get("current_task")
+    if not current_task:
+        return {}
+    task_state_path = Path(working_folder) / ".workflow/tasks" / str(current_task) / "state.json"
+    if not task_state_path.exists():
+        return {}
+    try:
+        return json.loads(task_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def upstream_evidence_context(working_folder: Path) -> dict[str, Any]:
+    root = Path(working_folder)
+    state = read_task_state(root)
+    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
+    stages: dict[str, Any] = {}
+    for stage in ("spec", "test", "builder", "verifier", "eval"):
+        artifact = artifacts.get(stage) if isinstance(artifacts.get(stage), dict) else {}
+        stage_payload: dict[str, Any] = {
+            "artifacts": {
+                key: value
+                for key, value in artifact.items()
+                if isinstance(value, (str, list, dict, int, float, bool)) or value is None
+            },
+            "runtime": runtime_evidence_files(root, stage, artifact),
+        }
+        stages[stage] = stage_payload
+    return {
+        "instruction": "Use these explicit artifact and runtime evidence paths before guessing filenames or listing directories.",
+        "stages": stages,
+    }
+
+
+def runtime_evidence_files(root: Path, stage: str, artifact: dict[str, Any]) -> dict[str, str]:
+    candidates: list[Path] = []
+    report_dir = artifact.get("report_dir")
+    if isinstance(report_dir, str) and report_dir:
+        candidates.append(root / report_dir)
+    if stage == "spec":
+        candidates.append(root / ".workflow/artifacts/specs/_runtime")
+    elif stage == "test":
+        candidates.append(root / ".workflow/artifacts/test-agent")
+    elif stage == "builder":
+        candidates.append(root / ".workflow/artifacts/builder-agent")
+    elif stage == "verifier":
+        candidates.append(root / ".workflow/artifacts/verifier-agent")
+    elif stage == "eval":
+        candidates.append(root / ".workflow/artifacts/eval-agent")
+
+    result: dict[str, str] = {}
+    names = {
+        "events": "runtime_events.log",
+        "timeline": "runtime_timeline.md",
+        "tool_events": "tool_events.json",
+        "tool_calls": "tool_calls.md",
+        "metadata": "runtime_metadata.json",
+        "transcript": "runtime_transcript.json",
+        "context_snapshot": "context_snapshot.md",
+        "dynamic_context": "dynamic_context.json",
+    }
+    for directory in candidates:
+        for key, filename in names.items():
+            path = directory / filename
+            if key not in result and path.exists():
+                result[key] = relative_to(path.resolve(), root.resolve())
+    return result
 
 
 def tavily_search(
