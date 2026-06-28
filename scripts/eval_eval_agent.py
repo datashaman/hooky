@@ -8,13 +8,13 @@ import hashlib
 import json
 import os
 import shutil
-import signal
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import eval_agent
 import artifact_policy
+import eval_cases
 import eval_runtime
 import eval_spec_agent
 import spec_agent
@@ -27,10 +27,6 @@ DEFAULT_RUN_ROOT = Path(".workflow/eval-runs/eval-agent")
 DEFAULT_CACHE_ROOT = Path(".workflow/eval-cache/eval-agent")
 
 
-class AttemptTimeoutError(TimeoutError):
-    pass
-
-
 def main() -> int:
     args = parse_args()
     ladder_config = spec_agent.read_json(args.model_ladder)
@@ -40,7 +36,7 @@ def main() -> int:
         raise RuntimeError("OPENROUTER_API_KEY is required for Eval Agent eval")
     os.environ["OPENROUTER_TIMEOUT_MS"] = str(args.request_timeout_ms)
 
-    cases = load_cases(args.cases_root)
+    cases = eval_cases.load_cases(args.cases_root)
     ladder_report = eval_spec_agent.resolve_model_ladder(
         args,
         ladder_config,
@@ -108,16 +104,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_cases(cases_root: Path) -> list[dict[str, Any]]:
-    cases = []
-    for manifest_path in sorted(cases_root.glob("*/manifest.json")):
-        manifest = spec_agent.read_json(manifest_path)
-        cases.append({"path": manifest_path.parent, "manifest": manifest})
-    if not cases:
-        raise RuntimeError(f"No Eval Agent cases found under {cases_root}")
-    return cases
-
-
 def run_attempt(
     *,
     model_info: dict[str, Any],
@@ -135,8 +121,8 @@ def run_attempt(
         cached["original_cost"] = cached.get("cost", 0)
         cached["cost"] = 0
         cached["estimated_cost"] = model_info.get("estimated_cost")
-        cached.setdefault("tool_use", combined_tool_use(cached.get("cases", [])))
-        cached.setdefault("artifact_policy", combined_artifact_policy(cached.get("cases", [])))
+        cached.setdefault("tool_use", eval_cases.combined_tool_use(cached.get("cases", [])))
+        cached.setdefault("artifact_policy", eval_cases.combined_artifact_policy(cached.get("cases", [])))
         return cached
 
     previous_model = os.environ.get("OPENROUTER_MODEL")
@@ -167,8 +153,8 @@ def run_attempt(
         "variant_id": variant_id,
         "reasoning_request": model_info.get("reasoning_request"),
         "context_length": model_info.get("context_length"),
-        "tool_use": combined_tool_use(case_results),
-        "artifact_policy": combined_artifact_policy(case_results),
+        "tool_use": eval_cases.combined_tool_use(case_results),
+        "artifact_policy": eval_cases.combined_artifact_policy(case_results),
         "estimated_cost": model_info.get("estimated_cost"),
         "status": status,
         "artifact_dir": str(run_root / eval_spec_agent.safe_name(variant_id)),
@@ -189,7 +175,7 @@ def run_case(model_info: dict[str, Any], case: dict[str, Any], run_root: Path) -
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id) / case_name
     shutil.copytree(case["path"], attempt_dir, dirs_exist_ok=True)
     before = artifact_policy.snapshot(attempt_dir, exclude_prefixes=[".workflow/artifacts/eval-agent"])
-    with attempt_time_limit("evaluation"):
+    with eval_cases.attempt_time_limit("evaluation", max(1, test_agent.openrouter_timeout_ms() // 1000)):
         report_dir, contract, usage = eval_agent.generate_eval_artifacts(
             working_folder=attempt_dir,
             generated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
@@ -295,22 +281,6 @@ def aggregate_findings(case_results: list[dict[str, Any]]) -> list[str]:
     return findings
 
 
-def combined_tool_use(case_results: list[dict[str, Any]]) -> dict[str, Any]:
-    summary = {"tool_calls": 0, "tools": {}, "compactions": 0, "pre_compaction_archives": 0}
-    for result in case_results:
-        tool_use = result.get("tool_use") or {}
-        summary["tool_calls"] += int(tool_use.get("tool_calls") or 0)
-        summary["compactions"] += int(tool_use.get("compactions") or 0)
-        summary["pre_compaction_archives"] += int(tool_use.get("pre_compaction_archives") or 0)
-        for name, count in (tool_use.get("tools") or {}).items():
-            summary["tools"][name] = summary["tools"].get(name, 0) + int(count)
-    return summary
-
-
-def combined_artifact_policy(case_results: list[dict[str, Any]]) -> dict[str, Any]:
-    return artifact_policy.merge_reports(*(result.get("artifact_policy") or {} for result in case_results))
-
-
 def fixture_for_ladder(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "name": "Eval Agent qualitative quality suite",
@@ -349,6 +319,7 @@ def eval_cache_key(cases_root: Path, judge_model: str) -> str:
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
+        Path("scripts/eval_cases.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/eval_agent.py"),
         Path("scripts/eval_eval_agent.py"),
@@ -370,24 +341,6 @@ def eval_cache_key(cases_root: Path, judge_model: str) -> str:
 
 def update_selected_model(winner: dict[str, Any], report_path: Path, judge_model: str) -> None:
     eval_runtime.write_selected_model(eval_agent.SELECTED_MODEL_PATH, winner, report_path, judge_model)
-class attempt_time_limit:
-    def __init__(self, label: str):
-        self.label = label
-        self.seconds = max(1, test_agent.openrouter_timeout_ms() // 1000)
-        self.previous_handler = None
-
-    def __enter__(self):
-        self.previous_handler = signal.getsignal(signal.SIGALRM)
-
-        def timeout_handler(_signum, _frame):
-            raise AttemptTimeoutError(f"{self.label} timed out after {self.seconds}s")
-
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.setitimer(signal.ITIMER_REAL, self.seconds)
-
-    def __exit__(self, _exc_type, _exc, _tb):
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, self.previous_handler)
 
 
 if __name__ == "__main__":
