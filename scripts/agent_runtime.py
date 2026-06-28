@@ -8,6 +8,9 @@ import json
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,6 +71,7 @@ class ToolRuntime:
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("grep_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("bash", "Run a shell command in the working folder with a timeout.", {"command": string_schema()}, ["command"]),
+            tool_schema("fetch_url", "Fetch UTF-8 text content from an http or https URL.", {"url": string_schema()}, ["url"]),
             tool_schema("todo_read", "Read the current todo list.", {}, []),
             tool_schema("todo_write", "Replace the current todo list.", {"items": {"type": "array", "items": {"type": "object", "additionalProperties": True}}}, ["items"]),
             {
@@ -90,6 +94,7 @@ class ToolRuntime:
             "find_files": self.find_files,
             "grep_files": self.grep_files,
             "bash": self.bash,
+            "fetch_url": self.fetch_url,
             "todo_read": self.todo_read,
             "todo_write": self.todo_write,
             "final_report": self.finish,
@@ -167,6 +172,30 @@ class ToolRuntime:
             "stdout": completed.stdout[-8000:],
             "stderr": completed.stderr[-8000:],
         }
+
+    def fetch_url(self, args: dict[str, Any]) -> dict[str, Any]:
+        url = str(args["url"])
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("fetch_url requires an http or https URL")
+        request = urllib.request.Request(url, headers={"User-Agent": "hooky-agent-runtime/0.1"})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                raw = response.read(1_000_001)
+                truncated = len(raw) > 1_000_000
+                content = raw[:1_000_000].decode("utf-8", errors="replace")
+                return {
+                    "ok": True,
+                    "url": url,
+                    "status": response.status,
+                    "content_type": response.headers.get("content-type", ""),
+                    "content": content,
+                    "truncated": truncated,
+                }
+        except urllib.error.HTTPError as exc:
+            return {"ok": False, "url": url, "status": exc.code, "error": exc.reason}
+        except urllib.error.URLError as exc:
+            return {"ok": False, "url": url, "error": str(exc.reason)}
 
     def todo_read(self, _args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "items": self.todo_items}
@@ -439,6 +468,20 @@ def utc_timestamp() -> str:
 
 def openrouter_timeout_ms() -> int:
     return int(os.environ.get("OPENROUTER_TIMEOUT_MS", "120000"))
+
+
+def available_tool_names() -> list[str]:
+    return [
+        "read_file",
+        "write_file",
+        "list_files",
+        "grep_files",
+        "find_files",
+        "bash",
+        "fetch_url",
+        "todo_read",
+        "todo_write",
+    ]
 
 
 def tool_schema(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:

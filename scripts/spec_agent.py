@@ -8,6 +8,7 @@ edit production code, tests, dependency manifests, or runtime configuration.
 from __future__ import annotations
 
 import argparse
+import agent_runtime
 import hashlib
 import json
 import os
@@ -308,16 +309,7 @@ def build_dynamic_context(
             "runtime_root": (sidecar_root / "_runtime").as_posix(),
         },
         "tools": {
-            "available": [
-                "read_file",
-                "write_file",
-                "list_files",
-                "grep_files",
-                "find_files",
-                "bash",
-                "todo_read",
-                "todo_write",
-            ],
+            "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
         "issue": {

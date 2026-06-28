@@ -12,6 +12,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+import agent_runtime
 import eval_runtime
 import spec_agent
 from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
@@ -210,16 +211,7 @@ def build_dynamic_context(
             "report_root": report_root.as_posix(),
         },
         "tools": {
-            "available": [
-                "read_file",
-                "write_file",
-                "list_files",
-                "grep_files",
-                "find_files",
-                "bash",
-                "todo_read",
-                "todo_write",
-            ],
+            "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
         "generated_at": generated_at,

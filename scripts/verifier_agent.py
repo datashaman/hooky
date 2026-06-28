@@ -13,6 +13,7 @@ from typing import Any
 
 import eval_runtime
 import spec_agent
+import agent_runtime
 from agent_runtime import ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
@@ -80,16 +81,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
             "builder_report_root": BUILDER_REPORT_ROOT.as_posix(),
         },
         "tools": {
-            "available": [
-                "read_file",
-                "write_file",
-                "list_files",
-                "grep_files",
-                "find_files",
-                "bash",
-                "todo_read",
-                "todo_write",
-            ],
+            "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
         "approved_test_contracts": approved_test_contracts,

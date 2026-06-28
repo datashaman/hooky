@@ -14,6 +14,7 @@ from typing import Any
 import eval_runtime
 import spec_agent
 import test_agent
+import agent_runtime
 from agent_runtime import build_runtime_metadata
 
 
@@ -84,16 +85,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
             "report_root": report_root.as_posix(),
         },
         "tools": {
-            "available": [
-                "read_file",
-                "write_file",
-                "list_files",
-                "grep_files",
-                "find_files",
-                "bash",
-                "todo_read",
-                "todo_write",
-            ],
+            "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
         "approved_test_contract_path": APPROVED_TEST_CONTRACT.as_posix(),
