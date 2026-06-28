@@ -156,6 +156,7 @@ def generate_contract_with_openrouter(
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=eval ",
         write_enabled=False,
+        read_blocked_prefixes=[],
     )
     try:
         result = run_tool_agent(

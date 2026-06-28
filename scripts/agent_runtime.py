@@ -69,6 +69,8 @@ class ToolRuntime:
     live_event_prefix: str = ""
     heartbeat_seconds: int = 20
     write_enabled: bool = True
+    read_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
+    write_allowed_prefixes: list[str] = field(default_factory=list)
     write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
     write_blocked_names: list[str] = field(default_factory=list)
     bash_blocked_substrings: list[str] = field(default_factory=list)
@@ -181,7 +183,21 @@ class ToolRuntime:
 
     def read_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
+        self.validate_read_path(path)
         return {"ok": True, "path": relative_to(path, self.working_folder), "content": path.read_text(encoding="utf-8")}
+
+    def is_read_blocked(self, path: Path) -> bool:
+        relative = relative_to(path.resolve(), self.working_folder)
+        parts = Path(relative).parts
+        for prefix in self.read_blocked_prefixes:
+            prefix_parts = Path(prefix).parts
+            if parts[: len(prefix_parts)] == prefix_parts:
+                return True
+        return False
+
+    def validate_read_path(self, path: Path) -> None:
+        if self.is_read_blocked(path):
+            raise FileNotFoundError(f"path not found: {relative_to(path, self.working_folder)}")
 
     def write_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
@@ -195,36 +211,50 @@ class ToolRuntime:
             raise ValueError("write_file is disabled for this agent; finish with final_report instead")
         relative = relative_to(path, self.working_folder)
         parts = Path(relative).parts
+        if self.write_allowed_prefixes:
+            allowed = False
+            for prefix in self.write_allowed_prefixes:
+                prefix_parts = Path(prefix).parts
+                if parts[: len(prefix_parts)] == prefix_parts:
+                    allowed = True
+                    break
+            if not allowed:
+                raise ValueError(f"agent is not allowed to write outside allowed paths: {relative}")
         for prefix in self.write_blocked_prefixes:
             prefix_parts = Path(prefix).parts
             if parts[: len(prefix_parts)] == prefix_parts:
-                raise ValueError(f"agent is not allowed to write system-managed path: {relative}")
+                raise FileNotFoundError(f"path not found: {relative}")
         if path.name in set(self.write_blocked_names):
             raise ValueError(f"agent is not allowed to write system-managed file: {relative}")
 
     def list_files(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args.get("path") or "."))
+        self.validate_read_path(path)
         entries = []
         for child in sorted(path.iterdir()):
+            if self.is_read_blocked(child):
+                continue
             entries.append({"path": relative_to(child, self.working_folder), "type": "dir" if child.is_dir() else "file"})
         return {"ok": True, "entries": entries}
 
     def find_files(self, args: dict[str, Any]) -> dict[str, Any]:
         root = self.resolve_path(str(args.get("path") or "."))
+        self.validate_read_path(root)
         pattern = str(args["pattern"])
         matches = [
             relative_to(path, self.working_folder)
             for path in sorted(root.rglob("*"))
-            if path.is_file() and fnmatch.fnmatch(path.name, pattern)
+            if path.is_file() and not self.is_read_blocked(path) and fnmatch.fnmatch(path.name, pattern)
         ]
         return {"ok": True, "matches": matches[:500], "truncated": len(matches) > 500}
 
     def grep_files(self, args: dict[str, Any]) -> dict[str, Any]:
         root = self.resolve_path(str(args.get("path") or "."))
+        self.validate_read_path(root)
         pattern = str(args["pattern"])
         matches = []
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.stat().st_size > 1_000_000:
+            if self.is_read_blocked(path) or not path.is_file() or path.stat().st_size > 1_000_000:
                 continue
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
@@ -240,6 +270,8 @@ class ToolRuntime:
     def bash(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
         lowered = command.lower()
+        if ".workflow" in lowered and self.read_blocked_prefixes:
+            return {"ok": False, "error": "bash command references a path that is not available to this agent"}
         for blocked in self.bash_blocked_substrings:
             if blocked.lower() in lowered:
                 return {"ok": False, "error": f"bash command blocked by agent policy: {blocked}"}

@@ -157,12 +157,18 @@ def generate_contract_with_openrouter(
     agent_context = load_agent_context()
     runtime = ToolRuntime(
         working_folder=dynamic_context["workspace"]["working_folder"],
-        final_report_schema=spec_agent_contract_schema(),
+        final_report_schema=spec_agent_finish_schema(),
         max_cost_usd=float(os.environ.get("SPEC_AGENT_MAX_COST_USD", "0.10")),
         max_seconds=int(os.environ.get("SPEC_AGENT_MAX_SECONDS", "180")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
-        final_validator=validate_contract,
-        write_enabled=False,
+        final_validator=validate_spec_finish_report,
+        write_enabled=True,
+        write_allowed_prefixes=[
+            dynamic_context["workspace"]["artifact_root"],
+        ],
+        write_blocked_prefixes=[
+            ".workflow",
+        ],
     )
     runtime_root = Path(dynamic_context["workspace"]["runtime_root"])
     runtime.live_log_root = runtime_root
@@ -196,7 +202,7 @@ def generate_contract_with_openrouter(
     )
     if result.final_report is None:
         raise RuntimeError("Spec Agent finished without final_report")
-    return result.final_report, result.usage
+    return load_contract_from_finish_report(result.final_report, Path(dynamic_context["workspace"]["working_folder"])), result.usage
 
 
 def openrouter_request_options() -> dict[str, Any]:
@@ -220,6 +226,43 @@ def structured_response_format(name: str, schema: dict[str, Any]) -> dict[str, A
 
 def string_array_schema() -> dict[str, Any]:
     return {"type": "array", "items": {"type": "string"}}
+
+
+def spec_agent_finish_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["contract_path"],
+        "properties": {
+            "contract_path": {
+                "type": "string",
+                "description": "Path to the JSON Spec Agent contract already written inside docs/specs/<task-id>/contract.json.",
+            },
+        },
+    }
+
+
+def validate_spec_finish_report(report: dict[str, Any]) -> None:
+    contract_path = report.get("contract_path")
+    if not isinstance(contract_path, str) or not contract_path.strip():
+        raise ValueError("final_report must include contract_path")
+
+
+def load_contract_from_finish_report(report: dict[str, Any], working_folder: Path) -> dict[str, Any]:
+    validate_spec_finish_report(report)
+    contract_path = Path(str(report["contract_path"]))
+    if contract_path.is_absolute():
+        raise ValueError("contract_path must be relative to the working folder")
+    resolved = (working_folder / contract_path).resolve()
+    working_root = working_folder.resolve()
+    if resolved != working_root and working_root not in resolved.parents:
+        raise ValueError(f"contract_path escapes working folder: {contract_path}")
+    relative = resolved.relative_to(working_root).as_posix()
+    if not relative.startswith("docs/specs/") or not relative.endswith("/contract.json"):
+        raise ValueError("contract_path must point to docs/specs/<task-id>/contract.json")
+    contract = read_json(resolved)
+    validate_contract(contract)
+    return contract
 
 
 def spec_agent_contract_schema() -> dict[str, Any]:
@@ -319,12 +362,15 @@ def build_dynamic_context(
     sidecar_root: Path = SIDECAR_ROOT,
     working_folder: Path = Path("."),
 ) -> dict[str, Any]:
+    spec_id = f"issue-{issue_number}-{slugify(title)}"
     return {
         "source": "github_issue",
         "workspace": {
             "working_folder": working_folder.as_posix(),
             "artifact_root": artifact_root.as_posix(),
+            "artifact_dir": (artifact_root / spec_id).as_posix(),
             "sidecar_root": sidecar_root.as_posix(),
+            "sidecar_dir": (sidecar_root / spec_id).as_posix(),
             "runtime_root": (sidecar_root / "_runtime").as_posix(),
         },
         "tools": {
@@ -392,8 +438,9 @@ Dynamic Context:
 ```
 
 Use the available tools to inspect project context as needed. Use todo tools to track substantive work.
-Do not write production code, tests, dependency manifests, or runtime configuration.
-Finish only by calling final_report with the Spec Agent contract.
+Write the full JSON Spec Agent contract to Dynamic Context workspace.artifact_dir + "/contract.json".
+Do not write .workflow files, production code, tests, dependency manifests, or runtime configuration.
+Finish only by calling final_report with {{"contract_path": "<relative path to contract.json>"}}.
 """
 
 

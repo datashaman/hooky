@@ -114,7 +114,6 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         },
         "approved_test_contracts": approved_test_contracts,
         "builder_reports": builder_reports,
-        "upstream_evidence": agent_runtime.upstream_evidence_context(working_folder),
         "package_json": package_json,
         "project_manifests": project_manifests,
         "remediation": agent_runtime.read_remediation_context(working_folder, "verifier"),
