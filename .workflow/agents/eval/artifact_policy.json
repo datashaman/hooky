@@ -1,0 +1,5 @@
+{
+  "mutable_prefixes": [
+    ".workflow/artifacts/eval-agent"
+  ]
+}

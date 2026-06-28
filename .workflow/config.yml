@@ -25,6 +25,7 @@ agents:
       static_root: .workflow/agents/spec/static
       templates_root: .workflow/agents/spec/templates
       selected_model: .workflow/agents/spec/selected_model.json
+      artifact_policy: .workflow/agents/spec/artifact_policy.json
       dynamic_snapshot_files:
         - dynamic_context.json
         - context_snapshot.md
@@ -64,6 +65,7 @@ agents:
       static_root: .workflow/agents/test/static
       templates_root: .workflow/agents/test/templates
       selected_model: .workflow/agents/test/selected_model.json
+      artifact_policy: .workflow/agents/test/artifact_policy.json
       dynamic_snapshot_files:
         - dynamic_context.json
         - context_snapshot.md
@@ -103,6 +105,7 @@ agents:
       static_root: .workflow/agents/builder/static
       templates_root: .workflow/agents/builder/templates
       selected_model: .workflow/agents/builder/selected_model.json
+      artifact_policy: .workflow/agents/builder/artifact_policy.json
       dynamic_snapshot_files:
         - dynamic_context.json
         - context_snapshot.md
@@ -142,6 +145,7 @@ agents:
       static_root: .workflow/agents/verifier/static
       templates_root: .workflow/agents/verifier/templates
       selected_model: .workflow/agents/verifier/selected_model.json
+      artifact_policy: .workflow/agents/verifier/artifact_policy.json
       dynamic_snapshot_files:
         - dynamic_context.json
         - context_snapshot.md
@@ -181,6 +185,7 @@ agents:
       static_root: .workflow/agents/eval/static
       templates_root: .workflow/agents/eval/templates
       selected_model: .workflow/agents/eval/selected_model.json
+      artifact_policy: .workflow/agents/eval/artifact_policy.json
       dynamic_snapshot_files:
         - dynamic_context.json
         - context_snapshot.md

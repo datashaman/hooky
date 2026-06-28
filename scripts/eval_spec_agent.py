@@ -564,17 +564,12 @@ def deterministic_eval(contract: dict[str, Any], artifact_dir: Path, expect: dic
         if not any(term.lower() in non_goals for term in topic_terms):
             findings.append(f"non-goals missing topic: {topic}")
 
-    allowed = {
-        "spec.md",
-        "acceptance_tests.md",
-        "risk_register.md",
-        "cost_plan.md",
-        "contract.json",
-        "pull_request_body.md",
-        "dynamic_context.json",
-        "context_snapshot.md",
-    }
-    artifact_report = artifact_policy.validate_files(artifact_dir, required_files=allowed, allowed_files=allowed)
+    policy = artifact_policy.load_policy(Path(".workflow/agents/spec/artifact_policy.json"))
+    artifact_report = artifact_policy.validate_files(
+        artifact_dir,
+        required_files=policy["required_files"],
+        allowed_files=policy["allowed_files"],
+    )
     findings.extend(artifact_report["findings"])
 
     return {"status": "fail" if findings else "pass", "findings": findings, "artifact_policy": artifact_report}
@@ -752,6 +747,7 @@ def eval_cache_key(fixture_path: Path, judge_model: str) -> str:
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
+        Path(".workflow/agents/spec/artifact_policy.json"),
         Path("scripts/spec_agent.py"),
         Path("scripts/eval_spec_agent.py"),
     ]

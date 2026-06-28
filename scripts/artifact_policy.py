@@ -4,8 +4,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
+
+
+def load_policy(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def pass_report(**extra: Any) -> dict[str, Any]:

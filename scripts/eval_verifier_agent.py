@@ -174,7 +174,7 @@ def run_case(model_info: dict[str, Any], case: dict[str, Any], run_root: Path) -
     case_name = case["manifest"]["name"]
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id) / case_name
     shutil.copytree(case["path"], attempt_dir, dirs_exist_ok=True)
-    before = artifact_policy.snapshot(attempt_dir, exclude_prefixes=[".workflow/artifacts/verifier-agent"])
+    before = artifact_policy.snapshot(attempt_dir, exclude_prefixes=verifier_mutable_prefixes())
     with eval_cases.attempt_time_limit("verification", max(1, test_agent.openrouter_timeout_ms() // 1000)):
         report_dir, contract, usage = verifier_agent.generate_verification_artifacts(
             working_folder=attempt_dir,
@@ -218,7 +218,7 @@ def deterministic_case_eval(
     artifact_report = artifact_policy.protected_changes(
         working_folder,
         before,
-        exclude_prefixes=[".workflow/artifacts/verifier-agent"],
+        exclude_prefixes=verifier_mutable_prefixes(),
     )
     if artifact_report["protected_changes"]:
         findings.append(f"verifier modified files outside its report area: {artifact_report['protected_changes']}")
@@ -231,6 +231,11 @@ def has_npm_test(working_folder: Path) -> bool:
         return False
     package = spec_agent.read_json(package_path)
     return bool((package.get("scripts") or {}).get("test"))
+
+
+def verifier_mutable_prefixes() -> list[str]:
+    policy = artifact_policy.load_policy(Path(".workflow/agents/verifier/artifact_policy.json"))
+    return list(policy["mutable_prefixes"])
 
 
 def mentions_text(value: Any, needle: str) -> bool:
@@ -283,6 +288,7 @@ def eval_cache_key(cases_root: Path, judge_model: str) -> str:
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
+        Path(".workflow/agents/verifier/artifact_policy.json"),
         Path("scripts/eval_cases.py"),
         Path("scripts/spec_agent.py"),
         Path("scripts/verifier_agent.py"),

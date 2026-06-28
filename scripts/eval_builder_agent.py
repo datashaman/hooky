@@ -309,10 +309,8 @@ def deterministic_eval(
 
 
 def builder_protected_prefixes() -> list[str]:
-    return [
-        "tests",
-        ".workflow/artifacts/test-agent",
-    ]
+    policy = artifact_policy.load_policy(Path(".workflow/agents/builder/artifact_policy.json"))
+    return list(policy["protected_prefixes"])
 
 
 def run_command(command: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
@@ -475,6 +473,7 @@ def eval_cache_key(workspace_fixture: Path, judge_model: str) -> str:
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
+        Path(".workflow/agents/builder/artifact_policy.json"),
         Path("scripts/spec_agent.py"),
         Path("scripts/builder_agent.py"),
         Path("scripts/eval_builder_agent.py"),

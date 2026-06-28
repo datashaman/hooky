@@ -295,11 +295,19 @@ def deterministic_eval(
         {Path(item["path"]).name for item in contract.get("test_files", [])}
         | {Path(item["path"]).name for item in contract.get("fixtures", [])}
     )
+    policy = artifact_policy.load_policy(Path(".workflow/agents/test/artifact_policy.json"))
     artifact_report = artifact_policy.validate_files(output_dir, required_files=required_artifacts)
+    report_dir = output_dir.parents[2] / ".workflow/artifacts/test-agent" / output_dir.name
+    report_artifacts = artifact_policy.validate_files(report_dir, required_files=policy["required_report_files"])
     if not artifact_report.get("produced_files"):
         findings.append("no generated test files written")
     findings.extend(artifact_report["findings"])
-    return {"status": "fail" if findings else "pass", "findings": findings, "artifact_policy": artifact_report}
+    findings.extend(report_artifacts["findings"])
+    return {
+        "status": "fail" if findings else "pass",
+        "findings": findings,
+        "artifact_policy": artifact_policy.merge_reports(artifact_report, report_artifacts),
+    }
 
 
 def count_test_cases(contract: dict[str, Any]) -> int:
@@ -441,6 +449,7 @@ def eval_cache_key(fixture_path: Path, project_fixture: Path, judge_model: str) 
         Path(".workflow/model_ladder.json"),
         Path("scripts/agent_runtime.py"),
         Path("scripts/artifact_policy.py"),
+        Path(".workflow/agents/test/artifact_policy.json"),
         Path("scripts/spec_agent.py"),
         Path("scripts/test_agent.py"),
         Path("scripts/eval_test_agent.py"),
