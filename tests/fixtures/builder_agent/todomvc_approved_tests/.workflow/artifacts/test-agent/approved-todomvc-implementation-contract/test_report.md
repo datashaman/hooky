@@ -40,6 +40,14 @@ Behavior-focused browser/DOM tests for a React TodoMVC app covering all acceptan
 - Immediate visible updates under route filter
 - Active route persistence across reloads
 
+## Test Execution Checks
+
+- None.
+
+## Dependency Changes
+
+- None.
+
 ## Acceptance Criteria Covered
 
 - When there are no todos, the main todo list area and footer are hidden.

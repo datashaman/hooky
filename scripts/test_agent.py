@@ -79,18 +79,6 @@ TOOLCHAIN_FILE_NAMES = {
     "vite.config.ts",
     "yarn.lock",
 }
-DEPENDENCY_ADD_COMMAND_BLOCKLIST = [
-    "bun add",
-    "composer require",
-    "go get ",
-    "npm add",
-    "pnpm add",
-    "poetry add",
-    "uv add",
-    "yarn add",
-]
-
-
 def main() -> int:
     args = parse_args()
     os.environ["OPENROUTER_TIMEOUT_MS"] = str(args.request_timeout_ms)
@@ -179,8 +167,6 @@ def generate_contract_with_openrouter(
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
         write_blocked_names=sorted(TOOLCHAIN_FILE_NAMES),
-        bash_blocked_substrings=DEPENDENCY_ADD_COMMAND_BLOCKLIST,
-        bash_command_validator=test_agent_bash_policy_violation,
     )
     runtime.final_validator = lambda contract: validate_contract_with_tool_events(
         contract,
@@ -257,6 +243,23 @@ def execution_check_array_schema() -> dict[str, Any]:
     }
 
 
+def dependency_change_array_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": True,
+            "required": ["package", "scope", "reason", "files_changed"],
+            "properties": {
+                "package": {"type": "string"},
+                "scope": {"type": "string"},
+                "reason": {"type": "string"},
+                "files_changed": spec_agent.string_array_schema(),
+            },
+        },
+    }
+
+
 def test_agent_contract_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -267,6 +270,7 @@ def test_agent_contract_schema() -> dict[str, Any]:
             "fixtures",
             "coverage_targets",
             "test_execution_checks",
+            "dependency_changes",
             "acceptance_criteria_covered",
             "acceptance_criteria_uncovered",
             "untestable_requirements",
@@ -278,6 +282,7 @@ def test_agent_contract_schema() -> dict[str, Any]:
             "fixtures": artifact_array_schema(),
             "coverage_targets": spec_agent.string_array_schema(),
             "test_execution_checks": execution_check_array_schema(),
+            "dependency_changes": dependency_change_array_schema(),
             "acceptance_criteria_covered": spec_agent.string_array_schema(),
             "acceptance_criteria_uncovered": spec_agent.string_array_schema(),
             "untestable_requirements": spec_agent.string_array_schema(),
@@ -398,8 +403,9 @@ Inspect the project context and existing files as needed. Write executable test 
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 You may run commands to set up declared project test dependencies, check syntax, discover tests, and run tests. Do not write production implementation.
 If you run any setup, syntax, discovery, or test command, include it in test_execution_checks with its actual status. Test failures are expected before Builder runs; report them as failed, not fixed.
-You may install or sync dependencies already declared by project manifests or lockfiles. Do not add new dependencies or edit dependency manifests. Prefer setup commands that avoid creating or changing lockfiles when the package manager supports that.
-Do not write package manifests, framework config, workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
+You may install required test tooling and add testing-only dependencies when the approved test strategy or project context requires them. Record every dependency addition, removal, or version change in dependency_changes.
+Do not add production implementation dependencies unless the approved spec or project context explicitly defines them as part of the test target. Do not change dependencies silently.
+Do not write workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
 In acceptance_criteria_covered, acceptance_criteria_uncovered, and untestable_requirements, include only exact full strings copied from approved_spec.acceptance_criteria. Each list item must contain exactly one approved criterion.
 Do not claim a criterion is covered unless at least one generated test directly asserts that behavior without contradicting another approved criterion.
 Finish only by calling final_report with the Test Agent contract. The contract must list every test file and fixture you created, including each file's content.
@@ -413,6 +419,7 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
         "fixtures",
         "coverage_targets",
         "test_execution_checks",
+        "dependency_changes",
         "acceptance_criteria_covered",
         "acceptance_criteria_uncovered",
         "untestable_requirements",
@@ -427,6 +434,7 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
         raise ValueError("test contract must include test files")
     validate_coverage_lists(contract, approved_spec)
     validate_execution_check_shape(contract.get("test_execution_checks"))
+    validate_dependency_change_shape(contract.get("dependency_changes"))
     for item in contract.get("test_files", []):
         validate_test_artifact_path(item, "test file")
         validate_test_content(item, approved_spec)
@@ -458,19 +466,39 @@ def validate_execution_check_shape(value: Any) -> None:
             raise ValueError(f"test_execution_checks[{index}].status must be passed, failed, or skipped")
 
 
+def validate_dependency_change_shape(value: Any) -> None:
+    if not isinstance(value, list):
+        raise ValueError("dependency_changes must be a list")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"dependency_changes[{index}] must be an object")
+        for field in ("package", "scope", "reason", "files_changed"):
+            if field not in item:
+                raise ValueError(f"dependency_changes[{index}] missing required field: {field}")
+        for field in ("package", "scope", "reason"):
+            if not isinstance(item[field], str) or not item[field].strip():
+                raise ValueError(f"dependency_changes[{index}].{field} must be a non-empty string")
+        if not isinstance(item["files_changed"], list) or not item["files_changed"]:
+            raise ValueError(f"dependency_changes[{index}].files_changed must be a non-empty list")
+        for path in item["files_changed"]:
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError(f"dependency_changes[{index}].files_changed entries must be non-empty strings")
+
+
 def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
     checks = list(contract.get("test_execution_checks") or [])
+    dependency_changes = list(contract.get("dependency_changes") or [])
     bash_events = [event for event in tool_events if event.get("name") == "bash"]
     for event in bash_events:
         command = str(event.get("arguments", {}).get("command") or "")
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
-        if is_blocked_dependency_mutation_event(result):
-            raise ValueError(f"blocked dependency mutation command attempted by Test Agent: {command}")
         if is_reportable_test_command(command):
             matching_checks = [check for check in checks if commands_match(str(check.get("command") or ""), command)]
             if not matching_checks:
                 raise ValueError(f"setup or test command missing from test_execution_checks: {command}")
             validate_matching_execution_checks(command, result, matching_checks)
+        if command_may_change_dependencies(command) and not dependency_changes:
+            raise ValueError(f"dependency-changing command requires dependency_changes entries: {command}")
 
     for check in checks:
         command = str(check.get("command") or "")
@@ -506,11 +534,6 @@ def validate_matching_execution_checks(command: str, result: dict[str, Any], che
         return
     if not any(check.get("status") == "failed" for check in checks):
         raise ValueError(f"failed test execution command must be reported as failed: {command}")
-
-
-def is_blocked_dependency_mutation_event(result: dict[str, Any]) -> bool:
-    error = str(result.get("error") or "")
-    return "bash command blocked by agent policy" in error
 
 
 def is_reportable_test_command(command: str) -> bool:
@@ -557,15 +580,12 @@ def command_masks_failure(command: str) -> bool:
     return "|| true" in command.lower()
 
 
-def test_agent_bash_policy_violation(command: str) -> str | None:
+def command_may_change_dependencies(command: str) -> bool:
     for segment in split_shell_segments(command):
         tokens = shell_tokens(segment)
-        if not tokens:
-            continue
-        violation = dependency_mutation_violation(tokens)
-        if violation:
-            return violation
-    return None
+        if tokens and dependency_change_command(tokens):
+            return True
+    return False
 
 
 def split_shell_segments(command: str) -> list[str]:
@@ -579,49 +599,25 @@ def shell_tokens(command: str) -> list[str]:
         return command.split()
 
 
-def dependency_mutation_violation(tokens: list[str]) -> str | None:
+def dependency_change_command(tokens: list[str]) -> bool:
     executable = Path(tokens[0]).name
     if executable == "npm" and len(tokens) >= 2:
-        subcommand = tokens[1]
-        if subcommand == "add":
-            return "npm add"
-        if subcommand in {"install", "i"} and npm_install_adds_packages(tokens[2:]):
-            return "npm install with explicit packages"
-    if executable == "pnpm" and len(tokens) >= 2 and tokens[1] == "add":
-        return "pnpm add"
-    if executable == "yarn" and len(tokens) >= 2 and tokens[1] == "add":
-        return "yarn add"
-    if executable == "bun" and len(tokens) >= 2 and tokens[1] == "add":
-        return "bun add"
-    if executable == "composer" and len(tokens) >= 2 and tokens[1] == "require":
-        return "composer require"
-    if executable == "poetry" and len(tokens) >= 2 and tokens[1] == "add":
-        return "poetry add"
-    if executable == "uv" and len(tokens) >= 2 and tokens[1] == "add":
-        return "uv add"
-    if executable == "go" and len(tokens) >= 2 and tokens[1] == "get":
-        return "go get"
-    if executable == "pip" and len(tokens) >= 2 and tokens[1] == "install" and pip_install_adds_packages(tokens[2:]):
-        return "pip install with explicit packages"
-    if executable == "uv" and len(tokens) >= 4 and tokens[1:3] == ["pip", "install"] and pip_install_adds_packages(tokens[3:]):
-        return "uv pip install with explicit packages"
-    return None
-
-
-def npm_install_adds_packages(args: list[str]) -> bool:
-    return any(is_package_argument(arg) for arg in args)
-
-
-def pip_install_adds_packages(args: list[str]) -> bool:
-    if "-r" in args or "--requirement" in args:
-        return False
-    return any(is_package_argument(arg) for arg in args)
-
-
-def is_package_argument(arg: str) -> bool:
-    if not arg or arg.startswith("-"):
-        return False
-    return not arg.endswith((".json", ".lock", ".txt", ".in", ".toml"))
+        return tokens[1] in {"add", "install", "i", "ci"}
+    if executable in {"pnpm", "yarn", "bun"} and len(tokens) >= 2:
+        return tokens[1] in {"add", "install"}
+    if executable == "composer" and len(tokens) >= 2:
+        return tokens[1] in {"install", "require"}
+    if executable == "poetry" and len(tokens) >= 2:
+        return tokens[1] in {"install", "add"}
+    if executable == "uv" and len(tokens) >= 2:
+        return tokens[1] in {"sync", "add"} or (len(tokens) >= 3 and tokens[1:3] == ["pip", "install"])
+    if executable == "pip" and len(tokens) >= 2:
+        return tokens[1] == "install"
+    if executable == "go" and len(tokens) >= 2:
+        return tokens[1] in {"get", "mod"}
+    if executable in {"bundle", "cargo", "mix"} and len(tokens) >= 2:
+        return tokens[1] in {"install", "fetch", "deps.get"}
+    return False
 
 
 def commands_match(reported: str, actual: str) -> bool:
@@ -793,6 +789,12 @@ def write_artifacts(
             [
                 f"{item.get('status')}: {item.get('command')} - {item.get('reason')}"
                 for item in contract.get("test_execution_checks", [])
+            ]
+        ),
+        "dependency_changes": spec_agent.md_list(
+            [
+                f"{item.get('scope')}: {item.get('package')} - {item.get('reason')} ({', '.join(item.get('files_changed', []))})"
+                for item in contract.get("dependency_changes", [])
             ]
         ),
         "acceptance_criteria_covered": spec_agent.md_list(contract.get("acceptance_criteria_covered", [])),

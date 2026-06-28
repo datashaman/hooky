@@ -67,7 +67,7 @@
             "Navigate through the project-configured baseURL or `/` instead of hardcoded filesystem paths.",
             "Interact only with public TodoMVC controls and standard TodoMVC selectors.",
             "Cover localStorage persistence and route filtering.",
-            "Install or sync already-declared project dependencies when needed for Playwright discovery or execution.",
+            "Install or add required test tooling dependencies when needed for Playwright discovery or execution, and report dependency_changes.",
             "Run generated Playwright tests to prove the suite is red before Builder implementation, and report failures without fixing production code."
         ]
     },

@@ -24,6 +24,10 @@ Generated: {{ generated_at }}
 
 {{ test_execution_checks }}
 
+## Dependency Changes
+
+{{ dependency_changes }}
+
 ## Acceptance Criteria Covered
 
 {{ acceptance_criteria_covered }}
