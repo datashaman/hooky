@@ -1,10 +1,16 @@
 # TodoMVC Agent Context
 
-This fixture represents a plain browser TodoMVC project used to evaluate SDLC agents.
+This fixture represents a React TodoMVC project used to evaluate SDLC agents.
 
 ## Application Shape
 
-- The app is a TodoMVC-compatible single page application.
+- The app is a TodoMVC-compatible React single page application.
+- Use a Vite-style React shape unless the approved spec says otherwise:
+  - `index.html` as the browser entry document.
+  - `src/main.jsx` as the React mount entry point.
+  - `src/App.jsx` for TodoMVC application behavior.
+  - `src/styles.css` or equivalent CSS for TodoMVC presentation.
+- Mount the React app into `#root`.
 - The UI uses the standard TodoMVC DOM conventions and class names.
 - State is stored in browser `localStorage`.
 - Routing uses hash fragments:
@@ -35,4 +41,3 @@ This fixture represents a plain browser TodoMVC project used to evaluate SDLC ag
 - The Test Agent must not create or modify production implementation files.
 - The Test Agent must not introduce new dependencies.
 - The Test Agent must preserve the approved acceptance criteria exactly.
-

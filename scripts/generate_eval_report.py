@@ -35,10 +35,15 @@ SNAPSHOT_MAX_ENTRIES = 240
 SNAPSHOT_EXCLUDED_DIRS = {
     ".git",
     ".pytest_cache",
+    ".venv",
     "__pycache__",
+    "build",
+    "dist",
     "node_modules",
     "playwright-report",
+    "target",
     "test-results",
+    "vendor",
 }
 
 

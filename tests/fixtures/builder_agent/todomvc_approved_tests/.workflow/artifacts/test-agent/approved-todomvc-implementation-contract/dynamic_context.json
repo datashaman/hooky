@@ -1,87 +1,87 @@
 {
-  "approved_spec": {
-    "acceptance_criteria": [
-      "When there are no todos, the main todo list area and footer are hidden.",
-      "The new-todo input is focused on page load.",
-      "Pressing Enter in the new-todo input creates a todo only after trimming whitespace and rejecting empty input.",
-      "The new-todo input is cleared after a todo is created.",
-      "The mark-all checkbox toggles all todos and reflects whether all individual todos are completed.",
-      "Each todo can be marked complete or active individually via interaction with the todo item.",
-      "Double-clicking a todo label enters editing mode and focuses the edit input.",
-      "Edits are saved on blur and on pressing Enter after trimming whitespace; empty edited titles destroy the todo.",
-      "Escape while editing discards changes and exits editing mode.",
-      "Hovering a todo shows its remove button.",
-      "The active counter is pluralized correctly: 0 items, 1 item, 2 items.",
-      "The clear-completed button is visible only when completed todos exist and removes completed todos when clicked.",
-      "Todos persist to localStorage using item fields compatible with id, title, and completed.",
-      "Editing state is not persisted.",
-      "Routes are supported for all (#/), active (#/active), and completed (#/completed) filters.",
-      "Changing routes filters the todo list and updates the selected filter link.",
-      "If a todo changes state while a route filter is applied, the visible list updates immediately.",
-      "The active route/filter persists across reloads."
-    ],
-    "affected_components": [
-      "App shell",
-      "Todo model",
-      "localStorage store",
-      "Hash router",
-      "Filters",
-      "Active counter",
-      "Clear-completed control",
-      "Mark-all toggle"
-    ],
-    "cost_plan": {
-      "complexity": "small",
-      "max_iterations": 3,
-      "model_route": {
-        "test": "generate behavior-focused browser or DOM tests"
-      }
+    "approved_spec": {
+        "acceptance_criteria": [
+            "When there are no todos, the main todo list area and footer are hidden.",
+            "The new-todo input is focused on page load.",
+            "Pressing Enter in the new-todo input creates a todo only after trimming whitespace and rejecting empty input.",
+            "The new-todo input is cleared after a todo is created.",
+            "The mark-all checkbox toggles all todos and reflects whether all individual todos are completed.",
+            "Each todo can be marked complete or active individually via interaction with the todo item.",
+            "Double-clicking a todo label enters editing mode and focuses the edit input.",
+            "Edits are saved on blur and on pressing Enter after trimming whitespace; empty edited titles destroy the todo.",
+            "Escape while editing discards changes and exits editing mode.",
+            "Hovering a todo shows its remove button.",
+            "The active counter is pluralized correctly: 0 items, 1 item, 2 items.",
+            "The clear-completed button is visible only when completed todos exist and removes completed todos when clicked.",
+            "Todos persist to localStorage using item fields compatible with id, title, and completed.",
+            "Editing state is not persisted.",
+            "Routes are supported for all (#/), active (#/active), and completed (#/completed) filters.",
+            "Changing routes filters the todo list and updates the selected filter link.",
+            "If a todo changes state while a route filter is applied, the visible list updates immediately.",
+            "The active route/filter persists across reloads."
+        ],
+        "affected_components": [
+            "App shell",
+            "Todo model",
+            "localStorage store",
+            "Hash router",
+            "Filters",
+            "Active counter",
+            "Clear-completed control",
+            "Mark-all toggle"
+        ],
+        "cost_plan": {
+            "complexity": "small",
+            "max_iterations": 3,
+            "model_route": {
+                "test": "generate behavior-focused browser or DOM tests"
+            }
+        },
+        "edge_cases": [
+            "Whitespace-only new-todo input is rejected.",
+            "Whitespace-only edited title destroys the todo.",
+            "Malformed localStorage data is handled without persisting editing state.",
+            "Visible list updates immediately under active route filters."
+        ],
+        "non_goals": [
+            "Do not implement the app.",
+            "Do not generate production code.",
+            "Do not add dependencies unrelated to the approved React implementation."
+        ],
+        "requires_human_approval": true,
+        "risks": [
+            "Browser support policy is not defined.",
+            "React toolchain setup must remain minimal and justified by the approved project context."
+        ],
+        "scope": [
+            "Generate executable tests for a React TodoMVC app with an index.html entry and React source under src/."
+        ],
+        "summary": "Approved TodoMVC implementation contract.",
+        "test_plan": [
+            "Use behavior-focused tests for TodoMVC UI workflows.",
+            "Cover localStorage persistence and route filtering."
+        ]
     },
-    "edge_cases": [
-      "Whitespace-only new-todo input is rejected.",
-      "Whitespace-only edited title destroys the todo.",
-      "Malformed localStorage data is handled without persisting editing state.",
-      "Visible list updates immediately under active route filters."
-    ],
-    "non_goals": [
-      "Do not implement the app.",
-      "Do not generate production code.",
-      "Do not add dependencies."
-    ],
-    "requires_human_approval": true,
-    "risks": [
-      "Framework is not selected.",
-      "Browser support policy is not defined."
-    ],
-    "scope": [
-      "Generate executable tests for a plain browser TodoMVC app."
-    ],
-    "summary": "Approved TodoMVC implementation contract.",
-    "test_plan": [
-      "Use behavior-focused tests for TodoMVC UI workflows.",
-      "Cover localStorage persistence and route filtering."
-    ]
-  },
-  "generated_at": "2026-06-27T13:34:55+00:00",
-  "source": "approved_spec_contract",
-  "spec_source": "TodoMVC approved spec to executable tests",
-  "tools": {
-    "available": [
-      "read_file",
-      "write_file",
-      "list_files",
-      "grep_files",
-      "find_files",
-      "bash",
-      "todo_read",
-      "todo_write"
-    ],
-    "todo_required": true
-  },
-  "workspace": {
-    "artifact_root": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t/tests/generated",
-    "project_root": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t",
-    "report_root": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t/.workflow/artifacts/test-agent",
-    "working_folder": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t"
-  }
+    "generated_at": "2026-06-27T13:34:55+00:00",
+    "source": "approved_spec_contract",
+    "spec_source": "TodoMVC approved spec to executable tests",
+    "tools": {
+        "available": [
+            "read_file",
+            "write_file",
+            "list_files",
+            "grep_files",
+            "find_files",
+            "bash",
+            "todo_read",
+            "todo_write"
+        ],
+        "todo_required": true
+    },
+    "workspace": {
+        "artifact_root": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t/tests/generated",
+        "project_root": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t",
+        "report_root": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t/.workflow/artifacts/test-agent",
+        "working_folder": ".workflow/eval-runs/test-agent/20260627T131505Z/inclusionai-ling-2-6-1t"
+    }
 }

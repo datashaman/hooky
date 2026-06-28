@@ -24,3 +24,6 @@
 
 {{ failures_remaining }}
 
+## Test Contract Findings
+
+{{ test_contract_findings }}

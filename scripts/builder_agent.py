@@ -24,7 +24,34 @@ COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
 STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
 TEMPLATE_ROOT = AGENT_ROOT / "templates"
 SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
-PROJECT_CONTEXT_FILES = [Path("AGENTS.md"), Path("README.md"), Path("package.json"), Path("playwright.config.cjs")]
+PROJECT_CONTEXT_FILES = [
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("pyproject.toml"),
+    Path("requirements.txt"),
+    Path("uv.lock"),
+    Path("package.json"),
+    Path("package-lock.json"),
+    Path("pnpm-lock.yaml"),
+    Path("yarn.lock"),
+    Path("bun.lockb"),
+    Path("Cargo.toml"),
+    Path("Cargo.lock"),
+    Path("go.mod"),
+    Path("go.sum"),
+    Path("composer.json"),
+    Path("composer.lock"),
+    Path("Gemfile"),
+    Path("Gemfile.lock"),
+    Path("mix.exs"),
+    Path("deno.json"),
+    Path("vite.config.js"),
+    Path("vite.config.mjs"),
+    Path("vite.config.ts"),
+    Path("playwright.config.js"),
+    Path("playwright.config.cjs"),
+    Path("playwright.config.mjs"),
+]
 APPROVED_TEST_CONTRACT = Path(".workflow/artifacts/test-agent/approved-todomvc-implementation-contract/contract.json")
 
 
@@ -163,7 +190,6 @@ def generate_contract_with_openrouter(
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=builder ",
         write_blocked_prefixes=[".workflow", "tests"],
-        write_blocked_names=["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "playwright.config.js", "playwright.config.cjs"],
     )
     try:
         result = run_tool_agent(
@@ -229,6 +255,7 @@ def builder_agent_contract_schema() -> dict[str, Any]:
             "tests_run": spec_agent.string_array_schema(),
             "tests_passing": {"type": "boolean"},
             "failures_remaining": spec_agent.string_array_schema(),
+            "test_contract_findings": spec_agent.string_array_schema(),
             "cost_actuals": {"type": "object", "additionalProperties": True},
             "requires_verifier": {"type": "boolean"},
         },
@@ -308,7 +335,10 @@ Dynamic Context:
 
 Use the available tools to inspect project files, approved tests, and runtime behavior as needed.
 Use todo tools to track substantive work. You may write production implementation files only.
-Do not edit approved tests, prior-stage artifacts, dependency manifests, or runtime configuration.
+You may create or update dependency manifests, lockfiles, build config, and toolchain config only when required by the approved spec or project context.
+Do not edit approved tests, prior-stage artifacts, or runtime configuration.
+If deterministic evidence shows the approved tests are invalid, contradictory, or unimplementable without editing tests, stop and report it instead of weakening tests or churning dependencies.
+For invalid approved tests, call final_report with tests_passing false, failures_remaining populated, and test_contract_findings explaining the evidence.
 Finish only by calling final_report with the Builder Agent contract.
 """
 
@@ -329,8 +359,10 @@ def validate_contract(contract: dict[str, Any]) -> None:
         raise ValueError(f"builder contract missing required fields: {', '.join(missing)}")
     if contract["requires_verifier"] is not True:
         raise ValueError("builder contract must require verifier")
-    if not contract["file_writes"]:
-        raise ValueError("builder contract must include production file writes")
+    if contract["tests_passing"] is False and not contract["failures_remaining"]:
+        raise ValueError("builder contract with tests_passing false must list failures_remaining")
+    if not contract["file_writes"] and not contract.get("test_contract_findings"):
+        raise ValueError("builder contract must include production file writes unless reporting invalid approved tests")
     for file_write in contract["file_writes"]:
         validate_file_write(file_write)
 
@@ -345,8 +377,6 @@ def validate_file_write(file_write: dict[str, Any]) -> None:
     blocked_roots = {"tests", ".workflow"}
     if path.parts and path.parts[0] in blocked_roots:
         raise ValueError(f"builder must not write approved tests or prior-stage artifacts: {path}")
-    if path.name in {"package.json", "playwright.config.cjs"}:
-        raise ValueError(f"builder must not change dependency/config files in eval: {path}")
 
 
 def apply_file_writes(working_folder: Path, contract: dict[str, Any]) -> None:
@@ -374,6 +404,7 @@ def write_artifacts(
         "tests_run": spec_agent.md_list(contract.get("tests_run", [])),
         "tests_passing": str(contract.get("tests_passing", False)),
         "failures_remaining": spec_agent.md_list(contract.get("failures_remaining", [])),
+        "test_contract_findings": spec_agent.md_list(contract.get("test_contract_findings", [])),
         "generated_at": generated_at,
     }
     template = (TEMPLATE_ROOT / "build_report.md").read_text(encoding="utf-8")

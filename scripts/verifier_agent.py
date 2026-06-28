@@ -23,7 +23,34 @@ COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
 STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
 TEMPLATE_ROOT = AGENT_ROOT / "templates"
 SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
-PROJECT_CONTEXT_FILES = [Path("AGENTS.md"), Path("README.md"), Path("package.json")]
+PROJECT_CONTEXT_FILES = [
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("pyproject.toml"),
+    Path("requirements.txt"),
+    Path("uv.lock"),
+    Path("package.json"),
+    Path("package-lock.json"),
+    Path("pnpm-lock.yaml"),
+    Path("yarn.lock"),
+    Path("bun.lockb"),
+    Path("Cargo.toml"),
+    Path("Cargo.lock"),
+    Path("go.mod"),
+    Path("go.sum"),
+    Path("composer.json"),
+    Path("composer.lock"),
+    Path("Gemfile"),
+    Path("Gemfile.lock"),
+    Path("mix.exs"),
+    Path("deno.json"),
+    Path("vite.config.js"),
+    Path("vite.config.mjs"),
+    Path("vite.config.ts"),
+    Path("playwright.config.js"),
+    Path("playwright.config.cjs"),
+    Path("playwright.config.mjs"),
+]
 TEST_AGENT_REPORT_ROOT = Path(".workflow/artifacts/test-agent")
 BUILDER_REPORT_ROOT = Path(".workflow/artifacts/builder-agent")
 
@@ -72,6 +99,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
     approved_test_contracts = read_json_files(working_folder / TEST_AGENT_REPORT_ROOT, "contract.json")
     builder_reports = read_json_files(working_folder / BUILDER_REPORT_ROOT, "contract.json")
     package_json = read_optional_json(working_folder / "package.json")
+    project_manifests = read_project_context_files(working_folder)
     return {
         "source": "builder_agent_workspace",
         "workspace": {
@@ -87,6 +115,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         "approved_test_contracts": approved_test_contracts,
         "builder_reports": builder_reports,
         "package_json": package_json,
+        "project_manifests": project_manifests,
         "generated_at": generated_at,
     }
 
@@ -263,7 +292,7 @@ Dynamic Context:
 Use the available tools to inspect files and run deterministic checks.
 Use todo tools to track the verification work.
 You must not edit code, tests, dependency manifests, config, or prior-stage artifacts.
-If the project defines `npm test`, run it. If lint, static analysis, or security commands are defined, run them too.
+Run the project-defined test command for the detected toolchain. If lint, static analysis, or security commands are defined, run them too.
 Compare approved test artifact contents against files in the working folder when content is available in prior-stage contracts.
 Finish only by calling final_report with the Verifier Agent contract.
 """
@@ -357,6 +386,14 @@ def read_optional_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     return spec_agent.read_json(path)
+
+
+def read_project_context_files(working_folder: Path) -> dict[str, str]:
+    return {
+        path.as_posix(): (working_folder / path).read_text(encoding="utf-8")
+        for path in PROJECT_CONTEXT_FILES
+        if (working_folder / path).exists()
+    }
 
 
 if __name__ == "__main__":

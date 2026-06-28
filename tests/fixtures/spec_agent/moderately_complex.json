@@ -1,50 +1,85 @@
 {
-  "name": "concrete TodoMVC implementation spec",
-  "issue": {
-    "number": 1001,
-    "title": "Implement a TodoMVC application",
-    "body": "Context:\n\nThis repository is empty. We want the agentic SDLC pipeline to start with a Spec Agent contract for implementing the canonical TodoMVC app. The implementation will come later; this issue is only asking the Spec Agent to produce a clear implementation contract and acceptance-test plan.\n\nReference material:\n\nUse the official TodoMVC application specification as the product source of truth:\nhttps://raw.githubusercontent.com/tastejs/todomvc/refs/heads/master/app-spec.md\n\nConcrete target:\n\nCreate a TodoMVC web app implementation spec for a plain browser-based app. The spec should describe the expected user behavior, artifacts, and tests without choosing a JavaScript framework unless that is a blocking question.\n\nRequired behavior to cover:\n\n- When there are no todos, the main todo list area and footer are hidden.\n- The new-todo input is focused on page load.\n- Pressing Enter in the new-todo input creates a todo only after trimming whitespace and rejecting empty input.\n- The new-todo input is cleared after a todo is created.\n- The mark-all checkbox toggles all todos and reflects whether all individual todos are complete.\n- Each todo can be marked complete or active individually.\n- Double-clicking a todo label enters editing mode and focuses the edit input.\n- Edits are saved on blur and Enter after trimming whitespace.\n- Empty edited titles destroy the todo.\n- Escape while editing discards changes and exits editing mode.\n- Hovering a todo shows its remove button.\n- The active counter is pluralized correctly: 0 items, 1 item, 2 items.\n- The clear-completed button is visible only when completed todos exist and removes completed todos when clicked.\n- Todos persist to localStorage using item fields compatible with id, title, and completed.\n- Editing state is not persisted.\n- Routes are supported for all, active, and completed filters using #/, #/active, and #/completed.\n- Changing routes filters the todo list and updates the selected filter link.\n- If a todo changes state while filtered, the visible list updates immediately.\n- The active route/filter persists across reloads.\n\nNon-goals for this first spec:\n\n- Do not implement the app.\n- Do not generate production code.\n- Do not generate executable tests yet.\n- Do not add dependencies yet.\n- Do not decide a framework unless the issue explicitly provides one.\n- Do not change or reinterpret TodoMVC behavior beyond the official spec.\n\nKnown ambiguity:\n\n- The framework is not chosen.\n- The exact directory structure is not chosen beyond following the official TodoMVC guidance and the eventual framework's best practices.\n- Browser support policy is not defined in this repo yet.\n\nSpec Agent instruction:\n\nCreate a specification contract only. The output must include acceptance criteria, affected components/artifacts, edge cases, non-goals, risks, cost plan, model routing recommendation, and an implementation test plan. Ask only blocking questions."
-  },
-  "expect": {
-    "min_acceptance_criteria": 10,
-    "min_test_plan_items": 8,
-    "min_risks": 2,
-    "required_topics": [
-      "TodoMVC",
-      "new-todo input",
-      "trim",
-      "mark-all",
-      "editing mode",
-      "Escape",
-      "clear completed",
-      "localStorage",
-      "routing",
-      "#/active",
-      "#/completed",
-      "active counter",
-      "pluralized",
-      "editing state",
-      "framework"
-    ],
-    "topic_aliases": {
-      "clear completed": ["clear completed", "clear-completed"],
-      "pluralized": ["pluralized", "pluralization"],
-      "routing": ["routing", "routes", "route"],
-      "editing state": ["editing state", "edit state"],
-      "new-todo input": ["new-todo input", "new todo input"],
-      "production code": ["production code", "production implementation", "code generation", "generate code"],
-      "executable tests": ["executable tests", "test generation", "generate tests"],
-      "dependencies": ["dependencies", "dependency"]
+    "name": "concrete TodoMVC implementation spec",
+    "issue": {
+        "number": 1001,
+        "title": "Implement a TodoMVC application",
+        "body": "Context:\n\nThis repository is empty. We want the agentic SDLC pipeline to start with a Spec Agent contract for implementing the canonical TodoMVC app. The implementation will come later; this issue is only asking the Spec Agent to produce a clear implementation contract and acceptance-test plan.\n\nReference material:\n\nUse the official TodoMVC application specification as the product source of truth:\nhttps://raw.githubusercontent.com/tastejs/todomvc/refs/heads/master/app-spec.md\n\nConcrete target:\n\nCreate a TodoMVC web app implementation spec for a React app. The app should be browser-runnable from a normal project entry point, with an `index.html` document that mounts React into `#root`, and React source files under `src/`. Use a lightweight Vite-style project shape unless the project context provides a different React convention.\n\nRequired behavior to cover:\n\n- When there are no todos, the main todo list area and footer are hidden.\n- The new-todo input is focused on page load.\n- Pressing Enter in the new-todo input creates a todo only after trimming whitespace and rejecting empty input.\n- The new-todo input is cleared after a todo is created.\n- The mark-all checkbox toggles all todos and reflects whether all individual todos are complete.\n- Each todo can be marked complete or active individually.\n- Double-clicking a todo label enters editing mode and focuses the edit input.\n- Edits are saved on blur and Enter after trimming whitespace.\n- Empty edited titles destroy the todo.\n- Escape while editing discards changes and exits editing mode.\n- Hovering a todo shows its remove button.\n- The active counter is pluralized correctly: 0 items, 1 item, 2 items.\n- The clear-completed button is visible only when completed todos exist and removes completed todos when clicked.\n- Todos persist to localStorage using item fields compatible with id, title, and completed.\n- Editing state is not persisted.\n- Routes are supported for all, active, and completed filters using #/, #/active, and #/completed.\n- Changing routes filters the todo list and updates the selected filter link.\n- If a todo changes state while filtered, the visible list updates immediately.\n- The active route/filter persists across reloads.\n\nNon-goals for this first spec:\n\n- Do not implement the app.\n- Do not generate production code.\n- Do not generate executable tests yet.\n- Do not add dependencies unrelated to the approved React implementation.\n- Do not change or reinterpret TodoMVC behavior beyond the official spec.\n\nKnown ambiguity:\n\n- Browser support policy is not defined in this repo yet.\n- The exact React component boundaries are not chosen beyond following the project context and a minimal Vite-style shape.\n\nSpec Agent instruction:\n\nCreate a specification contract only. The output must include acceptance criteria, affected components/artifacts, edge cases, non-goals, risks, cost plan, model routing recommendation, and an implementation test plan. Ask only blocking questions."
     },
-    "forbidden_topics": [
-      "implementation diff",
-      "database migration code",
-      "API route code"
-    ],
-    "non_goals": [
-      "production code",
-      "executable tests",
-      "dependencies"
-    ]
-  }
+    "expect": {
+        "min_acceptance_criteria": 10,
+        "min_test_plan_items": 8,
+        "min_risks": 2,
+        "required_topics": [
+            "TodoMVC",
+            "new-todo input",
+            "trim",
+            "mark-all",
+            "editing mode",
+            "Escape",
+            "clear completed",
+            "localStorage",
+            "routing",
+            "#/active",
+            "#/completed",
+            "active counter",
+            "pluralized",
+            "editing state",
+            "React",
+            "index.html",
+            "src/"
+        ],
+        "topic_aliases": {
+            "clear completed": [
+                "clear completed",
+                "clear-completed"
+            ],
+            "pluralized": [
+                "pluralized",
+                "pluralization"
+            ],
+            "routing": [
+                "routing",
+                "routes",
+                "route"
+            ],
+            "editing state": [
+                "editing state",
+                "edit state"
+            ],
+            "new-todo input": [
+                "new-todo input",
+                "new todo input"
+            ],
+            "production code": [
+                "production code",
+                "production implementation",
+                "code generation",
+                "generate code"
+            ],
+            "executable tests": [
+                "executable tests",
+                "test generation",
+                "generate tests"
+            ],
+            "dependencies": [
+                "dependencies",
+                "dependency"
+            ],
+            "unapproved dependencies": [
+                "unapproved dependencies",
+                "dependencies unrelated",
+                "unrelated dependencies"
+            ]
+        },
+        "forbidden_topics": [
+            "implementation diff",
+            "database migration code",
+            "API route code"
+        ],
+        "non_goals": [
+            "production code",
+            "executable tests",
+            "unapproved dependencies"
+        ]
+    }
 }

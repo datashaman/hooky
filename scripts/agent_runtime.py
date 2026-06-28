@@ -665,7 +665,12 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         return f"matches={len(matches)} pattern={quote_value(str(arguments.get('pattern') or ''), 120)}"
     if name in {"todo_read", "todo_write"}:
         items = result.get("items") if isinstance(result.get("items"), list) else []
-        return f"items={len(items)}"
+        detail = f"items={len(items)}"
+        if name == "todo_write":
+            active = active_todo_label(items)
+            if active:
+                detail += f" active={quote_value(active, 180)}"
+        return detail
     if name == "web_search":
         results = result.get("results") if isinstance(result.get("results"), list) else []
         return f"results={len(results)} query={quote_value(str(arguments.get('query') or ''), 160)}"
@@ -687,6 +692,26 @@ def format_duration(value: Any) -> str:
 
 def quote_value(value: str, max_chars: int) -> str:
     return '"' + single_line(value, max_chars).replace('"', '\\"') + '"'
+
+
+def active_todo_label(items: list[Any]) -> str | None:
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or item.get("state") or "").lower()
+        if status in {"active", "in_progress", "in-progress", "doing"}:
+            return todo_label(item)
+    for item in items:
+        if isinstance(item, dict) and item.get("completed") is False:
+            return todo_label(item)
+    return None
+
+
+def todo_label(item: dict[str, Any]) -> str:
+    value = item.get("description") or item.get("content") or item.get("task") or item.get("title")
+    if value:
+        return str(value)
+    return compact_json(item, 180)
 
 
 def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:

@@ -12,6 +12,13 @@ A passing Builder Agent output:
 - supports hash routes `#/`, `#/active`, and `#/completed`
 - produces a concise build report
 
+A valid failing Builder Agent output:
+
+- leaves approved tests untouched
+- provides deterministic evidence that approved tests are invalid, contradictory, or unimplementable
+- stops without dependency churn or unrelated implementation changes
+- sets `tests_passing` false and lists concrete `failures_remaining`
+
 Critical failures:
 
 - editing approved tests
@@ -20,4 +27,4 @@ Critical failures:
 - creating tests instead of implementation
 - inventing behavior outside the approved spec
 - relying on non-browser mocks instead of browser behavior
-
+- repeatedly changing dependencies to work around invalid approved tests

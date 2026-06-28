@@ -6,7 +6,7 @@ Generated: 2026-06-27T13:34:55+00:00
 
 ## Summary
 
-Behavior-focused browser/DOM tests for TodoMVC covering all 18 acceptance criteria including localStorage persistence, hash routing, filtering, editing, and edge cases.
+Behavior-focused browser/DOM tests for a React TodoMVC app covering all acceptance criteria including localStorage persistence, hash routing, filtering, editing, and edge cases.
 
 ## Test Files
 
@@ -72,4 +72,3 @@ Behavior-focused browser/DOM tests for TodoMVC covering all 18 acceptance criter
 ## Human Approval
 
 Required before Builder Agent runs.
-

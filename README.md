@@ -1,6 +1,6 @@
 # Hooky
 
-Hooky is an agentic SDLC pipeline driven from GitHub issue and pull request events.
+Hooky is an agentic SDLC pipeline driven from issue events and system-owned change proposals.
 
 ## First Flow: Issue To Spec
 
@@ -10,11 +10,22 @@ The workflow:
 
 1. Reads the labeled GitHub issue.
 2. Generates specification artifacts only.
-3. Commits those artifacts to a branch named `sdlc/spec-issue-<number>`.
-4. Opens a pull request for human approval.
-5. Comments on the original issue with the PR link.
+3. Writes auditable spec artifacts.
+4. Waits for human approval before tests are generated.
 
 The Spec Agent never edits production code.
+
+## Change Proposals And Git
+
+Hooky treats the Builder stage's main handoff as a change proposal. Locally, that proposal is a system-owned artifact with git metadata, not a model-authored pull request:
+
+- `.workflow/artifacts/change-proposals/<task-id>/summary.md`
+- `.workflow/artifacts/change-proposals/<task-id>/patch.diff`
+- `.workflow/artifacts/change-proposals/<task-id>/proposal.json`
+
+Hooky snapshots the project immediately before Builder runs and derives the proposal from the Builder delta. `proposal.json` records the suggested branch name, current branch, changed files, Builder summary, test claims, and hosted PR fields. `hosted_pr_url` is `null` unless a later GitHub integration actually publishes a remote pull request.
+
+`hooky init` initializes a local git repository by default when the target folder is not already a git worktree. Use `--no-git` for workspaces where Hooky should not touch git setup.
 
 ## Agent Context
 
@@ -110,6 +121,8 @@ The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and track
 
 The Test Agent writes executable tests and fixtures at project-native paths chosen from the workspace context. Hooky reports, contracts, context snapshots, and runtime transcripts stay under `.workflow`.
 
+The Builder Agent writes production files only. When the approved spec or project context requires it, Builder may also create or update the project toolchain files needed to run and verify that implementation. If approved tests are invalid or unimplementable without editing tests, Builder should stop with `tests_passing=false` and record the evidence instead of weakening tests or churning dependencies. After the Builder returns, Hooky creates the local change proposal artifact from git status and diff evidence.
+
 ## Local Spec Agent Eval
 
 Run the Spec Agent against a moderately complex fixture. The runner fetches current OpenRouter model metadata, sorts configured candidate models by estimated cost, then moves up that priced ladder until one passes deterministic checks plus AI judge eval:
@@ -174,7 +187,7 @@ Generate a static HTML pipeline health report from local eval reports:
 uv run python scripts/generate_eval_report.py
 ```
 
-The report is written to `.workflow/eval-runs/report.html` and scans existing `report.json` files directly, so it also works before `.workflow/eval-runs/index.json` has been created. It includes per-attempt filesystem snapshots with noisy dependency folders such as `node_modules` omitted.
+The report is written to `.workflow/eval-runs/report.html` and scans existing `report.json` files directly, so it also works before `.workflow/eval-runs/index.json` has been created. It includes per-attempt filesystem snapshots with noisy dependency/build folders omitted.
 
 Useful overrides:
 

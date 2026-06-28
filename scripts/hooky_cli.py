@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import difflib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -210,14 +211,276 @@ def resolve_workspace_path(workspace: Path, path: Path) -> Path:
     return workspace_path if workspace_path.exists() else path
 
 
+def git_command(workspace: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def is_git_worktree(workspace: Path) -> bool:
+    result = git_command(workspace, ["rev-parse", "--is-inside-work-tree"], check=False)
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def git_optional(workspace: Path, args: list[str]) -> str | None:
+    result = git_command(workspace, args, check=False)
+    if result.returncode != 0:
+        return None
+    text = result.stdout.strip()
+    return text or None
+
+
+def git_status_entries(workspace: Path) -> list[dict[str, str]]:
+    result = git_command(
+        workspace,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".", ":!.workflow"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    records = [record for record in result.stdout.split("\0") if record]
+    entries: list[dict[str, str]] = []
+    index = 0
+    while index < len(records):
+        record = records[index]
+        status = record[:2]
+        path = record[3:]
+        if status[:1] in {"R", "C"} and index + 1 < len(records):
+            index += 1
+            path = records[index]
+        entries.append({"status": status.strip() or status, "path": path})
+        index += 1
+    return entries
+
+
+def git_patch_for_workspace(workspace: Path, entries: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    tracked = git_command(workspace, ["diff", "--binary", "--", ".", ":!.workflow"], check=False)
+    if tracked.stdout:
+        parts.append(tracked.stdout.rstrip() + "\n")
+    for entry in entries:
+        if entry["status"] != "??":
+            continue
+        path = workspace / entry["path"]
+        if not path.is_file():
+            continue
+        diff = git_command(workspace, ["diff", "--no-index", "--binary", "--", "/dev/null", entry["path"]], check=False)
+        output = diff.stdout or diff.stderr
+        if output:
+            parts.append(output.rstrip() + "\n")
+    return "\n".join(parts)
+
+
+def snapshot_project_files(workspace: Path) -> dict[str, bytes]:
+    snapshot: dict[str, bytes] = {}
+    skipped_dirs = {
+        ".git",
+        ".workflow",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "target",
+        "vendor",
+    }
+    for path in workspace.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            relative = path.relative_to(workspace)
+        except ValueError:
+            continue
+        if any(part in skipped_dirs for part in relative.parts):
+            continue
+        snapshot[relative.as_posix()] = path.read_bytes()
+    return snapshot
+
+
+def snapshot_delta_entries(before: dict[str, bytes], after: dict[str, bytes]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for path in sorted(set(before) | set(after)):
+        if path not in before:
+            entries.append({"status": "A", "path": path})
+        elif path not in after:
+            entries.append({"status": "D", "path": path})
+        elif before[path] != after[path]:
+            entries.append({"status": "M", "path": path})
+    return entries
+
+
+def patch_from_snapshots(before: dict[str, bytes], after: dict[str, bytes], entries: list[dict[str, str]]) -> str:
+    patches: list[str] = []
+    for entry in entries:
+        path = entry["path"]
+        before_bytes = before.get(path)
+        after_bytes = after.get(path)
+        before_text = decode_patch_text(before_bytes)
+        after_text = decode_patch_text(after_bytes)
+        if before_text is None or after_text is None:
+            patches.append(binary_patch_notice(path, entry["status"]))
+            continue
+        fromfile = "/dev/null" if before_bytes is None else f"a/{path}"
+        tofile = "/dev/null" if after_bytes is None else f"b/{path}"
+        diff = difflib.unified_diff(
+            before_text.splitlines(keepends=True),
+            after_text.splitlines(keepends=True),
+            fromfile=fromfile,
+            tofile=tofile,
+        )
+        body = "".join(diff)
+        if body:
+            patches.append(f"diff --git a/{path} b/{path}\n{body.rstrip()}\n")
+    return "\n".join(patches)
+
+
+def decode_patch_text(content: bytes | None) -> str | None:
+    if content is None:
+        return ""
+    if b"\0" in content:
+        return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def binary_patch_notice(path: str, status: str) -> str:
+    return f"diff --git a/{path} b/{path}\nBinary file changed ({status})\n"
+
+
+def change_proposal_dir(workspace: Path, task_id: str) -> Path:
+    return workflow_dir(workspace) / "artifacts/change-proposals" / task_id
+
+
+def create_change_proposal(
+    *,
+    workspace: Path,
+    state: dict[str, Any],
+    builder_contract_path: Path,
+    generated_at: str,
+    before_snapshot: dict[str, bytes] | None = None,
+) -> dict[str, Any]:
+    task_id = state["task_id"]
+    proposal_dir = change_proposal_dir(workspace, task_id)
+    proposal_dir.mkdir(parents=True, exist_ok=True)
+    builder_contract = read_json(builder_contract_path)
+    git_available = is_git_worktree(workspace)
+    git_entries = git_status_entries(workspace) if git_available else []
+    if before_snapshot is not None:
+        after_snapshot = snapshot_project_files(workspace)
+        entries = snapshot_delta_entries(before_snapshot, after_snapshot)
+        patch = patch_from_snapshots(before_snapshot, after_snapshot, entries)
+    else:
+        entries = git_entries
+        patch = git_patch_for_workspace(workspace, entries) if git_available else ""
+    branch_suggestion = f"sdlc/{task_id}"
+    origin = git_optional(workspace, ["remote", "get-url", "origin"]) if git_available else None
+    current_branch = git_optional(workspace, ["branch", "--show-current"]) if git_available else None
+    changed_files = [entry["path"] for entry in entries]
+    proposal = {
+        "schema_version": 1,
+        "type": "local_git_change_proposal",
+        "task_id": task_id,
+        "title": state.get("title"),
+        "created_at": generated_at,
+        "git": {
+            "available": git_available,
+            "current_branch": current_branch,
+            "proposal_branch": branch_suggestion,
+            "origin": origin,
+            "hosted_pr_url": None,
+            "hosted_pr_available": bool(origin),
+        },
+        "builder": {
+            "contract": display_workspace_path(builder_contract_path, workspace),
+            "summary": builder_contract.get("summary"),
+            "tests_run": builder_contract.get("tests_run", []),
+            "tests_passing": builder_contract.get("tests_passing"),
+            "failures_remaining": builder_contract.get("failures_remaining", []),
+        },
+        "changed_files": changed_files,
+        "status_entries": entries,
+        "git_status_entries": git_entries,
+        "artifacts": {
+            "summary": "summary.md",
+            "patch": "patch.diff",
+            "proposal": "proposal.json",
+        },
+    }
+    (proposal_dir / "patch.diff").write_text(patch, encoding="utf-8")
+    (proposal_dir / "summary.md").write_text(render_change_proposal_summary(proposal), encoding="utf-8")
+    write_json(proposal_dir / "proposal.json", proposal)
+    return proposal
+
+
+def display_workspace_path(path: Path, workspace: Path) -> str:
+    try:
+        return path.relative_to(workspace).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def render_change_proposal_summary(proposal: dict[str, Any]) -> str:
+    builder = proposal.get("builder", {})
+    git = proposal.get("git", {})
+    lines = [
+        f"# {proposal.get('title') or proposal.get('task_id')}",
+        "",
+        "## Summary",
+        "",
+        str(builder.get("summary") or "No builder summary provided."),
+        "",
+        "## Git Proposal",
+        "",
+        f"- Type: {proposal.get('type')}",
+        f"- Current branch: {git.get('current_branch') or 'unknown'}",
+        f"- Suggested branch: {git.get('proposal_branch')}",
+        f"- Remote: {git.get('origin') or 'none'}",
+        f"- Hosted PR URL: {git.get('hosted_pr_url') or 'not created'}",
+        "",
+        "## Changed Files",
+        "",
+    ]
+    changed_files = proposal.get("changed_files") or []
+    lines.extend(f"- {path}" for path in changed_files)
+    if not changed_files:
+        lines.append("- None detected")
+    lines.extend(
+        [
+            "",
+            "## Tests Run",
+            "",
+        ]
+    )
+    tests_run = builder.get("tests_run") or []
+    lines.extend(f"- {test}" for test in tests_run)
+    if not tests_run:
+        lines.append("- None reported")
+    failures = builder.get("failures_remaining") or []
+    lines.extend(["", "## Remaining Failures", ""])
+    lines.extend(f"- {failure}" for failure in failures)
+    if not failures:
+        lines.append("- None reported")
+    return "\n".join(lines) + "\n"
+
+
 @app.command()
 def init(
     ctx: typer.Context,
     force: Annotated[bool, typer.Option(help="Overwrite existing Hooky runtime files.")] = False,
+    git: Annotated[bool, typer.Option("--git/--no-git", help="Initialize a local git repository when the workspace is not already a worktree.")] = True,
 ) -> None:
     """Initialize a workspace with Hooky runtime context."""
     workspace = workspace_from_ctx(ctx)
     workspace.mkdir(parents=True, exist_ok=True)
+    if git and not is_git_worktree(workspace):
+        git_command(workspace, ["init"], check=True)
     copy_missing(repo_file(".workflow/agents"), workspace / ".workflow/agents", force=force)
     copy_missing(repo_file("AGENTS.md"), workspace / "AGENTS.md", force=force)
     (workspace / ".workflow/tasks").mkdir(parents=True, exist_ok=True)
@@ -383,16 +646,52 @@ def run_builder(ctx: typer.Context, task: Annotated[str | None, typer.Option(hel
     state = load_task_state(workspace, task)
     require_approval(state, "test")
     set_stage_status(workspace, state, "builder", "running")
+    before_builder = snapshot_project_files(workspace)
     try:
         with in_workspace(workspace):
-            report_dir, _contract, usage = builder_agent.generate_build_artifacts(working_folder=Path("."), generated_at=utc_now())
+            generated_at = utc_now()
+            report_dir, contract, usage = builder_agent.generate_build_artifacts(working_folder=Path("."), generated_at=generated_at)
     except Exception as exc:
         set_stage_status(workspace, state, "builder", "failed", error=str(exc))
         raise
-    state["artifacts"]["builder"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "builder", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
+    builder_contract_path = report_dir / "contract.json"
+    proposal = create_change_proposal(
+        workspace=workspace,
+        state=state,
+        builder_contract_path=builder_contract_path,
+        generated_at=generated_at,
+        before_snapshot=before_builder,
+    )
+    proposal_dir = change_proposal_dir(workspace, state["task_id"])
+    state["artifacts"]["builder"] = {
+        "report_dir": report_dir.as_posix(),
+        "contract": builder_contract_path.as_posix(),
+        "proposal_dir": display_workspace_path(proposal_dir, workspace),
+        "proposal": display_workspace_path(proposal_dir / "proposal.json", workspace),
+        "patch": display_workspace_path(proposal_dir / "patch.diff", workspace),
+        "summary": display_workspace_path(proposal_dir / "summary.md", workspace),
+        "hosted_pr_url": proposal["git"].get("hosted_pr_url"),
+        "usage": usage,
+    }
+    builder_passed = contract.get("tests_passing") is True
+    builder_status = "passed" if builder_passed else "failed"
+    failure_summary = "; ".join(str(item) for item in contract.get("failures_remaining", [])[:3])
+    set_stage_status(
+        workspace,
+        state,
+        "builder",
+        builder_status,
+        contract=builder_contract_path.as_posix(),
+        proposal=display_workspace_path(proposal_dir / "proposal.json", workspace),
+        report_dir=report_dir.as_posix(),
+        cost=usage.get("cost"),
+        error=None if builder_passed else failure_summary or "Builder reported tests_passing=false",
+    )
     save_task_state(workspace, state)
+    typer.echo(f"builder proposal: {proposal_dir}")
     typer.echo(f"builder report: {report_dir}")
+    if not builder_passed:
+        raise RuntimeError(f"builder reported tests_passing=false: {failure_summary or 'see builder report'}")
     typer.echo("next: hooky run verifier")
 
 
@@ -517,6 +816,10 @@ def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Ta
         for key in ["artifact_dir", "report_dir", "contract"]:
             if artifact.get(key):
                 typer.echo(f"  {key}: {artifact[key]}")
+        if stage == "builder":
+            for key in ["proposal_dir", "proposal", "patch", "summary", "hosted_pr_url"]:
+                if artifact.get(key):
+                    typer.echo(f"  {key}: {artifact[key]}")
         if stage == "test":
             for path in artifact.get("test_files", []):
                 typer.echo(f"  test_file: {path}")

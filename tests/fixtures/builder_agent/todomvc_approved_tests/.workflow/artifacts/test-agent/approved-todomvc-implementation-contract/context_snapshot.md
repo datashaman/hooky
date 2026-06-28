@@ -74,15 +74,15 @@
     "non_goals": [
       "Do not implement the app.",
       "Do not generate production code.",
-      "Do not add dependencies."
+      "Do not add dependencies unrelated to the approved React implementation."
     ],
     "requires_human_approval": true,
     "risks": [
-      "Framework is not selected.",
-      "Browser support policy is not defined."
+      "Browser support policy is not defined.",
+      "React toolchain setup must remain minimal and justified by the approved project context."
     ],
     "scope": [
-      "Generate executable tests for a plain browser TodoMVC app."
+      "Generate executable tests for a React TodoMVC app with an index.html entry and React source under src/."
     ],
     "summary": "Approved TodoMVC implementation contract.",
     "test_plan": [

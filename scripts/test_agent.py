@@ -24,7 +24,81 @@ COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
 STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
 TEMPLATE_ROOT = AGENT_ROOT / "templates"
 SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
-PROJECT_CONTEXT_FILES = [Path("AGENTS.md")]
+PROJECT_CONTEXT_FILES = [
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("pyproject.toml"),
+    Path("requirements.txt"),
+    Path("uv.lock"),
+    Path("package.json"),
+    Path("package-lock.json"),
+    Path("pnpm-lock.yaml"),
+    Path("yarn.lock"),
+    Path("bun.lockb"),
+    Path("Cargo.toml"),
+    Path("Cargo.lock"),
+    Path("go.mod"),
+    Path("go.sum"),
+    Path("composer.json"),
+    Path("composer.lock"),
+    Path("Gemfile"),
+    Path("Gemfile.lock"),
+    Path("mix.exs"),
+    Path("deno.json"),
+    Path("vite.config.js"),
+    Path("vite.config.mjs"),
+    Path("vite.config.ts"),
+    Path("playwright.config.js"),
+    Path("playwright.config.cjs"),
+    Path("playwright.config.mjs"),
+]
+TOOLCHAIN_FILE_NAMES = {
+    "bun.lockb",
+    "Cargo.lock",
+    "Cargo.toml",
+    "composer.json",
+    "composer.lock",
+    "deno.json",
+    "Gemfile",
+    "Gemfile.lock",
+    "go.mod",
+    "go.sum",
+    "mix.exs",
+    "package-lock.json",
+    "package.json",
+    "playwright.config.cjs",
+    "playwright.config.js",
+    "playwright.config.mjs",
+    "pnpm-lock.yaml",
+    "pyproject.toml",
+    "requirements.txt",
+    "uv.lock",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.ts",
+    "yarn.lock",
+}
+INSTALL_COMMAND_BLOCKLIST = [
+    "bundle install",
+    "cargo install",
+    "composer install",
+    "composer require",
+    "go get ",
+    "mix deps.get",
+    "npm add",
+    "npm i ",
+    "npm install",
+    "pip install",
+    "playwright install",
+    "pnpm add",
+    "pnpm install",
+    "poetry add",
+    "poetry install",
+    "uv add",
+    "uv pip install",
+    "yarn add",
+    "yarn install",
+]
 
 
 def main() -> int:
@@ -114,25 +188,8 @@ def generate_contract_with_openrouter(
         live_log_root=report_root,
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
-        write_blocked_names=[
-            "package.json",
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-            "playwright.config.js",
-            "playwright.config.cjs",
-            "playwright.config.mjs",
-        ],
-        bash_blocked_substrings=[
-            "npm install",
-            "npm add",
-            "npm i ",
-            "pnpm install",
-            "pnpm add",
-            "yarn install",
-            "yarn add",
-            "playwright install",
-        ],
+        write_blocked_names=sorted(TOOLCHAIN_FILE_NAMES),
+        bash_blocked_substrings=INSTALL_COMMAND_BLOCKLIST,
     )
     try:
         result = run_tool_agent(
@@ -370,7 +427,7 @@ def validate_test_artifact_path(item: dict[str, Any], label: str) -> None:
         raise ValueError(f"{label} path must be relative and stay inside working folder: {path}")
     if path.parts and path.parts[0] == ".workflow":
         raise ValueError(f"{label} must not be written under .workflow: {path}")
-    if path.name in {"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "playwright.config.cjs"}:
+    if path.name in TOOLCHAIN_FILE_NAMES:
         raise ValueError(f"{label} must not modify dependency or config files: {path}")
 
 

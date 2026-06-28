@@ -23,7 +23,34 @@ COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
 STATIC_CONTEXT_ROOT = AGENT_ROOT / "static"
 TEMPLATE_ROOT = AGENT_ROOT / "templates"
 SELECTED_MODEL_PATH = AGENT_ROOT / "selected_model.json"
-PROJECT_CONTEXT_FILES = [Path("AGENTS.md"), Path("README.md"), Path("package.json")]
+PROJECT_CONTEXT_FILES = [
+    Path("AGENTS.md"),
+    Path("README.md"),
+    Path("pyproject.toml"),
+    Path("requirements.txt"),
+    Path("uv.lock"),
+    Path("package.json"),
+    Path("package-lock.json"),
+    Path("pnpm-lock.yaml"),
+    Path("yarn.lock"),
+    Path("bun.lockb"),
+    Path("Cargo.toml"),
+    Path("Cargo.lock"),
+    Path("go.mod"),
+    Path("go.sum"),
+    Path("composer.json"),
+    Path("composer.lock"),
+    Path("Gemfile"),
+    Path("Gemfile.lock"),
+    Path("mix.exs"),
+    Path("deno.json"),
+    Path("vite.config.js"),
+    Path("vite.config.mjs"),
+    Path("vite.config.ts"),
+    Path("playwright.config.js"),
+    Path("playwright.config.cjs"),
+    Path("playwright.config.mjs"),
+]
 SPEC_REPORT_ROOTS = [Path("docs/specs"), Path(".workflow/artifacts/specs"), Path(".workflow/artifacts/spec-agent")]
 TEST_REPORT_ROOT = Path(".workflow/artifacts/test-agent")
 BUILDER_REPORT_ROOT = Path(".workflow/artifacts/builder-agent")
