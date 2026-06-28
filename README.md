@@ -77,6 +77,33 @@ Selected model:
 
 There is no non-AI generation path. If OpenRouter is unavailable or the key is missing, the workflow fails without creating spec artifacts.
 
+## Local CLI Workflow
+
+Hooky provides a Typer CLI for local workspaces. Commands default to the current directory; use `-C` to run against another workspace.
+
+```bash
+uv run hooky init
+uv run hooky task create --title "Implement TodoMVC" --body-file issue.md
+uv run hooky run spec
+uv run hooky approve spec
+uv run hooky run test
+uv run hooky approve test
+uv run hooky run builder
+uv run hooky run verifier
+uv run hooky run eval
+uv run hooky report
+```
+
+For a separate workspace:
+
+```bash
+uv run hooky -C /tmp/todomvc init
+uv run hooky -C /tmp/todomvc task create --title "Implement TodoMVC" --body-file issue.md
+uv run hooky -C /tmp/todomvc run pipeline --auto-approve
+```
+
+The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths.
+
 ## Local Spec Agent Eval
 
 Run the Spec Agent against a moderately complex fixture. The runner fetches current OpenRouter model metadata, sorts configured candidate models by estimated cost, then moves up that priced ladder until one passes deterministic checks plus AI judge eval:
