@@ -21,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import builder_agent
+import agent_runtime
 import eval_agent
 import generate_eval_report
 import spec_agent
@@ -429,6 +430,23 @@ def require_artifact(state: dict[str, Any], stage: str) -> None:
         raise typer.BadParameter(f"{stage} has not run yet.")
 
 
+def runtime_log_dir(workspace: Path, stage: str, state: dict[str, Any]) -> Path:
+    if stage == "spec":
+        return workspace / ".workflow/artifacts/specs/_runtime"
+    artifact = state.get("artifacts", {}).get(stage, {})
+    if artifact.get("report_dir"):
+        return workspace / artifact["report_dir"]
+    defaults = {
+        "test": ".workflow/artifacts/test-agent",
+        "builder": ".workflow/artifacts/builder-agent",
+        "verifier": ".workflow/artifacts/verifier-agent",
+        "eval": ".workflow/artifacts/eval-agent",
+    }
+    if stage in defaults:
+        return workspace / defaults[stage]
+    raise typer.BadParameter(f"unknown stage: {stage}")
+
+
 @app.command()
 def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None) -> None:
     """Show the current task's pipeline state and artifact locations."""
@@ -454,6 +472,58 @@ def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Ta
                 typer.echo(f"  test_file: {path}")
             for path in artifact.get("fixtures", []):
                 typer.echo(f"  fixture: {path}")
+
+
+@app.command()
+def trace(
+    ctx: typer.Context,
+    stage: Annotated[str, typer.Argument(help="Stage to inspect: spec, test, builder, verifier, or eval.")],
+    task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
+    raw_path: Annotated[bool, typer.Option("--path", help="Only print the tool-call summary file path.")] = False,
+    refresh: Annotated[bool, typer.Option("--refresh", help="Regenerate the summary from tool_events.json.")] = False,
+) -> None:
+    """Show a readable tool-call timeline for an agent stage."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_initialized(workspace)
+    state = load_task_state(workspace, task)
+    log_dir = runtime_log_dir(workspace, stage, state)
+    summary_path = log_dir / "runtime_timeline.md"
+    if raw_path:
+        typer.echo(summary_path)
+        return
+    metadata_path = log_dir / "runtime_metadata.json"
+    if metadata_path.exists():
+        metadata = read_json(metadata_path)
+        typer.echo(f"stage: {stage}")
+        typer.echo(f"status: {metadata.get('status', 'unknown')}")
+        typer.echo(f"model: {metadata.get('variant_id') or metadata.get('model') or 'unknown'}")
+        if metadata.get("error"):
+            typer.echo(f"error: {metadata['error']}")
+        usage = metadata.get("usage") if isinstance(metadata.get("usage"), dict) else {}
+        events = metadata.get("events") if isinstance(metadata.get("events"), dict) else {}
+        typer.echo(f"cost: {usage.get('cost', 0)}")
+        typer.echo(f"tool_calls: {events.get('tool_calls', 0)}")
+        typer.echo("")
+    if summary_path.exists() and not refresh:
+        typer.echo(summary_path.read_text(encoding="utf-8").rstrip())
+        return
+    transcript_path = log_dir / "runtime_transcript.json"
+    if transcript_path.exists():
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+        if isinstance(transcript, list):
+            rendered = agent_runtime.render_runtime_timeline_markdown(transcript)
+            summary_path.write_text(rendered, encoding="utf-8")
+            typer.echo(rendered.rstrip())
+            return
+    events_path = log_dir / "tool_events.json"
+    if not events_path.exists():
+        raise typer.BadParameter(f"tool-call log not found: {events_path}")
+    events = json.loads(events_path.read_text(encoding="utf-8"))
+    if not isinstance(events, list):
+        raise typer.BadParameter(f"tool-call log is not a list: {events_path}")
+    rendered = agent_runtime.render_tool_calls_markdown(events)
+    summary_path.write_text(rendered, encoding="utf-8")
+    typer.echo(rendered.rstrip())
 
 
 @app.command()

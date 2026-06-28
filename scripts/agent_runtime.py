@@ -295,6 +295,8 @@ def run_tool_agent(
                     if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
                         raise AgentRunError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget after compaction", current_result())
 
+                assistant_started_at = utc_timestamp()
+                assistant_start = time.monotonic()
                 completion = client.chat.send(
                     model=model,
                     messages=messages,
@@ -302,12 +304,23 @@ def run_tool_agent(
                     tool_choice="auto",
                     **spec_agent.openrouter_request_options(),
                 )
+                assistant_ended_at = utc_timestamp()
+                assistant_duration_ms = round((time.monotonic() - assistant_start) * 1000, 2)
                 usage = spec_agent.response_usage(completion)
                 accumulate_usage(total_usage, usage)
                 message = completion.choices[0].message
                 message_payload = message.model_dump(exclude_none=True) if hasattr(message, "model_dump") else message
                 messages.append(message_payload)
-                transcript.append({"role": "assistant", "message": message_payload, "usage": usage})
+                transcript.append(
+                    {
+                        "role": "assistant",
+                        "message": message_payload,
+                        "usage": usage,
+                        "started_at": assistant_started_at,
+                        "ended_at": assistant_ended_at,
+                        "duration_ms": assistant_duration_ms,
+                    }
+                )
 
                 tool_calls = getattr(message, "tool_calls", None) or []
                 if not tool_calls:
@@ -316,6 +329,8 @@ def run_tool_agent(
 
                 for tool_call in tool_calls:
                     name = tool_call.function.name
+                    tool_started_at = utc_timestamp()
+                    tool_start = time.monotonic()
                     try:
                         args = json.loads(tool_call.function.arguments or "{}")
                     except json.JSONDecodeError as exc:
@@ -323,7 +338,15 @@ def run_tool_agent(
                         result = {"ok": False, "error": f"invalid JSON tool arguments: {exc}"}
                     else:
                         result = runtime.run_tool(name, args)
-                    event = {"tool_call_id": tool_call.id, "name": name, "arguments": args, "result": result}
+                    event = {
+                        "tool_call_id": tool_call.id,
+                        "name": name,
+                        "arguments": args,
+                        "result": result,
+                        "started_at": tool_started_at,
+                        "ended_at": utc_timestamp(),
+                        "duration_ms": round((time.monotonic() - tool_start) * 1000, 2),
+                    }
                     tool_events.append(event)
                     transcript.append({"role": "tool", **event})
                     messages.append(
@@ -478,12 +501,174 @@ def write_runtime_log(
     report_root.mkdir(parents=True, exist_ok=True)
     (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (report_root / "tool_calls.md").write_text(render_tool_calls_markdown(tool_events), encoding="utf-8")
+    (report_root / "runtime_timeline.md").write_text(render_runtime_timeline_markdown(transcript), encoding="utf-8")
     (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (report_root / "runtime_metadata.json").write_text(
         json.dumps(metadata or {"schema_version": 1, "written_at": utc_timestamp()}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
+    lines = ["# Runtime Timeline", ""]
+    items = [item for item in transcript if item.get("role") in {"assistant", "tool", "compaction", "pre_compaction"}]
+    if not items:
+        lines.append("No runtime events recorded.")
+        lines.append("")
+        return "\n".join(lines)
+    for index, item in enumerate(items, 1):
+        role = item.get("role")
+        if role == "assistant":
+            message = item.get("message") if isinstance(item.get("message"), dict) else {}
+            tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+            usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
+            lines.append(f"## {index}. `assistant`")
+            timing = summarize_tool_timing(item)
+            details = timing + [
+                f"tool calls requested: {len(tool_calls)}",
+                f"cost: {usage.get('cost', 0)}",
+                f"tokens: {usage.get('total_tokens', 0)}",
+            ]
+            names = [
+                call.get("function", {}).get("name")
+                for call in tool_calls
+                if isinstance(call, dict) and isinstance(call.get("function"), dict)
+            ]
+            if names:
+                details.append("tools requested: " + ", ".join(str(name) for name in names))
+            lines.extend(f"- {detail}" for detail in details)
+            lines.append("")
+        elif role == "tool":
+            name = str(item.get("name") or "unknown")
+            result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            status = "ok" if result.get("ok") is True else "error" if result.get("ok") is False else "unknown"
+            arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            lines.append(f"## {index}. `tool:{name}` `{status}`")
+            details = summarize_tool_timing(item) + summarize_tool_event(name, arguments, result)
+            lines.extend(f"- {detail}" for detail in details)
+            lines.append("")
+        else:
+            lines.append(f"## {index}. `{role}`")
+            lines.extend(f"- {detail}" for detail in summarize_tool_timing(item))
+            lines.append("")
+    return "\n".join(lines)
+
+
+def render_tool_calls_markdown(tool_events: list[dict[str, Any]]) -> str:
+    lines = ["# Tool Calls", ""]
+    if not tool_events:
+        lines.append("No tool calls recorded.")
+        lines.append("")
+        return "\n".join(lines)
+    for index, event in enumerate(tool_events, 1):
+        name = str(event.get("name") or "unknown")
+        arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        status = "ok" if result.get("ok") is True else "error" if result.get("ok") is False else "unknown"
+        lines.append(f"## {index}. `{name}` `{status}`")
+        summary = summarize_tool_event(name, arguments, result)
+        timing = summarize_tool_timing(event)
+        if timing:
+            summary = timing + summary
+        if summary:
+            lines.append("")
+            lines.extend(f"- {item}" for item in summary)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def summarize_tool_timing(event: dict[str, Any]) -> list[str]:
+    timing: list[str] = []
+    if event.get("started_at"):
+        timing.append(f"started: {event['started_at']}")
+    if event.get("ended_at"):
+        timing.append(f"ended: {event['ended_at']}")
+    if event.get("duration_ms") is not None:
+        timing.append(f"duration: {event['duration_ms']}ms")
+    return timing
+
+
+def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> list[str]:
+    summary: list[str] = []
+    display_args = display_tool_arguments(name, arguments)
+    if display_args:
+        summary.append("args: " + compact_json(display_args, 300))
+    if result.get("error"):
+        summary.append("error: " + str(result["error"])[:500])
+    if name == "read_file":
+        content = str(result.get("content") or "")
+        summary.append(f"path: `{result.get('path') or arguments.get('path')}`")
+        summary.append(f"bytes read: {len(content.encode('utf-8'))}")
+    elif name == "write_file":
+        summary.append(f"path: `{result.get('path') or arguments.get('path')}`")
+        summary.append(f"bytes written: {result.get('bytes', len(str(arguments.get('content') or '').encode('utf-8')))}")
+    elif name == "list_files":
+        entries = result.get("entries") if isinstance(result.get("entries"), list) else []
+        summary.append(f"entries: {len(entries)}")
+        if entries:
+            summary.append("sample: " + ", ".join(str(item.get("path")) for item in entries[:12]))
+    elif name == "find_files":
+        matches = result.get("matches") if isinstance(result.get("matches"), list) else []
+        summary.append(f"matches: {len(matches)}")
+        if matches:
+            summary.append("sample: " + ", ".join(str(item) for item in matches[:12]))
+    elif name == "grep_files":
+        matches = result.get("matches") if isinstance(result.get("matches"), list) else []
+        summary.append(f"matches: {len(matches)}")
+        if matches:
+            summary.append("sample: " + "; ".join(f"{item.get('path')}:{item.get('line')}" for item in matches[:8] if isinstance(item, dict)))
+    elif name == "bash":
+        summary.append(f"returncode: {result.get('returncode')}")
+        stdout = str(result.get("stdout") or "").strip()
+        stderr = str(result.get("stderr") or "").strip()
+        if stdout:
+            summary.append("stdout: " + single_line(stdout, 500))
+        if stderr:
+            summary.append("stderr: " + single_line(stderr, 500))
+    elif name == "todo_read":
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        summary.append(f"todo items: {len(items)}")
+    elif name == "todo_write":
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        summary.append(f"todo items: {len(items)}")
+        for item in items[:8]:
+            if isinstance(item, dict):
+                label = item.get("content") or item.get("task") or item.get("title") or compact_json(item, 120)
+                status = item.get("status") or item.get("state")
+                summary.append(f"todo: {status + ' ' if status else ''}{single_line(str(label), 160)}")
+    elif name == "web_search":
+        results = result.get("results") if isinstance(result.get("results"), list) else []
+        summary.append(f"results: {len(results)}")
+        for item in results[:5]:
+            if isinstance(item, dict):
+                summary.append(f"result: {single_line(str(item.get('title') or ''), 120)} {item.get('url') or ''}")
+    elif name == "fetch_url":
+        content = str(result.get("content") or "")
+        summary.append(f"url: `{result.get('url') or arguments.get('url')}`")
+        summary.append(f"status: {result.get('status')}")
+        summary.append(f"bytes read: {len(content.encode('utf-8'))}")
+    elif name == "final_report":
+        summary.append("final report submitted")
+    return summary
+
+
+def display_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if name in {"read_file", "write_file", "fetch_url"}:
+        return {key: value for key, value in arguments.items() if key != "content"}
+    if name == "todo_write":
+        return {}
+    return arguments
+
+
+def compact_json(value: Any, max_chars: int) -> str:
+    return single_line(json.dumps(value, sort_keys=True, default=str), max_chars)
+
+
+def single_line(value: str, max_chars: int) -> str:
+    cleaned = " ".join(value.split())
+    return cleaned if len(cleaned) <= max_chars else cleaned[: max_chars - 3] + "..."
 
 
 def build_runtime_metadata(
