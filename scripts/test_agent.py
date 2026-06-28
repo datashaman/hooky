@@ -532,6 +532,8 @@ def validate_matching_execution_checks(command: str, result: dict[str, Any], che
         if not any(check.get("status") == "skipped" and has_missing_dependency_reason(str(check.get("reason") or "")) for check in checks):
             raise ValueError(f"missing-dependency test execution command must be reported as skipped with reason: {command}")
         return
+    if command_failed_due_harness_error(result):
+        raise ValueError(f"test execution command failed due setup/runtime/harness error, not expected red-phase behavior: {command}")
     if not any(check.get("status") == "failed" for check in checks):
         raise ValueError(f"failed test execution command must be reported as failed: {command}")
 
@@ -653,6 +655,26 @@ def command_failed_due_missing_dependency(result: dict[str, Any]) -> bool:
         "no such file or directory",
         "could not resolve",
         "missing script",
+    )
+    return any(marker in text for marker in markers)
+
+
+def command_failed_due_harness_error(result: dict[str, Any]) -> bool:
+    text = " ".join(str(result.get(key) or "") for key in ("stdout", "stderr", "error")).lower()
+    markers = (
+        "address already in use",
+        "configuration error",
+        "could not start server",
+        "eaddrinuse",
+        "invalid selector",
+        "permission denied",
+        "securityerror",
+        "server closed unexpectedly",
+        "syntaxerror",
+        "test suite failed to run",
+        "timeout waiting for",
+        "unexpected token",
+        "uncaught exception",
     )
     return any(marker in text for marker in markers)
 

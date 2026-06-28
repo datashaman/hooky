@@ -10,4 +10,5 @@
 - Include localStorage setup and cleanup when testing persistence.
 - Include route setup and cleanup when testing route-filter behavior.
 - Make test filenames and fixture names concrete and predictable.
-
+- If generated tests are run before implementation, failures must be meaningful red-phase behavior failures.
+- Do not treat setup, syntax, configuration, server, selector, permission, or runtime harness errors as a valid red phase.

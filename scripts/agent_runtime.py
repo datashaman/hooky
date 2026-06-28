@@ -6,6 +6,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import signal
 import subprocess
 import time
 import urllib.error
@@ -61,8 +62,11 @@ class ToolRuntime:
     write_blocked_names: list[str] = field(default_factory=list)
     bash_blocked_substrings: list[str] = field(default_factory=list)
     bash_command_validator: Callable[[str], str | None] | None = None
+    bash_protected_prefixes: list[str] = field(default_factory=list)
     todo_items: list[dict[str, Any]] = field(default_factory=list)
     tool_events: list[dict[str, Any]] = field(default_factory=list)
+    managed_processes: dict[str, subprocess.Popen[str]] = field(default_factory=dict)
+    next_process_id: int = 1
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -86,6 +90,25 @@ class ToolRuntime:
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("grep_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("bash", "Run a shell command in the working folder with a timeout.", {"command": string_schema()}, ["command"]),
+            tool_schema(
+                "start_process",
+                "Start a long-running local process in the working folder, such as a development server.",
+                {
+                    "command": string_schema(),
+                    "name": string_schema(default="process"),
+                    "wait_for_url": string_schema(default=""),
+                    "wait_seconds": integer_schema(default=3, minimum=0, maximum=60),
+                },
+                ["command"],
+            ),
+            tool_schema(
+                "read_process",
+                "Read recent stdout/stderr output from a managed long-running process.",
+                {"process_id": string_schema(), "max_bytes": integer_schema(default=8000, minimum=1, maximum=20000)},
+                ["process_id"],
+            ),
+            tool_schema("stop_process", "Stop a managed long-running process.", {"process_id": string_schema()}, ["process_id"]),
+            tool_schema("list_processes", "List managed long-running processes.", {}, []),
             tool_schema(
                 "web_search",
                 "Search the web for source material and return normalized result metadata.",
@@ -120,6 +143,10 @@ class ToolRuntime:
             "find_files": self.find_files,
             "grep_files": self.grep_files,
             "bash": self.bash,
+            "start_process": self.start_process,
+            "read_process": self.read_process,
+            "stop_process": self.stop_process,
+            "list_processes": self.list_processes,
             "web_search": self.web_search,
             "fetch_url": self.fetch_url,
             "todo_read": self.todo_read,
@@ -207,6 +234,7 @@ class ToolRuntime:
             violation = self.bash_command_validator(command)
             if violation:
                 return {"ok": False, "error": f"bash command blocked by agent policy: {violation}"}
+        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
         completed = subprocess.run(
             command,
             cwd=self.working_folder,
@@ -215,12 +243,114 @@ class ToolRuntime:
             capture_output=True,
             timeout=self.bash_timeout_seconds,
         )
+        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
+        if protected_changes:
+            restore_protected_paths(self.working_folder, before, protected_changes)
+            return {
+                "ok": False,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout[-8000:],
+                "stderr": completed.stderr[-8000:],
+                "error": "bash command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20]),
+            }
         return {
             "ok": completed.returncode == 0,
             "returncode": completed.returncode,
             "stdout": completed.stdout[-8000:],
             "stderr": completed.stderr[-8000:],
         }
+
+    def start_process(self, args: dict[str, Any]) -> dict[str, Any]:
+        command = str(args["command"])
+        process_id = f"proc-{self.next_process_id}"
+        self.next_process_id += 1
+        log_path = self.working_folder / ".workflow" / "managed-processes" / f"{process_id}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_path.open("a", encoding="utf-8")
+        process = subprocess.Popen(
+            command,
+            cwd=self.working_folder,
+            shell=True,
+            text=True,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        process._hooky_log_handle = log_handle  # type: ignore[attr-defined]
+        process._hooky_log_path = log_path  # type: ignore[attr-defined]
+        process._hooky_command = command  # type: ignore[attr-defined]
+        process._hooky_name = str(args.get("name") or "process")  # type: ignore[attr-defined]
+        self.managed_processes[process_id] = process
+        wait_seconds = int(args.get("wait_seconds") or 0)
+        wait_for_url = str(args.get("wait_for_url") or "").strip()
+        ready = False
+        if wait_for_url:
+            ready = wait_for_http_url(wait_for_url, wait_seconds)
+        elif wait_seconds > 0:
+            time.sleep(wait_seconds)
+        return {
+            "ok": process.poll() is None,
+            "process_id": process_id,
+            "pid": process.pid,
+            "name": process._hooky_name,  # type: ignore[attr-defined]
+            "command": command,
+            "log_path": relative_to(log_path, self.working_folder),
+            "ready": ready if wait_for_url else None,
+            "returncode": process.poll(),
+            "output": read_tail(log_path, 4000),
+        }
+
+    def read_process(self, args: dict[str, Any]) -> dict[str, Any]:
+        process = self.require_process(str(args["process_id"]))
+        log_path = process._hooky_log_path  # type: ignore[attr-defined]
+        return {
+            "ok": True,
+            "process_id": str(args["process_id"]),
+            "running": process.poll() is None,
+            "returncode": process.poll(),
+            "output": read_tail(log_path, int(args.get("max_bytes") or 8000)),
+        }
+
+    def stop_process(self, args: dict[str, Any]) -> dict[str, Any]:
+        process_id = str(args["process_id"])
+        process = self.require_process(process_id)
+        stopped = stop_managed_process(process)
+        self.managed_processes.pop(process_id, None)
+        return {
+            "ok": True,
+            "process_id": process_id,
+            "stopped": stopped,
+            "returncode": process.poll(),
+            "output": read_tail(process._hooky_log_path, 4000),  # type: ignore[attr-defined]
+        }
+
+    def list_processes(self, _args: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "processes": [
+                {
+                    "process_id": process_id,
+                    "pid": process.pid,
+                    "name": process._hooky_name,  # type: ignore[attr-defined]
+                    "command": process._hooky_command,  # type: ignore[attr-defined]
+                    "running": process.poll() is None,
+                    "returncode": process.poll(),
+                    "log_path": relative_to(process._hooky_log_path, self.working_folder),  # type: ignore[attr-defined]
+                }
+                for process_id, process in self.managed_processes.items()
+            ],
+        }
+
+    def require_process(self, process_id: str) -> subprocess.Popen[str]:
+        process = self.managed_processes.get(process_id)
+        if process is None:
+            raise ValueError(f"unknown managed process: {process_id}")
+        return process
+
+    def cleanup_processes(self) -> None:
+        for process_id, process in list(self.managed_processes.items()):
+            stop_managed_process(process)
+            self.managed_processes.pop(process_id, None)
 
     def fetch_url(self, args: dict[str, Any]) -> dict[str, Any]:
         url = str(args["url"])
@@ -433,6 +563,8 @@ def run_tool_agent(
         append_live_event(runtime, f"{utc_timestamp()} run error error={single_line(str(exc), 300)}")
         flush_live_log(status="error", error=str(exc))
         raise AgentRunError(str(exc), current_result()) from exc
+    finally:
+        runtime.cleanup_processes()
 
     append_live_event(runtime, f"{utc_timestamp()} run success tool_calls={len(tool_events)} cost=${float(total_usage.get('cost') or 0):.8f}")
     flush_live_log(status="success")
@@ -656,6 +788,34 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         if stderr:
             detail += f" stderr={quote_value(stderr, 180)}"
         return detail
+    if name == "start_process":
+        detail = (
+            f"process_id={quote_value(str(result.get('process_id') or ''), 80)} "
+            f"pid={result.get('pid')} ready={result.get('ready')} "
+            f"command={quote_value(str(arguments.get('command') or ''), 180)}"
+        )
+        output = single_line(str(result.get("output") or ""), 180)
+        if output:
+            detail += f" output={quote_value(output, 180)}"
+        return detail
+    if name == "read_process":
+        output = single_line(str(result.get("output") or ""), 180)
+        detail = (
+            f"process_id={quote_value(str(arguments.get('process_id') or ''), 80)} "
+            f"running={result.get('running')} returncode={result.get('returncode')}"
+        )
+        if output:
+            detail += f" output={quote_value(output, 180)}"
+        return detail
+    if name == "stop_process":
+        return (
+            f"process_id={quote_value(str(arguments.get('process_id') or ''), 80)} "
+            f"stopped={result.get('stopped')} returncode={result.get('returncode')}"
+        )
+    if name == "list_processes":
+        processes = result.get("processes") if isinstance(result.get("processes"), list) else []
+        running = sum(1 for item in processes if isinstance(item, dict) and item.get("running") is True)
+        return f"processes={len(processes)} running={running}"
     if name in {"list_files", "find_files"}:
         entries = result.get("entries") if name == "list_files" else result.get("matches")
         count = len(entries) if isinstance(entries, list) else 0
@@ -837,6 +997,37 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
             summary.append("stdout: " + single_line(stdout, 500))
         if stderr:
             summary.append("stderr: " + single_line(stderr, 500))
+    elif name == "start_process":
+        summary.append(f"process id: `{result.get('process_id')}`")
+        summary.append(f"pid: {result.get('pid')}")
+        summary.append(f"ready: {result.get('ready')}")
+        summary.append(f"log path: `{result.get('log_path')}`")
+        output = str(result.get("output") or "").strip()
+        if output:
+            summary.append("output: " + single_line(output, 500))
+    elif name == "read_process":
+        summary.append(f"process id: `{arguments.get('process_id')}`")
+        summary.append(f"running: {result.get('running')}")
+        summary.append(f"returncode: {result.get('returncode')}")
+        output = str(result.get("output") or "").strip()
+        if output:
+            summary.append("output: " + single_line(output, 500))
+    elif name == "stop_process":
+        summary.append(f"process id: `{arguments.get('process_id')}`")
+        summary.append(f"stopped: {result.get('stopped')}")
+        summary.append(f"returncode: {result.get('returncode')}")
+    elif name == "list_processes":
+        processes = result.get("processes") if isinstance(result.get("processes"), list) else []
+        summary.append(f"processes: {len(processes)}")
+        for process in processes[:8]:
+            if isinstance(process, dict):
+                summary.append(
+                    "process: "
+                    + single_line(
+                        f"{process.get('process_id')} pid={process.get('pid')} running={process.get('running')} command={process.get('command')}",
+                        220,
+                    )
+                )
     elif name == "todo_read":
         items = result.get("items") if isinstance(result.get("items"), list) else []
         summary.append(f"todo items: {len(items)}")
@@ -927,6 +1118,10 @@ def available_tool_names() -> list[str]:
         "grep_files",
         "find_files",
         "bash",
+        "start_process",
+        "read_process",
+        "stop_process",
+        "list_processes",
         "web_search",
         "fetch_url",
         "todo_read",
@@ -948,6 +1143,108 @@ def tool_schema(name: str, description: str, properties: dict[str, Any], require
             },
         },
     }
+
+
+def wait_for_http_url(url: str, wait_seconds: int) -> bool:
+    deadline = time.monotonic() + max(wait_seconds, 0)
+    while time.monotonic() <= deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                if 200 <= response.status < 500:
+                    return True
+        except Exception:
+            time.sleep(0.25)
+    return False
+
+
+def read_tail(path: Path, max_bytes: int) -> str:
+    if not path.exists():
+        return ""
+    max_bytes = max(1, max_bytes)
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(size - max_bytes, 0))
+        return handle.read(max_bytes).decode("utf-8", errors="replace")
+
+
+def stop_managed_process(process: subprocess.Popen[str]) -> bool:
+    if process.poll() is not None:
+        close_process_log(process)
+        return False
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        close_process_log(process)
+        return False
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+    close_process_log(process)
+    return True
+
+
+def close_process_log(process: subprocess.Popen[str]) -> None:
+    handle = getattr(process, "_hooky_log_handle", None)
+    if handle is None:
+        return
+    try:
+        handle.close()
+    except Exception:
+        pass
+
+
+def snapshot_protected_paths(root: Path, prefixes: list[str]) -> dict[str, bytes | None]:
+    snapshot: dict[str, bytes | None] = {}
+    for prefix in prefixes:
+        protected = (root / prefix).resolve()
+        if protected.is_file():
+            snapshot[relative_to(protected, root)] = protected.read_bytes()
+        elif protected.is_dir():
+            for path in sorted(protected.rglob("*")):
+                if path.is_file():
+                    snapshot[relative_to(path, root)] = path.read_bytes()
+        else:
+            snapshot[str(Path(prefix))] = None
+    return snapshot
+
+
+def protected_path_changes(root: Path, prefixes: list[str], before: dict[str, bytes | None]) -> list[str]:
+    if not prefixes:
+        return []
+    after = snapshot_protected_paths(root, prefixes)
+    changes: list[str] = []
+    before_keys = set(before)
+    after_keys = set(after)
+    for path in sorted(after_keys - before_keys):
+        if after[path] is not None:
+            changes.append(path)
+    for path in sorted(before_keys - after_keys):
+        if before[path] is not None:
+            changes.append(path)
+    for path in sorted(before_keys & after_keys):
+        if before[path] != after[path]:
+            changes.append(path)
+    return changes
+
+
+def restore_protected_paths(root: Path, before: dict[str, bytes | None], changes: list[str]) -> None:
+    for relative in changes:
+        path = (root / relative).resolve()
+        if path != root and root not in path.parents:
+            continue
+        content = before.get(relative)
+        if content is None:
+            if path.exists():
+                path.unlink()
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
 
 
 def tavily_search(

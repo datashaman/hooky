@@ -190,6 +190,7 @@ def generate_contract_with_openrouter(
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=builder ",
         write_blocked_prefixes=[".workflow", "tests"],
+        bash_protected_prefixes=["tests", "docs/specs", ".workflow/artifacts/test-agent", ".workflow/artifacts/specs"],
     )
     try:
         result = run_tool_agent(
@@ -337,6 +338,7 @@ Use the available tools to inspect project files, approved tests, and runtime be
 Use todo tools to track substantive work. You may write production implementation files only.
 You may create or update dependency manifests, lockfiles, build config, and toolchain config only when required by the approved spec or project context.
 Do not edit approved tests, prior-stage artifacts, or runtime configuration.
+Use managed process tools for long-running local servers: start_process, read_process, stop_process, and list_processes. Do not background servers through bash with `&`, shell job control, or manual port cleanup unless you are only diagnosing an already-orphaned external process.
 If deterministic evidence shows the approved tests are invalid, contradictory, or unimplementable without editing tests, stop and report it instead of weakening tests or churning dependencies.
 For invalid approved tests, call final_report with tests_passing false, failures_remaining populated, and test_contract_findings explaining the evidence.
 Finish only by calling final_report with the Builder Agent contract.

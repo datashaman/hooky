@@ -20,6 +20,10 @@ Agents may assume these basic tools exist:
 - `grep_files(pattern, path)`: search file contents.
 - `find_files(glob, path)`: find files by name or glob.
 - `bash(command)`: run shell commands inside the working folder.
+- `start_process(command, name, wait_for_url, wait_seconds)`: start a long-running local process such as a development server.
+- `read_process(process_id, max_bytes)`: read recent output from a managed process.
+- `stop_process(process_id)`: stop a managed process.
+- `list_processes()`: list managed processes started during the agent run.
 - `web_search(query, max_results, include_domains, exclude_domains)`: search the web for external source material. It requires a configured search provider.
 - `fetch_url(url)`: fetch UTF-8 text from an `http` or `https` URL when a task explicitly references external source material.
 - `todo_read()`: read the current task todo list.
@@ -39,6 +43,8 @@ Agents may assume these basic tools exist:
 - Use `web_search` when source material is named but no URL is provided.
 - Use `fetch_url` for referenced source material that is not present in the working folder.
 - Use `bash` for deterministic local commands such as tests, formatters, and static checks.
+- Use `start_process` for dev servers or other long-running commands needed by tests, then inspect with `read_process` and stop with `stop_process`.
+- Do not background long-running servers through shell job control when managed process tools can run them.
 - Do not use tools to perform responsibilities assigned to another SDLC agent.
 - Do not hide tool failures; include them in the agent report.
 
