@@ -1136,27 +1136,27 @@ def run_stage_sequence(ctx: typer.Context, *, start_stage: str, auto_approve: bo
             if auto_approve:
                 approve_stage(ctx, "spec", "running test...", task)
         except Exception as exc:
-            return [f"spec failed: {exc}"]
+            failures.append(f"spec failed: {exc}")
 
-    if "test" in stages:
+    if not failures and "test" in stages:
         try:
             run_test(ctx, task=task)
             if auto_approve:
                 approve_stage(ctx, "test", "running builder...", task)
         except Exception as exc:
-            return [f"test failed: {exc}"]
+            failures.append(f"test failed: {exc}")
 
-    if "builder" in stages:
+    if not failures and "builder" in stages:
         try:
             run_builder(ctx, task=task)
         except Exception as exc:
-            return [f"builder failed: {exc}"]
+            failures.append(f"builder failed: {exc}")
 
-    if "verifier" in stages:
+    if not failures and "verifier" in stages:
         try:
             run_verifier(ctx, task=task)
         except Exception as exc:
-            return [f"verifier failed: {exc}"]
+            failures.append(f"verifier failed: {exc}")
 
     if "eval" in stages:
         try:
@@ -1190,8 +1190,8 @@ def run_remediation(
     set_pipeline_status(workspace, state, "running", remediation_plan=plan_path.relative_to(workspace).as_posix(), resume_from=start_stage)
     failures = run_stage_sequence(ctx, start_stage=start_stage, auto_approve=auto_approve, task=task)
     if failures:
-        state = load_task_state(workspace, task)
         message = "; ".join(failures)
+        state = load_task_state(workspace, task)
         set_pipeline_status(workspace, state, "failed", error=message)
         raise RuntimeError(message)
     state = load_task_state(workspace, task)
@@ -1223,6 +1223,7 @@ def run_pipeline(
     try:
         if failures:
             message = "; ".join(failures)
+            state = load_task_state(workspace, task)
             set_pipeline_status(workspace, state, "failed", error=message)
             raise RuntimeError(message)
     except Exception:

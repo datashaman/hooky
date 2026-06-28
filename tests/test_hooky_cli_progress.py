@@ -207,6 +207,54 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(current["source"], "builder-test-contract-finding")
         self.assertIn("test helper accesses runtime before setup", current["findings"])
 
+    def test_stage_sequence_runs_eval_after_builder_failure(self) -> None:
+        calls: list[str] = []
+
+        def fail_builder(ctx: object, task: str | None = None) -> None:
+            calls.append("builder")
+            raise RuntimeError("server timeout")
+
+        def run_eval(ctx: object, task: str | None = None) -> None:
+            calls.append("eval")
+
+        with (
+            mock.patch.object(hooky_cli, "run_spec", side_effect=lambda ctx, task=None: calls.append("spec")),
+            mock.patch.object(hooky_cli, "approve_stage", side_effect=lambda ctx, stage, message, task=None: calls.append(f"approve-{stage}")),
+            mock.patch.object(hooky_cli, "run_test", side_effect=lambda ctx, task=None: calls.append("test")),
+            mock.patch.object(hooky_cli, "run_builder", side_effect=fail_builder),
+            mock.patch.object(hooky_cli, "run_verifier", side_effect=lambda ctx, task=None: calls.append("verifier")),
+            mock.patch.object(hooky_cli, "run_eval", side_effect=run_eval),
+        ):
+            failures = hooky_cli.run_stage_sequence(mock.Mock(), start_stage="spec", auto_approve=True, task=None)
+
+        self.assertEqual(failures, ["builder failed: server timeout"])
+        self.assertEqual(calls, ["spec", "approve-spec", "test", "approve-test", "builder", "eval"])
+
+    def test_pipeline_failure_preserves_stage_state_written_during_run(self) -> None:
+        def fail_after_stage_update(ctx: object, start_stage: str, auto_approve: bool, task: str | None) -> list[str]:
+            state = hooky_cli.load_task_state(self.workspace, task)
+            state.setdefault("artifacts", {})["spec"] = {
+                "artifact_dir": "docs/specs/issue-1001-progress",
+                "contract": "docs/specs/issue-1001-progress/contract.json",
+            }
+            hooky_cli.set_stage_status(
+                self.workspace,
+                state,
+                "spec",
+                "passed",
+                contract="docs/specs/issue-1001-progress/contract.json",
+            )
+            return ["builder failed: server timeout"]
+
+        with mock.patch.object(hooky_cli, "run_stage_sequence", side_effect=fail_after_stage_update):
+            result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "pipeline", "--auto-approve"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        saved = hooky_cli.load_task_state(self.workspace)
+        self.assertEqual(saved["pipeline_status"]["status"], "failed")
+        self.assertEqual(saved["stage_status"]["spec"]["status"], "passed")
+        self.assertEqual(saved["artifacts"]["spec"]["contract"], "docs/specs/issue-1001-progress/contract.json")
+
 
 if __name__ == "__main__":
     unittest.main()
