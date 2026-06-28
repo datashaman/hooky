@@ -64,6 +64,14 @@ def main() -> int:
             break
 
     write_report(report_path, fixture, judge_model, ladder_report, attempts, winner, final=True)
+    eval_runtime.update_report_index(
+        "spec-agent",
+        report_path,
+        status=eval_runtime.report_status(winner, final=True),
+        winner=winner,
+        attempts=attempts,
+        total_cost=sum_costs(attempts),
+    )
     print(f"\nreport: {report_path}")
     cleanup_runs(args.run_root, args.keep_runs)
     if winner:

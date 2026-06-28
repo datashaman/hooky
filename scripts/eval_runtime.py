@@ -37,6 +37,47 @@ def write_report(
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def update_report_index(
+    agent_name: str,
+    report_path: Path,
+    *,
+    status: str,
+    winner: dict[str, Any] | None,
+    attempts: list[dict[str, Any]],
+    total_cost: float,
+    index_path: Path = Path(".workflow/eval-runs/index.json"),
+) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    if index_path.exists():
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    else:
+        index = {"schema_version": 1, "runs": [], "latest_by_agent": {}}
+    entry = {
+        "agent": agent_name,
+        "report": report_path.as_posix(),
+        "status": status,
+        "winner_model": model_display_name(winner) if winner else None,
+        "attempt_count": len(attempts),
+        "total_cost": total_cost,
+        "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+    runs = [run for run in index.get("runs", []) if run.get("report") != entry["report"]]
+    runs.append(entry)
+    index["schema_version"] = 1
+    index["runs"] = sorted(runs, key=lambda run: run.get("updated_at", ""))
+    index["latest_by_agent"] = latest_runs_by_agent(index["runs"])
+    index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def latest_runs_by_agent(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        agent = run.get("agent")
+        if isinstance(agent, str):
+            latest[agent] = run
+    return latest
+
+
 def report_status(winner: dict[str, Any] | None, final: bool) -> str:
     return "pass" if winner else "fail" if final else "running"
 
