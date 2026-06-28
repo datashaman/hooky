@@ -184,12 +184,16 @@ def generate_contract_with_openrouter(
         max_cost_usd=float(os.environ.get("TEST_AGENT_MAX_COST_USD", "0.25")),
         max_seconds=int(os.environ.get("TEST_AGENT_MAX_SECONDS", "300")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
-        final_validator=lambda contract: validate_contract(contract, dynamic_context["approved_spec"]),
         live_log_root=report_root,
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
         write_blocked_names=sorted(TOOLCHAIN_FILE_NAMES),
         bash_blocked_substrings=INSTALL_COMMAND_BLOCKLIST,
+    )
+    runtime.final_validator = lambda contract: validate_contract_with_tool_events(
+        contract,
+        dynamic_context["approved_spec"],
+        runtime.tool_events,
     )
     try:
         result = run_tool_agent(
@@ -245,6 +249,22 @@ def artifact_array_schema() -> dict[str, Any]:
     }
 
 
+def execution_check_array_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": True,
+            "required": ["command", "status", "reason"],
+            "properties": {
+                "command": {"type": "string"},
+                "status": {"type": "string", "enum": ["passed", "failed", "skipped"]},
+                "reason": {"type": "string"},
+            },
+        },
+    }
+
+
 def test_agent_contract_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -254,6 +274,7 @@ def test_agent_contract_schema() -> dict[str, Any]:
             "test_files",
             "fixtures",
             "coverage_targets",
+            "test_execution_checks",
             "acceptance_criteria_covered",
             "acceptance_criteria_uncovered",
             "untestable_requirements",
@@ -264,6 +285,7 @@ def test_agent_contract_schema() -> dict[str, Any]:
             "test_files": artifact_array_schema(),
             "fixtures": artifact_array_schema(),
             "coverage_targets": spec_agent.string_array_schema(),
+            "test_execution_checks": execution_check_array_schema(),
             "acceptance_criteria_covered": spec_agent.string_array_schema(),
             "acceptance_criteria_uncovered": spec_agent.string_array_schema(),
             "untestable_requirements": spec_agent.string_array_schema(),
@@ -383,6 +405,7 @@ You have filesystem and shell tools scoped to the working folder. Use the todo t
 Inspect the project context and existing files as needed. Write executable test artifacts at project-native relative paths that match the app's conventions.
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 You may run commands to check syntax or test discovery when useful. Do not write production implementation.
+If you run any syntax, discovery, or test command, include it in test_execution_checks with its actual status. A command that cannot run because project dependencies are missing must be `skipped` with a missing-dependency reason. Do not install dependencies.
 Do not write package manifests, lockfiles, framework config, workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
 In acceptance_criteria_covered, acceptance_criteria_uncovered, and untestable_requirements, include only exact full strings copied from approved_spec.acceptance_criteria. Each list item must contain exactly one approved criterion.
 Do not claim a criterion is covered unless at least one generated test directly asserts that behavior without contradicting another approved criterion.
@@ -396,6 +419,7 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
         "test_files",
         "fixtures",
         "coverage_targets",
+        "test_execution_checks",
         "acceptance_criteria_covered",
         "acceptance_criteria_uncovered",
         "untestable_requirements",
@@ -409,11 +433,148 @@ def validate_contract(contract: dict[str, Any], approved_spec: dict[str, Any]) -
     if not contract["test_files"]:
         raise ValueError("test contract must include test files")
     validate_coverage_lists(contract, approved_spec)
+    validate_execution_check_shape(contract.get("test_execution_checks"))
     for item in contract.get("test_files", []):
         validate_test_artifact_path(item, "test file")
         validate_test_content(item, approved_spec)
     for item in contract.get("fixtures", []):
         validate_test_artifact_path(item, "fixture")
+
+
+def validate_contract_with_tool_events(
+    contract: dict[str, Any],
+    approved_spec: dict[str, Any],
+    tool_events: list[dict[str, Any]],
+) -> None:
+    validate_contract(contract, approved_spec)
+    validate_execution_checks_against_tool_events(contract, tool_events)
+
+
+def validate_execution_check_shape(value: Any) -> None:
+    if not isinstance(value, list):
+        raise ValueError("test_execution_checks must be a list")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"test_execution_checks[{index}] must be an object")
+        for field in ("command", "status", "reason"):
+            if field not in item:
+                raise ValueError(f"test_execution_checks[{index}] missing required field: {field}")
+            if not isinstance(item[field], str) or not item[field].strip():
+                raise ValueError(f"test_execution_checks[{index}].{field} must be a non-empty string")
+        if item["status"] not in {"passed", "failed", "skipped"}:
+            raise ValueError(f"test_execution_checks[{index}].status must be passed, failed, or skipped")
+
+
+def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
+    checks = list(contract.get("test_execution_checks") or [])
+    bash_events = [event for event in tool_events if event.get("name") == "bash"]
+    for event in bash_events:
+        command = str(event.get("arguments", {}).get("command") or "")
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        if is_blocked_install_event(command, result):
+            raise ValueError(f"blocked install command attempted by Test Agent: {command}")
+        if is_test_execution_command(command):
+            matching_checks = [check for check in checks if commands_match(str(check.get("command") or ""), command)]
+            if not matching_checks:
+                raise ValueError(f"test execution command missing from test_execution_checks: {command}")
+            validate_matching_execution_checks(command, result, matching_checks)
+
+    for check in checks:
+        command = str(check.get("command") or "")
+        if str(check.get("status")) != "passed":
+            continue
+        matching_events = [
+            event
+            for event in bash_events
+            if commands_match(command, str(event.get("arguments", {}).get("command") or ""))
+        ]
+        if not matching_events:
+            raise ValueError(f"test_execution_checks claims passed without matching bash event: {command}")
+        if not any(bash_event_passed(event) for event in matching_events):
+            raise ValueError(f"test_execution_checks claims passed but matching bash command did not pass: {command}")
+
+
+def validate_matching_execution_checks(command: str, result: dict[str, Any], checks: list[dict[str, Any]]) -> None:
+    if bash_result_passed(result):
+        if not any(check.get("status") == "passed" for check in checks):
+            raise ValueError(f"passing test execution command must be reported as passed: {command}")
+        return
+    if command_failed_due_missing_dependency(result):
+        if not any(check.get("status") == "skipped" and has_missing_dependency_reason(str(check.get("reason") or "")) for check in checks):
+            raise ValueError(f"missing-dependency test execution command must be reported as skipped with reason: {command}")
+        return
+    if not any(check.get("status") == "failed" for check in checks):
+        raise ValueError(f"failed test execution command must be reported as failed: {command}")
+
+
+def is_blocked_install_event(command: str, result: dict[str, Any]) -> bool:
+    error = str(result.get("error") or "")
+    if "bash command blocked by agent policy" not in error:
+        return False
+    lowered = command.lower()
+    return any(blocked.lower() in lowered for blocked in INSTALL_COMMAND_BLOCKLIST)
+
+
+def is_test_execution_command(command: str) -> bool:
+    lowered = command.lower()
+    markers = (
+        "playwright test",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "bun test",
+        "vitest",
+        "pytest",
+        "cargo test",
+        "go test",
+        "composer test",
+        "phpunit",
+        "rspec",
+        "mix test",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def commands_match(reported: str, actual: str) -> bool:
+    normalized_reported = normalize_command(reported)
+    normalized_actual = normalize_command(actual)
+    return (
+        normalized_reported == normalized_actual
+        or normalized_reported in normalized_actual
+        or normalized_actual in normalized_reported
+    )
+
+
+def normalize_command(command: str) -> str:
+    return " ".join(command.strip().split())
+
+
+def bash_event_passed(event: dict[str, Any]) -> bool:
+    result = event.get("result") if isinstance(event.get("result"), dict) else {}
+    return bash_result_passed(result)
+
+
+def bash_result_passed(result: dict[str, Any]) -> bool:
+    return result.get("ok") is True and int(result.get("returncode") or 0) == 0
+
+
+def command_failed_due_missing_dependency(result: dict[str, Any]) -> bool:
+    text = " ".join(str(result.get(key) or "") for key in ("stdout", "stderr", "error")).lower()
+    markers = (
+        "cannot find module",
+        "module not found",
+        "command not found",
+        "not recognized as an internal or external command",
+        "no such file or directory",
+        "could not resolve",
+        "missing script",
+    )
+    return any(marker in text for marker in markers)
+
+
+def has_missing_dependency_reason(reason: str) -> bool:
+    lowered = reason.lower()
+    return any(marker in lowered for marker in ("missing", "dependency", "dependencies", "not installed", "not present"))
 
 
 def validate_coverage_lists(contract: dict[str, Any], approved_spec: dict[str, Any]) -> None:
@@ -539,6 +700,12 @@ def write_artifacts(
         "test_files": spec_agent.md_list([f"{item['path']}: {item['purpose']}" for item in contract.get("test_files", [])]),
         "fixtures": spec_agent.md_list([f"{item['path']}: {item['purpose']}" for item in contract.get("fixtures", [])]),
         "coverage_targets": spec_agent.md_list(contract.get("coverage_targets", [])),
+        "test_execution_checks": spec_agent.md_list(
+            [
+                f"{item.get('status')}: {item.get('command')} - {item.get('reason')}"
+                for item in contract.get("test_execution_checks", [])
+            ]
+        ),
         "acceptance_criteria_covered": spec_agent.md_list(contract.get("acceptance_criteria_covered", [])),
         "acceptance_criteria_uncovered": spec_agent.md_list(contract.get("acceptance_criteria_uncovered", [])),
         "untestable_requirements": spec_agent.md_list(contract.get("untestable_requirements", [])),

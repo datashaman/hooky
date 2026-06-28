@@ -20,7 +20,12 @@ This fixture represents a React TodoMVC project used to evaluate SDLC agents.
 
 ## Expected Test Style
 
-- Prefer behavior-focused browser or DOM tests.
+- Use Playwright end-to-end tests as the project-native test strategy.
+- Put executable browser tests under `tests/` using the existing `playwright.config.cjs`.
+- Use CommonJS test files unless existing project files indicate otherwise:
+  - `const { test, expect } = require('@playwright/test');`
+- Navigate to `/` through Playwright's configured `baseURL`; do not hardcode absolute local filesystem paths or arbitrary server ports.
+- Prefer behavior-focused browser tests over component tests or private unit tests.
 - Tests should interact through visible TodoMVC controls instead of private implementation functions.
 - Tests may assume standard selectors from TodoMVC markup, such as:
   - `.new-todo`
@@ -34,6 +39,17 @@ This fixture represents a React TodoMVC project used to evaluate SDLC agents.
   - `.filters a`
 - Tests should cover persistence by inspecting `localStorage` only at user-visible workflow boundaries.
 - Tests should avoid depending on internal source file names.
+- Tests should be written so the Builder Agent can satisfy them with a normal React TodoMVC implementation rather than test-only hooks.
+- Do not choose a different test runner unless the approved spec or project files explicitly replace Playwright.
+
+## Available Local Tooling
+
+- `python3` is available for simple static hosting through `python3 -m http.server`.
+- `node`, `npm`, and `npx` are available for project-defined JavaScript commands.
+- `git` is available for repository inspection when needed.
+- The project declares `@playwright/test` in `package.json` and `npm test` maps to `playwright test`.
+- The Playwright config starts a local static server on port 4173 and uses `http://127.0.0.1:4173` as `baseURL`.
+- Dependency installation is outside the Test Agent role. If dependencies are missing in a particular working folder, report discovery as skipped instead of installing them.
 
 ## Project Boundaries
 

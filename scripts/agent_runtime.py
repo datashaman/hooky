@@ -61,6 +61,7 @@ class ToolRuntime:
     write_blocked_names: list[str] = field(default_factory=list)
     bash_blocked_substrings: list[str] = field(default_factory=list)
     todo_items: list[dict[str, Any]] = field(default_factory=list)
+    tool_events: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -407,6 +408,7 @@ def run_tool_agent(
                         "duration_ms": round((time.monotonic() - tool_start) * 1000, 2),
                     }
                     tool_events.append(event)
+                    runtime.tool_events.append(event)
                     transcript.append({"role": "tool", **event})
                     append_live_event(runtime, format_runtime_event_line(transcript[-1]))
                     flush_live_log()

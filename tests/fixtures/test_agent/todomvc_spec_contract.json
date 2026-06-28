@@ -38,7 +38,7 @@
             "complexity": "small",
             "max_iterations": 3,
             "model_route": {
-                "test": "generate behavior-focused browser or DOM tests"
+                "test": "generate behavior-focused Playwright end-to-end tests"
             }
         },
         "edge_cases": [
@@ -59,11 +59,13 @@
             "React toolchain setup must remain minimal and justified by the approved project context."
         ],
         "scope": [
-            "Generate executable tests for a React TodoMVC app with an index.html entry and React source under src/."
+            "Generate executable Playwright tests under tests/ for a React TodoMVC app with an index.html entry and React source under src/."
         ],
         "summary": "Approved TodoMVC implementation contract.",
         "test_plan": [
-            "Use behavior-focused tests for TodoMVC UI workflows.",
+            "Use Playwright end-to-end tests for TodoMVC UI workflows.",
+            "Navigate through the project-configured baseURL or `/` instead of hardcoded filesystem paths.",
+            "Interact only with public TodoMVC controls and standard TodoMVC selectors.",
             "Cover localStorage persistence and route filtering."
         ]
     },
@@ -82,7 +84,8 @@
             "#/completed",
             "plural",
             "footer",
-            "focused"
+            "focused",
+            "Playwright"
         ],
         "forbidden_topics": [
             "implementation code",

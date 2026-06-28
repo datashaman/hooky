@@ -20,6 +20,10 @@ Generated: {{ generated_at }}
 
 {{ coverage_targets }}
 
+## Test Execution Checks
+
+{{ test_execution_checks }}
+
 ## Acceptance Criteria Covered
 
 {{ acceptance_criteria_covered }}
@@ -35,4 +39,3 @@ Generated: {{ generated_at }}
 ## Human Approval
 
 Required before Builder Agent runs.
-
