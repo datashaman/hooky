@@ -10,8 +10,17 @@ import builder_agent  # noqa: E402
 
 class BuilderAgentPolicyTests(unittest.TestCase):
     def test_normal_builder_requires_file_writes(self) -> None:
-        with self.assertRaisesRegex(ValueError, "must include production file writes"):
+        with self.assertRaisesRegex(ValueError, "must include file writes"):
             builder_agent.validate_contract(base_contract())
+
+    def test_builder_file_write_content_is_optional_because_files_are_on_disk(self) -> None:
+        contract = base_contract()
+        contract["file_writes"] = [{"path": "src/App.jsx", "purpose": "Implement app"}]
+
+        builder_agent.validate_contract(contract)
+
+    def test_builder_can_write_tests_as_part_of_tdd_loop(self) -> None:
+        builder_agent.validate_file_write({"path": "tests/todomvc.spec.js", "purpose": "Acceptance coverage"})
 
     def test_remediation_builder_can_report_noop_when_tests_passed(self) -> None:
         builder_agent.validate_contract_for_context(

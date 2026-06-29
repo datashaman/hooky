@@ -13,7 +13,6 @@ from typing import Any
 
 import eval_runtime
 import spec_agent
-import test_agent
 import agent_runtime
 from agent_runtime import build_runtime_metadata
 
@@ -97,11 +96,13 @@ def generate_build_artifacts(
 
 
 def build_dynamic_context(*, working_folder: Path, generated_at: str, report_root: Path) -> dict[str, Any]:
-    approved_contract_path = approved_test_contract_path(working_folder)
-    approved_contract = spec_agent.read_json(approved_contract_path)
-    approved_tests = read_approved_test_artifacts(working_folder, approved_contract)
+    spec_contract_path = approved_spec_contract_path(working_folder)
+    approved_spec_contract = spec_agent.read_json(spec_contract_path)
+    approved_contract_path = optional_approved_test_contract_path(working_folder)
+    approved_contract = spec_agent.read_json(approved_contract_path) if approved_contract_path else None
+    approved_tests = read_approved_test_artifacts(working_folder, approved_contract) if approved_contract else {}
     return {
-        "source": "approved_test_agent_workspace",
+        "source": "approved_spec_tdd_workspace",
         "workspace": {
             "working_folder": working_folder.as_posix(),
             "report_root": report_root.as_posix(),
@@ -110,12 +111,40 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
             "available": agent_runtime.available_tool_names(),
             "todo_required": True,
         },
-        "approved_test_contract_path": display_path(approved_contract_path, working_folder),
-        "approved_test_contract": approved_contract,
+        "approved_spec_contract_path": display_path(spec_contract_path, working_folder),
+        "approved_spec_contract": approved_spec_contract,
+        "approved_test_contract_path": display_path(approved_contract_path, working_folder) if approved_contract_path else "",
+        "approved_test_contract": approved_contract or {},
         "approved_tests": approved_tests,
         "remediation": agent_runtime.read_remediation_context(working_folder, "builder"),
         "generated_at": generated_at,
     }
+
+
+def approved_spec_contract_path(working_folder: Path) -> Path:
+    state_path = working_folder / ".workflow/state.json"
+    if state_path.exists():
+        state = spec_agent.read_json(state_path)
+        current_task = state.get("current_task")
+        task_state_path = working_folder / ".workflow/tasks" / str(current_task) / "state.json"
+        if current_task and task_state_path.exists():
+            task_state = spec_agent.read_json(task_state_path)
+            contract = task_state.get("artifacts", {}).get("spec", {}).get("contract")
+            if contract:
+                return working_folder / contract
+    contracts = sorted((working_folder / "docs/specs").glob("*/contract.json"))
+    if len(contracts) == 1:
+        return contracts[0]
+    if not contracts:
+        raise FileNotFoundError("approved Spec Agent contract not found")
+    raise RuntimeError("multiple Spec Agent contracts found")
+
+
+def optional_approved_test_contract_path(working_folder: Path) -> Path | None:
+    try:
+        return approved_test_contract_path(working_folder)
+    except FileNotFoundError:
+        return None
 
 
 def approved_test_contract_path(working_folder: Path) -> Path:
@@ -195,9 +224,9 @@ def generate_contract_with_openrouter(
         live_event_prefix="stage=builder ",
         read_blocked_prefixes=[".workflow", "node_modules"],
         read_allowed_prefixes=[".workflow/tool-results"],
-        write_blocked_prefixes=[".workflow", "tests"],
+        write_blocked_prefixes=[".workflow"],
         bash_command_validator=builder_bash_command_violation,
-        bash_protected_prefixes=["tests", "docs/specs", ".workflow/artifacts/test-agent", ".workflow/artifacts/specs"],
+        bash_protected_prefixes=["docs/specs", ".workflow/artifacts/test-agent", ".workflow/artifacts/specs"],
     )
     try:
         result = run_tool_agent(
@@ -251,7 +280,7 @@ def builder_agent_contract_schema() -> dict[str, Any]:
                 "items": {
                     "type": "object",
                     "additionalProperties": True,
-                    "required": ["path", "purpose", "content"],
+                    "required": ["path", "purpose"],
                     "properties": {
                         "path": {"type": "string"},
                         "purpose": {"type": "string"},
@@ -341,23 +370,24 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Use the available tools to inspect project files, approved tests, and runtime behavior as needed. Prefer read_file_excerpt/read_many_files over shell snippets, detect_project_environment over package-manager probes, and run_tests over bash for test execution.
-Use todo tools to track substantive work. You may write production implementation files only.
+Use the available tools to inspect project files, the approved spec, optional legacy approved tests, and runtime behavior as needed. Prefer read_file_excerpt/read_many_files over shell snippets, detect_project_environment over package-manager probes, and run_tests over bash for test execution.
+Use todo tools to track substantive work. You own the TDD loop for this task: create or update executable tests from the approved spec, then implement production code until those tests pass.
 You may create or update dependency manifests, lockfiles, build config, and toolchain config only when required by the approved spec or project context.
-Do not edit approved tests, prior-stage artifacts, or runtime configuration.
+Do not edit prior-stage artifacts or runtime configuration. If legacy approved tests are present in dynamic context, treat them as constraints; otherwise generate tests directly from the approved spec.
 Use managed process tools for long-running local servers: start_process, read_process, stop_process, and list_processes. Do not background servers through bash with `&`, shell job control, or manual port cleanup unless you are only diagnosing an already-orphaned external process.
-Run the approved test suite deliberately:
+Run the TDD suite deliberately:
+- Write tests before or alongside implementation, and include every test file you create or update in file_writes.
+- Do not weaken tests just to match a broken implementation. If a test is invalid, fix the test and explain why in test_contract_findings.
 - Run a full approved test command at most twice after implementation changes unless the previous full run passed.
 - After a failed run_tests call, use latest_test_failure_context before reading raw logs or shelling into test artifacts. It writes a concise system-owned diagnostic bundle with the failing command, parsed failures, output tail, and related Playwright error-context files.
 - Rerun only the specific failing test file or focused test while debugging.
-- If approved tests still fail after three implementation attempts, call final_report with tests_passing false and exact failures_remaining instead of continuing to churn.
+- If tests still fail after three implementation attempts, call final_report with tests_passing false and exact failures_remaining instead of continuing to churn.
 Keep failure diagnosis inside the product workspace:
-- Do inspect approved tests, project source/config, run_tests output artifacts, Playwright error-context files under test-results, browser-visible DOM state, and screenshots.
+- Do inspect generated tests, optional legacy approved tests, project source/config, run_tests output artifacts, Playwright error-context files under test-results, browser-visible DOM state, and screenshots.
 - Do not inspect dependency or framework internals such as node_modules, Playwright source, test-runner source, package manager cache directories, or bundled framework code when fixing application behavior.
 - If a focused failing test appears to implicate the test runner itself, report that as a test_contract_finding with evidence instead of spelunking dependency internals.
 If you receive a runtime soft-deadline notice, do not start another long command. Call final_report immediately with the current implementation state, tests_run, tests_passing, and failures_remaining.
-If deterministic evidence shows the approved tests are invalid, contradictory, or unimplementable without editing tests, stop and report it instead of weakening tests or churning dependencies.
-For invalid approved tests, call final_report with tests_passing false, failures_remaining populated, and test_contract_findings explaining the evidence.
+Verifier will audit test integrity and acceptance coverage independently, so make the tests readable, deterministic, and grounded in the approved spec.
 Finish only by calling final_report with the Builder Agent contract.
 """
 
@@ -404,7 +434,7 @@ def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dic
     if contract["tests_passing"] is False and not contract["failures_remaining"]:
         raise ValueError("builder contract with tests_passing false must list failures_remaining")
     if not contract["file_writes"] and not contract.get("test_contract_findings") and not remediation_noop_allowed(contract, dynamic_context):
-        raise ValueError("builder contract must include production file writes unless reporting invalid approved tests")
+        raise ValueError("builder contract must include file writes unless reporting invalid tests")
     for file_write in contract["file_writes"]:
         validate_file_write(file_write)
 
@@ -415,19 +445,21 @@ def remediation_noop_allowed(contract: dict[str, Any], dynamic_context: dict[str
 
 
 def validate_file_write(file_write: dict[str, Any]) -> None:
-    for field in ("path", "purpose", "content"):
+    for field in ("path", "purpose"):
         if field not in file_write:
             raise ValueError(f"file_write missing required field: {field}")
     path = Path(file_write["path"])
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"file_write path must be relative and stay inside working folder: {path}")
-    blocked_roots = {"tests", ".workflow"}
+    blocked_roots = {".workflow"}
     if path.parts and path.parts[0] in blocked_roots:
         raise ValueError(f"builder must not write approved tests or prior-stage artifacts: {path}")
 
 
 def apply_file_writes(working_folder: Path, contract: dict[str, Any]) -> None:
     for file_write in contract["file_writes"]:
+        if "content" not in file_write:
+            continue
         path = working_folder / file_write["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(file_write["content"], encoding="utf-8")

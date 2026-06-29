@@ -36,7 +36,7 @@ class EvalAgentForensicsTests(unittest.TestCase):
         )
         dynamic_context = context_with_builder_test_failures()
 
-        with self.assertRaisesRegex(ValueError, "failed approved test runs"):
+        with self.assertRaisesRegex(ValueError, "failed test runs"):
             eval_agent.validate_contract_for_context(contract, dynamic_context)
 
     def test_eval_must_mention_failed_test_evidence_when_builder_tests_failed(self) -> None:

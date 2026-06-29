@@ -42,8 +42,8 @@ app.add_typer(task_app, name="task")
 app.add_typer(run_app, name="run")
 app.add_typer(approve_app, name="approve")
 
-PIPELINE_STAGES = ["spec", "test", "builder", "verifier", "eval"]
-REMEDIABLE_STAGES = {"spec", "test", "builder", "verifier", "eval"}
+PIPELINE_STAGES = ["spec", "builder", "verifier", "eval"]
+REMEDIABLE_STAGES = {"spec", "builder", "verifier", "eval"}
 
 
 def utc_now() -> str:
@@ -235,6 +235,8 @@ def create_remediation_plan(
     source: str = "eval",
 ) -> Path | None:
     root_cause_stage = str(root_cause_stage or eval_contract.get("root_cause_stage") or "unknown")
+    if root_cause_stage == "test":
+        root_cause_stage = "builder"
     if root_cause_stage not in REMEDIABLE_STAGES or root_cause_stage == "eval":
         return None
     generated_at = utc_now()
@@ -304,38 +306,6 @@ def maybe_create_remediation_plan(workspace: Path, state: dict[str, Any], eval_c
     return create_remediation_plan(workspace, state, eval_contract, eval_contract_path)
 
 
-def maybe_create_test_remediation_from_builder_failure(workspace: Path, state: dict[str, Any], builder_contract: dict[str, Any], builder_contract_path: Path) -> Path | None:
-    findings = builder_contract.get("test_contract_findings")
-    if builder_contract.get("tests_passing") is not False or not isinstance(findings, list) or not findings:
-        return None
-    payload = {
-        "status": "fail",
-        "safe_to_merge": False,
-        "root_cause_stage": "test",
-        "findings": [
-            "Builder determined the approved test contract is invalid or unimplementable without editing tests.",
-            *[str(item) for item in findings],
-        ],
-        "trajectory_findings": [
-            "A downstream stage identified a prior-stage contract defect; remediation must rerun the owning stage.",
-        ],
-        "artifact_findings": [str(item) for item in builder_contract.get("failures_remaining", [])],
-        "tooling_findings": [],
-        "human_review_focus": [
-            "Regenerate or repair the approved Test Agent artifacts using the Builder findings.",
-            "Re-approve tests before rerunning Builder.",
-        ],
-    }
-    return create_remediation_plan(
-        workspace,
-        state,
-        payload,
-        builder_contract_path,
-        root_cause_stage="test",
-        source="builder-test-contract-finding",
-    )
-
-
 def recover_artifacts_for_resume(workspace: Path, state: dict[str, Any], start_stage: str, *, auto_approve: bool) -> None:
     artifacts = state.setdefault("artifacts", {})
     stage_status = state.setdefault("stage_status", {})
@@ -399,8 +369,6 @@ def recover_artifacts_for_resume(workspace: Path, state: dict[str, Any], start_s
         approvals = state.setdefault("approvals", {})
         if "spec" in prior_stages and "spec" in artifacts and "spec" not in approvals:
             approvals["spec"] = {"approved_at": utc_now(), "source": "remediation-auto-approve"}
-        if "test" in prior_stages and "test" in artifacts and "test" not in approvals:
-            approvals["test"] = {"approved_at": utc_now(), "source": "remediation-auto-approve"}
 
     save_task_state(workspace, state)
 
@@ -974,7 +942,7 @@ def run_spec(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="
 @approve_app.command("spec")
 def approve_spec(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None) -> None:
     """Approve the current Spec Agent output."""
-    approve_stage(ctx, "spec", "next: hooky run test", task)
+    approve_stage(ctx, "spec", "next: hooky run builder", task)
 
 
 @approve_app.command("test")
@@ -1037,7 +1005,7 @@ def run_builder(ctx: typer.Context, task: Annotated[str | None, typer.Option(hel
     workspace = workspace_from_ctx(ctx)
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
-    require_approval(state, "test")
+    require_approval(state, "spec")
     set_stage_status(workspace, state, "builder", "running")
     before_builder = snapshot_project_files(workspace)
     try:
@@ -1080,8 +1048,6 @@ def run_builder(ctx: typer.Context, task: Annotated[str | None, typer.Option(hel
         cost=usage.get("cost"),
         error=None if builder_passed else failure_summary or "Builder reported tests_passing=false",
     )
-    if not builder_passed:
-        maybe_create_test_remediation_from_builder_failure(workspace, state, contract, builder_contract_path)
     save_task_state(workspace, state)
     typer.echo(f"builder proposal: {proposal_dir}")
     typer.echo(f"builder report: {report_dir}")
@@ -1156,17 +1122,9 @@ def run_stage_sequence(ctx: typer.Context, *, start_stage: str, auto_approve: bo
         try:
             run_spec(ctx, task=task)
             if auto_approve:
-                approve_stage(ctx, "spec", "running test...", task)
+                approve_stage(ctx, "spec", "running builder...", task)
         except Exception as exc:
             failures.append(f"spec failed: {exc}")
-
-    if not failures and "test" in stages:
-        try:
-            run_test(ctx, task=task)
-            if auto_approve:
-                approve_stage(ctx, "test", "running builder...", task)
-        except Exception as exc:
-            failures.append(f"test failed: {exc}")
 
     if not failures and "builder" in stages:
         try:
@@ -1192,7 +1150,7 @@ def run_stage_sequence(ctx: typer.Context, *, start_stage: str, auto_approve: bo
 @run_app.command("remediation")
 def run_remediation(
     ctx: typer.Context,
-    auto_approve: Annotated[bool, typer.Option(help="Automatically approve remediated spec/test gates.")] = False,
+    auto_approve: Annotated[bool, typer.Option(help="Automatically approve remediated spec gates.")] = False,
     task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
 ) -> None:
     """Resume the pipeline from the latest eval root-cause stage."""
@@ -1205,6 +1163,8 @@ def run_remediation(
         raise typer.BadParameter("no remediation plan exists. Run eval first.")
     plan = read_json(plan_path)
     start_stage = str(plan.get("resume_from_stage") or plan.get("root_cause_stage") or "")
+    if start_stage == "test":
+        start_stage = "builder"
     if start_stage not in PIPELINE_STAGES:
         raise typer.BadParameter(f"remediation plan has invalid resume stage: {start_stage or 'missing'}")
     recover_artifacts_for_resume(workspace, state, start_stage, auto_approve=auto_approve)
@@ -1232,7 +1192,7 @@ def run_remediation(
 @run_app.command("pipeline")
 def run_pipeline(
     ctx: typer.Context,
-    auto_approve: Annotated[bool, typer.Option(help="Automatically approve spec and test gates.")] = False,
+    auto_approve: Annotated[bool, typer.Option(help="Automatically approve spec gate.")] = False,
     max_remediations: Annotated[int, typer.Option(help="Maximum automatic remediation attempts after Eval creates a remediation plan.")] = 2,
     task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
 ) -> None:

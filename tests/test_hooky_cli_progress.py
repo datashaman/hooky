@@ -159,7 +159,7 @@ class HookyProgressTests(unittest.TestCase):
                 "root_cause_stage": "test",
                 "safe_to_merge": False,
                 "findings": ["Generated tests are invalid."],
-                "trajectory_findings": ["Builder spent time diagnosing prior-stage output."],
+                "trajectory_findings": ["Builder spent time diagnosing generated tests."],
                 "artifact_findings": [],
                 "tooling_findings": [],
                 "human_review_focus": ["Review regenerated tests."],
@@ -169,12 +169,12 @@ class HookyProgressTests(unittest.TestCase):
 
         self.assertIsNotNone(plan_path)
         current = hooky_cli.read_json(hooky_cli.current_remediation_path(self.workspace))
-        self.assertEqual(current["root_cause_stage"], "test")
-        self.assertEqual(current["resume_from_stage"], "test")
+        self.assertEqual(current["root_cause_stage"], "builder")
+        self.assertEqual(current["resume_from_stage"], "builder")
         self.assertIn("run remediation --auto-approve", current["rerun_command"])
 
         saved = hooky_cli.load_task_state(self.workspace)
-        self.assertEqual(saved["artifacts"]["remediation"]["root_cause_stage"], "test")
+        self.assertEqual(saved["artifacts"]["remediation"]["root_cause_stage"], "builder")
 
     def test_remediation_resume_recovers_prior_artifacts_and_approvals(self) -> None:
         state = hooky_cli.load_task_state(self.workspace)
@@ -182,9 +182,6 @@ class HookyProgressTests(unittest.TestCase):
         spec_contract = self.workspace / "docs/specs" / task_id / "contract.json"
         spec_contract.parent.mkdir(parents=True)
         spec_contract.write_text("{}", encoding="utf-8")
-        test_contract = self.workspace / ".workflow/artifacts/test-agent" / task_id / "contract.json"
-        test_contract.parent.mkdir(parents=True)
-        test_contract.write_text('{"test_files": [{"path": "tests/example.spec"}], "fixtures": []}', encoding="utf-8")
         state["artifacts"] = {}
         state["approvals"] = {}
         hooky_cli.save_task_state(self.workspace, state)
@@ -193,81 +190,8 @@ class HookyProgressTests(unittest.TestCase):
 
         saved = hooky_cli.load_task_state(self.workspace)
         self.assertEqual(saved["artifacts"]["spec"]["contract"], f"docs/specs/{task_id}/contract.json")
-        self.assertEqual(saved["artifacts"]["test"]["contract"], f".workflow/artifacts/test-agent/{task_id}/contract.json")
         self.assertEqual(saved["stage_status"]["spec"]["status"], "passed")
-        self.assertEqual(saved["stage_status"]["test"]["status"], "passed")
         self.assertIn("spec", saved["approvals"])
-        self.assertIn("test", saved["approvals"])
-
-    def test_builder_test_contract_finding_creates_test_remediation(self) -> None:
-        state = hooky_cli.load_task_state(self.workspace)
-        builder_contract_path = self.workspace / ".workflow/artifacts/builder-agent/contract.json"
-        builder_contract_path.parent.mkdir(parents=True)
-        builder_contract_path.write_text("{}", encoding="utf-8")
-
-        plan_path = hooky_cli.maybe_create_test_remediation_from_builder_failure(
-            self.workspace,
-            state,
-            {
-                "tests_passing": False,
-                "failures_remaining": ["approved tests fail before implementation is exercised"],
-                "test_contract_findings": ["test helper accesses runtime before setup"],
-            },
-            builder_contract_path,
-        )
-
-        self.assertIsNotNone(plan_path)
-        current = hooky_cli.read_json(hooky_cli.current_remediation_path(self.workspace))
-        self.assertEqual(current["root_cause_stage"], "test")
-        self.assertEqual(current["resume_from_stage"], "test")
-        self.assertEqual(current["source"], "builder-test-contract-finding")
-        self.assertIn("test helper accesses runtime before setup", current["findings"])
-
-    def test_eval_does_not_overwrite_builder_test_contract_remediation(self) -> None:
-        state = hooky_cli.load_task_state(self.workspace)
-        builder_contract_path = self.workspace / ".workflow/artifacts/builder-agent/contract.json"
-        builder_contract_path.parent.mkdir(parents=True)
-        builder_contract_path.write_text("{}", encoding="utf-8")
-        hooky_cli.create_remediation_plan(
-            self.workspace,
-            state,
-            {
-                "status": "fail",
-                "safe_to_merge": False,
-                "root_cause_stage": "test",
-                "findings": ["Approved test contract is invalid."],
-                "trajectory_findings": [],
-                "artifact_findings": [],
-                "tooling_findings": [],
-                "human_review_focus": [],
-            },
-            builder_contract_path,
-            root_cause_stage="test",
-            source="builder-test-contract-finding",
-        )
-        eval_contract_path = self.workspace / ".workflow/artifacts/eval-agent/contract.json"
-        eval_contract_path.parent.mkdir(parents=True)
-        eval_contract_path.write_text("{}", encoding="utf-8")
-
-        plan_path = hooky_cli.maybe_create_remediation_plan(
-            self.workspace,
-            state,
-            {
-                "status": "fail",
-                "safe_to_merge": False,
-                "root_cause_stage": "builder",
-                "findings": ["Builder failed because tests are still failing."],
-            },
-            eval_contract_path,
-        )
-
-        self.assertEqual(plan_path, hooky_cli.current_remediation_path(self.workspace))
-        current = hooky_cli.read_json(hooky_cli.current_remediation_path(self.workspace))
-        self.assertEqual(current["root_cause_stage"], "test")
-        self.assertEqual(current["source"], "builder-test-contract-finding")
-        pipeline_log = hooky_cli.pipeline_log_path(self.workspace).read_text(encoding="utf-8")
-        self.assertIn("status=preserved", pipeline_log)
-        self.assertIn("ignored_eval_root_cause=builder", pipeline_log)
 
     def test_stage_sequence_runs_eval_after_builder_failure(self) -> None:
         calls: list[str] = []
@@ -282,7 +206,6 @@ class HookyProgressTests(unittest.TestCase):
         with (
             mock.patch.object(hooky_cli, "run_spec", side_effect=lambda ctx, task=None: calls.append("spec")),
             mock.patch.object(hooky_cli, "approve_stage", side_effect=lambda ctx, stage, message, task=None: calls.append(f"approve-{stage}")),
-            mock.patch.object(hooky_cli, "run_test", side_effect=lambda ctx, task=None: calls.append("test")),
             mock.patch.object(hooky_cli, "run_builder", side_effect=fail_builder),
             mock.patch.object(hooky_cli, "run_verifier", side_effect=lambda ctx, task=None: calls.append("verifier")),
             mock.patch.object(hooky_cli, "run_eval", side_effect=run_eval),
@@ -290,7 +213,7 @@ class HookyProgressTests(unittest.TestCase):
             failures = hooky_cli.run_stage_sequence(mock.Mock(), start_stage="spec", auto_approve=True, task=None)
 
         self.assertEqual(failures, ["builder failed: server timeout"])
-        self.assertEqual(calls, ["spec", "approve-spec", "test", "approve-test", "builder", "eval"])
+        self.assertEqual(calls, ["spec", "approve-spec", "builder", "eval"])
 
     def test_pipeline_failure_preserves_stage_state_written_during_run(self) -> None:
         def fail_after_stage_update(ctx: object, start_stage: str, auto_approve: bool, task: str | None) -> list[str]:

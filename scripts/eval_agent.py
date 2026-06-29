@@ -316,7 +316,7 @@ Dynamic Context:
 Use the available tools to inspect prior-stage artifacts and relevant implementation files. Prefer git_status/git_diff/git_show for read-only git inspection, latest_test_failure_context for failed test diagnostics, read_file_excerpt/read_many_files over shell snippets, and run_tests only when a deterministic rerun is necessary for evidence.
 Dynamic context contains file paths, status summaries, and counts only. Read files from the workspace when you need detailed evidence.
 The deterministic_facts block is system-generated evidence. Do not contradict it. If a stage failed after writing files, report both facts: the stage failed and files exist.
-If deterministic_facts shows failed approved test runs, include those failures explicitly in findings or trajectory/tooling findings. Do not describe the implementation as satisfying all acceptance criteria when approved tests failed.
+If deterministic_facts shows failed Builder test runs, include those failures explicitly in findings or trajectory/tooling findings. Do not describe the implementation as satisfying all acceptance criteria when Builder tests failed.
 When evaluating a remediation run, use the remediation context. If the remediation root cause is Builder trajectory/tooling and the rerun produces no source changes but passes Builder and Verifier deterministically, do not fail solely because the patch is empty. Judge whether the remediation actually addressed the prior failure mode.
 Use todo tools to track the evaluation work.
 You must not edit any files.
@@ -350,7 +350,7 @@ def validate_contract(contract: dict[str, Any]) -> None:
         raise ValueError("safe_to_merge may be true only when status is pass")
     if contract["status"] == "fail" and not contract.get("findings"):
         raise ValueError("failed eval must include findings")
-    if contract["root_cause_stage"] not in {"spec", "test", "builder", "verifier", "eval", "pipeline", "unknown"}:
+    if contract["root_cause_stage"] not in {"spec", "builder", "verifier", "eval", "pipeline", "unknown"}:
         raise ValueError("root_cause_stage must identify a pipeline stage or unknown")
     for field in ("trajectory_findings", "artifact_findings", "tooling_findings", "cost_findings", "human_review_focus", "findings"):
         if not isinstance(contract.get(field), list):
@@ -425,8 +425,8 @@ def validate_fact_consistency(contract: dict[str, Any], dynamic_context: dict[st
                     "all acceptance criteria are covered",
                 ],
             ):
-                raise ValueError("eval contradicts deterministic facts: builder had failed approved test runs")
-            failure_terms = ["playwright", "approved test", "test failure", "tests failed", "failing test", "failed test"]
+                raise ValueError("eval contradicts deterministic facts: builder had failed test runs")
+            failure_terms = ["playwright", "builder test", "test failure", "tests failed", "failing test", "failed test"]
             failure_terms.extend(test_name_fragment(name) for name in failing_tests[:5])
             if not contains_any(text, [term for term in failure_terms if term]):
                 raise ValueError("eval omitted deterministic failed approved-test evidence")
