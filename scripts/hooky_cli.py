@@ -300,6 +300,16 @@ def workspace_from_last_run(path: Path) -> Path | None:
     return Path(raw).expanduser().resolve()
 
 
+def workspace_for_status(ctx: typer.Context, last_run_path: Path) -> Path:
+    workspace = workspace_from_ctx(ctx)
+    if read_global_state(workspace).get("current_task"):
+        return workspace
+    last_workspace = workspace_from_last_run(last_run_path)
+    if last_workspace and read_global_state(last_workspace).get("current_task"):
+        return last_workspace
+    return workspace
+
+
 def last_nonempty_line(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -1582,9 +1592,14 @@ def follow_runtime_log(workspace: Path, stage: str, state: dict[str, Any], tail_
 
 
 @app.command()
-def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None) -> None:
+def status(
+    ctx: typer.Context,
+    task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
+    last_run_path: Annotated[Path, typer.Option(help="Path written by `hooky start`; used when the current directory has no task.")] = DEFAULT_LAST_RUN_PATH,
+) -> None:
     """Show the current task's pipeline state and artifact locations."""
-    workspace = workspace_from_ctx(ctx)
+    workspace = workspace_for_status(ctx, last_run_path)
+    ctx.obj["workspace"] = workspace
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
     refresh_interrupted_stages(workspace, state)

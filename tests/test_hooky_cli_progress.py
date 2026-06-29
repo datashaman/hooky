@@ -223,6 +223,21 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn(str(hooky_cli.pipeline_log_path(self.workspace)), result.output)
 
+    def test_status_uses_last_run_workspace_when_current_directory_has_no_task(self) -> None:
+        last_run_path = self.workspace / "last-run-path"
+        hooky_cli.write_last_run_workspace(last_run_path, self.workspace)
+
+        with tempfile.TemporaryDirectory() as other:
+            (Path(other) / ".workflow/agents").mkdir(parents=True)
+            result = CliRunner().invoke(
+                hooky_cli.app,
+                ["-C", other, "status", "--last-run-path", str(last_run_path)],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn(f"workspace: {self.workspace.resolve()}", result.output)
+        self.assertIn("task: issue-1001-progress", result.output)
+
     def test_eval_failure_creates_remediation_plan(self) -> None:
         state = hooky_cli.load_task_state(self.workspace)
         eval_contract_path = self.workspace / ".workflow/artifacts/eval-agent/contract.json"
