@@ -332,10 +332,14 @@ def validate_contract(contract: dict[str, Any]) -> None:
 def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
     validate_contract(contract)
     if browser_ui_project(dynamic_context):
-        if not successful_visual_snapshot_events(tool_events):
+        snapshot_events = successful_visual_snapshot_events(tool_events)
+        if not snapshot_events:
             raise ValueError("browser/UI verifier must capture a successful visual snapshot before final_report")
         if not contract.get("visual_findings"):
             raise ValueError("browser/UI verifier must include visual_findings from attached screenshot inspection")
+        blocking_visual_findings = visual_snapshot_blocking_findings(snapshot_events)
+        if blocking_visual_findings and (contract.get("status") == "pass" or contract.get("safe_to_open_pr") is True):
+            raise ValueError("browser/UI verifier cannot pass with blocking visual snapshot findings: " + "; ".join(blocking_visual_findings[:5]))
 
 
 def browser_ui_project(dynamic_context: dict[str, Any]) -> bool:
@@ -365,6 +369,37 @@ def successful_visual_snapshot_events(tool_events: list[dict[str, Any]]) -> list
         if result.get("ok") is True and result.get("screenshot_path"):
             successful.append(event)
     return successful
+
+
+def visual_snapshot_blocking_findings(snapshot_events: list[dict[str, Any]]) -> list[str]:
+    findings: list[str] = []
+    for event in snapshot_events:
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        bounds = metrics.get("contentBounds") if isinstance(metrics.get("contentBounds"), dict) else {}
+        if numeric_less_than(bounds.get("y"), 0):
+            findings.append(f"content starts above viewport y={bounds.get('y')}")
+        if metrics.get("horizontalOverflow") is True:
+            findings.append("document has horizontal overflow")
+        clipped = metrics.get("sampleClippedElements") if isinstance(metrics.get("sampleClippedElements"), list) else []
+        for item in clipped:
+            if not isinstance(item, dict):
+                continue
+            tag = str(item.get("tag") or "")
+            role = str(item.get("role") or "")
+            text = str(item.get("text") or "").strip()
+            class_name = str(item.get("className") or "")
+            if tag in {"h1", "h2", "h3", "input", "button", "textarea", "select", "a"} or role in {"heading", "button", "link"} or text:
+                label = text or role or class_name or tag
+                findings.append(f"visible {tag or role} is clipped/off-screen: {label[:80]}")
+    return list(dict.fromkeys(findings))
+
+
+def numeric_less_than(value: Any, threshold: float) -> bool:
+    try:
+        return float(value) < threshold
+    except (TypeError, ValueError):
+        return False
 
 
 def write_artifacts(

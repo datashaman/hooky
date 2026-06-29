@@ -41,6 +41,61 @@ class VerifierAgentPolicyTests(unittest.TestCase):
             ],
         )
 
+    def test_browser_ui_rejects_pass_when_heading_is_clipped(self) -> None:
+        contract = base_contract()
+        contract["visual_findings"] = ["minor h1 clipping does not affect controls"]
+
+        with self.assertRaisesRegex(ValueError, "clipped/off-screen"):
+            verifier_agent.validate_contract_for_context(
+                contract,
+                browser_context(),
+                [
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                            "metrics": {
+                                "contentBounds": {"y": -10},
+                                "sampleClippedElements": [
+                                    {
+                                        "tag": "h1",
+                                        "role": "",
+                                        "text": "todos",
+                                        "rect": {"y": -10, "bottom": 10},
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                ],
+            )
+
+    def test_browser_ui_allows_fail_with_blocking_visual_findings(self) -> None:
+        contract = base_contract()
+        contract["status"] = "fail"
+        contract["safe_to_open_pr"] = False
+        contract["visual_findings"] = ["h1 is clipped above the viewport"]
+        contract["required_actions"] = ["Move the heading fully into the viewport."]
+
+        verifier_agent.validate_contract_for_context(
+            contract,
+            browser_context(),
+            [
+                {
+                    "name": "capture_visual_snapshot",
+                    "result": {
+                        "ok": True,
+                        "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                        "metrics": {
+                            "contentBounds": {"y": -10},
+                            "sampleClippedElements": [{"tag": "h1", "text": "todos"}],
+                        },
+                    },
+                }
+            ],
+        )
+
 
 def base_contract() -> dict[str, object]:
     return {
