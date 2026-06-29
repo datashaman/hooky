@@ -358,6 +358,46 @@ class ProtectedPathTests(unittest.TestCase):
     def test_available_tools_include_time_extension_request(self) -> None:
         self.assertIn("request_time_extension", agent_runtime.available_tool_names())
 
+    def test_list_files_hides_custom_read_blocked_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src" / "App.jsx").write_text("export default function App() {}", encoding="utf-8")
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "framework.js").write_text("internal", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                read_blocked_prefixes=[".workflow", "node_modules"],
+            )
+
+            result = runtime.list_files({"path": "."})
+
+            self.assertTrue(result["ok"])
+            paths = {entry["path"] for entry in result["entries"]}
+            self.assertIn("src", paths)
+            self.assertNotIn("node_modules", paths)
+
+    def test_read_file_rejects_custom_read_blocked_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "framework.js").write_text("internal", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                read_blocked_prefixes=[".workflow", "node_modules"],
+            )
+
+            result = runtime.run_tool("read_file", {"path": "node_modules/framework.js"})
+
+            self.assertFalse(result["ok"])
+            self.assertIn("path not found", result["error"])
+
     def test_time_extension_is_granted_only_near_deadline_with_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

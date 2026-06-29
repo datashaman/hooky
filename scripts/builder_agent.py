@@ -193,7 +193,10 @@ def generate_contract_with_openrouter(
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=builder ",
+        read_blocked_prefixes=[".workflow", "node_modules"],
+        read_allowed_prefixes=[".workflow/tool-results"],
         write_blocked_prefixes=[".workflow", "tests"],
+        bash_command_validator=builder_bash_command_violation,
         bash_protected_prefixes=["tests", "docs/specs", ".workflow/artifacts/test-agent", ".workflow/artifacts/specs"],
     )
     try:
@@ -347,11 +350,34 @@ Run the approved test suite deliberately:
 - Run a full approved test command at most twice after implementation changes unless the previous full run passed.
 - After a failure, inspect run_tests summary/output_path evidence and rerun only the specific failing test file or focused test while debugging.
 - If approved tests still fail after three implementation attempts, call final_report with tests_passing false and exact failures_remaining instead of continuing to churn.
+Keep failure diagnosis inside the product workspace:
+- Do inspect approved tests, project source/config, run_tests output artifacts, Playwright error-context files under test-results, browser-visible DOM state, and screenshots.
+- Do not inspect dependency or framework internals such as node_modules, Playwright source, test-runner source, package manager cache directories, or bundled framework code when fixing application behavior.
+- If a focused failing test appears to implicate the test runner itself, report that as a test_contract_finding with evidence instead of spelunking dependency internals.
 If you receive a runtime soft-deadline notice, do not start another long command. Call final_report immediately with the current implementation state, tests_run, tests_passing, and failures_remaining.
 If deterministic evidence shows the approved tests are invalid, contradictory, or unimplementable without editing tests, stop and report it instead of weakening tests or churning dependencies.
 For invalid approved tests, call final_report with tests_passing false, failures_remaining populated, and test_contract_findings explaining the evidence.
 Finish only by calling final_report with the Builder Agent contract.
 """
+
+
+def builder_bash_command_violation(command: str) -> str | None:
+    lowered = command.lower()
+    blocked_fragments = [
+        "node_modules",
+        "playwright-core/lib",
+        "playwright/lib",
+        ".pnpm/",
+        ".yarn/cache",
+        "npm cache",
+    ]
+    for fragment in blocked_fragments:
+        if fragment in lowered:
+            return (
+                "Builder must not inspect dependency or framework internals while fixing application behavior; "
+                "use project source, approved tests, run_tests output, and test-results artifacts instead"
+            )
+    return None
 
 
 def validate_contract(contract: dict[str, Any]) -> None:
