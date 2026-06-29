@@ -15,6 +15,7 @@ from typing import Any
 import eval_runtime
 import spec_agent
 import agent_runtime
+import agent_skills
 from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
@@ -280,6 +281,7 @@ def load_agent_context(working_folder: Path) -> dict[str, Any]:
         "static_files": static_files,
         "project_file_index": project_file_index(working_folder),
         "selected_model": selected_model_metadata(),
+        "skills": agent_skills.discover_skills(working_folder),
     }
 
 
@@ -294,6 +296,9 @@ def eval_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
             if key != "system.md"
         },
     )
+    active_skills = ["visual-ui-review"] if dynamic_context.get("visual_evidence") or browser_ui_project(dynamic_context) else []
+    skills_catalog = agent_skills.skill_catalog(agent_context["skills"])
+    skills_context = agent_skills.skill_context(agent_context["skills"], active_skills)
     return f"""Project Context File Index:
 ```json
 {project_context}
@@ -302,6 +307,10 @@ def eval_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
 {common_context}
 
 {static_context}
+
+{skills_catalog}
+
+{skills_context}
 
 Selected Model:
 ```json

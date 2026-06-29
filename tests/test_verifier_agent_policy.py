@@ -128,6 +128,32 @@ class VerifierAgentPolicyTests(unittest.TestCase):
             ],
         )
 
+    def test_browser_ui_rejects_fail_that_downgrades_blocking_visual_findings(self) -> None:
+        contract = base_contract()
+        contract["status"] = "fail"
+        contract["safe_to_open_pr"] = False
+        contract["visual_findings"] = ["Non-critical clipped heading element above viewport does not interfere with visible UI"]
+        contract["required_actions"] = ["Clean untracked workspace files."]
+
+        with self.assertRaisesRegex(ValueError, "must not be downgraded"):
+            verifier_agent.validate_contract_for_context(
+                contract,
+                browser_context(),
+                [
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                            "metrics": {
+                                "contentBounds": {"y": -108},
+                                "sampleClippedElements": [{"tag": "h1", "text": "Create project"}],
+                            },
+                        },
+                    }
+                ],
+            )
+
 
 def base_contract() -> dict[str, object]:
     return {

@@ -14,6 +14,7 @@ from typing import Any
 import eval_runtime
 import spec_agent
 import agent_runtime
+import agent_skills
 from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
@@ -262,6 +263,7 @@ def load_agent_context(working_folder: Path) -> dict[str, Any]:
         "static_files": static_files,
         "project_files": project_files,
         "selected_model": selected_model_metadata(),
+        "skills": agent_skills.discover_skills(working_folder),
     }
 
 
@@ -276,11 +278,18 @@ def verifier_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, An
             if key != "system.md"
         },
     )
+    active_skills = ["visual-ui-review"] if browser_ui_project(dynamic_context) else []
+    skills_catalog = agent_skills.skill_catalog(agent_context["skills"])
+    skills_context = agent_skills.skill_context(agent_context["skills"], active_skills)
     return f"""{project_context}
 
 {common_context}
 
 {static_context}
+
+{skills_catalog}
+
+{skills_context}
 
 Selected Model:
 ```json
@@ -340,6 +349,8 @@ def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dic
         blocking_visual_findings = visual_snapshot_blocking_findings(snapshot_events)
         if blocking_visual_findings and (contract.get("status") == "pass" or contract.get("safe_to_open_pr") is True):
             raise ValueError("browser/UI verifier cannot pass with blocking visual snapshot findings: " + "; ".join(blocking_visual_findings[:5]))
+        if blocking_visual_findings:
+            validate_blocking_visual_findings_are_reported(contract, blocking_visual_findings)
 
 
 def browser_ui_project(dynamic_context: dict[str, Any]) -> bool:
@@ -401,6 +412,18 @@ def visual_snapshot_blocking_findings(snapshot_events: list[dict[str, Any]]) -> 
                 label = text or role or class_name or tag
                 findings.append(f"visible {tag or role} is clipped/off-screen: {label[:80]}")
     return list(dict.fromkeys(findings))
+
+
+def validate_blocking_visual_findings_are_reported(contract: dict[str, Any], findings: list[str]) -> None:
+    visual_text = " ".join(str(item) for item in contract.get("visual_findings") or []).lower()
+    required_text = " ".join(str(item) for item in contract.get("required_actions") or []).lower()
+    downgrade_terms = ("minor", "non-critical", "non critical", "acceptable", "visually correct", "does not interfere")
+    if any(term in visual_text for term in downgrade_terms):
+        raise ValueError("blocking visual snapshot findings must not be downgraded as minor/non-critical")
+    if not any(term in visual_text for term in ("clipped", "off-screen", "offscreen", "overlap", "overflow", "above viewport")):
+        raise ValueError("blocking visual snapshot findings must be included in visual_findings: " + "; ".join(findings[:3]))
+    if not any(term in required_text for term in ("visual", "layout", "clipped", "off-screen", "offscreen", "overlap", "overflow", "viewport")):
+        raise ValueError("blocking visual snapshot findings must have visual/layout required_actions: " + "; ".join(findings[:3]))
 
 
 def numeric_less_than(value: Any, threshold: float) -> bool:
