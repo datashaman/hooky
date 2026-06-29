@@ -170,6 +170,38 @@ class HookyProgressTests(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertEqual(last_run_path.read_text(encoding="utf-8").strip(), self.workspace.resolve().as_posix())
 
+    def test_start_skill_option_sets_active_skills_for_run(self) -> None:
+        seen: dict[str, str | None] = {}
+
+        def stop_after_recording(*_args: object, **_kwargs: object) -> None:
+            seen["skills"] = os.environ.get("HOOKY_ACTIVE_SKILLS")
+            raise RuntimeError("stop")
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(hooky_cli, "run_pipeline", side_effect=stop_after_recording),
+        ):
+            result = CliRunner().invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "start", "--skill", "visual-ui-review"],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(seen["skills"], "visual-ui-review")
+
+    def test_skills_list_shows_workspace_skill(self) -> None:
+        skill_path = self.workspace / ".agents/skills/example/SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text(
+            "---\nname: example\ndescription: Workspace skill.\n---\n\n# Example\n",
+            encoding="utf-8",
+        )
+
+        result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "skills", "list"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("example - Workspace skill.", result.output)
+
     def test_watch_uses_last_run_workspace(self) -> None:
         last_run_path = self.workspace / "last-run-path"
         hooky_cli.write_last_run_workspace(last_run_path, self.workspace)

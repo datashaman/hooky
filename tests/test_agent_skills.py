@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -32,6 +33,35 @@ class AgentSkillsTests(unittest.TestCase):
 
             self.assertIn("visual-ui-review", skills)
             self.assertIn("browser UI", skills["visual-ui-review"].description)
+
+    def test_discovers_external_skill_root_from_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as external:
+            skill_path = Path(external) / "skills-sh-example/SKILL.md"
+            skill_path.parent.mkdir(parents=True)
+            skill_path.write_text(
+                "---\nname: skills-sh-example\ndescription: External skill.\n---\n\n# External\n\nUse this.\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict("os.environ", {"HOOKY_SKILL_ROOTS": external}):
+                skills = {skill.name: skill for skill in agent_skills.discover_skills(Path(tmp))}
+
+            self.assertIn("skills-sh-example", skills)
+
+    def test_parses_multiline_yaml_frontmatter_description(self) -> None:
+        metadata, body = agent_skills.parse_frontmatter(
+            "---\n"
+            "name: example\n"
+            "description: >\n"
+            "  First sentence.\n"
+            "  Second sentence.\n"
+            "---\n"
+            "\n"
+            "# Body\n"
+        )
+
+        self.assertEqual(metadata["description"], "First sentence. Second sentence.")
+        self.assertEqual(body, "\n# Body\n")
 
 
 if __name__ == "__main__":

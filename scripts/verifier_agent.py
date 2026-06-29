@@ -142,6 +142,7 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("VERIFIER_AGENT_MAX_SECONDS", "300")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract_for_context(contract, dynamic_context, runtime.tool_events),
+        skills=agent_context["skills"],
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=verifier ",
@@ -278,9 +279,7 @@ def verifier_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, An
             if key != "system.md"
         },
     )
-    active_skills = ["visual-ui-review"] if browser_ui_project(dynamic_context) else []
     skills_catalog = agent_skills.skill_catalog(agent_context["skills"])
-    skills_context = agent_skills.skill_context(agent_context["skills"], active_skills)
     return f"""{project_context}
 
 {common_context}
@@ -289,7 +288,7 @@ def verifier_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, An
 
 {skills_catalog}
 
-{skills_context}
+Load skill details only when needed by calling activate_skill with the skill name. If an activated skill lists resources, read only the specific relevant resource files with read_skill_resource.
 
 Selected Model:
 ```json

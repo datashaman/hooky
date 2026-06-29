@@ -14,6 +14,7 @@ from string import Template
 from typing import Any
 
 import agent_runtime
+import agent_skills
 import eval_runtime
 import spec_agent
 from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
@@ -137,6 +138,7 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("TEST_AGENT_MAX_SECONDS", "600")),
         bash_timeout_seconds=int(os.environ.get("TEST_AGENT_BASH_TIMEOUT_SECONDS", "120")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
+        skills=agent_context["skills"],
         live_log_root=report_root,
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
@@ -339,6 +341,7 @@ def load_agent_context(project_root: Path = Path(".")) -> dict[str, Any]:
         "static_files": static_files,
         "project_files": project_files,
         "selected_model": selected_model_metadata(),
+        "skills": agent_skills.discover_skills(project_root),
     }
 
 
@@ -405,6 +408,7 @@ def test_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
             if key != "system.md"
         },
     )
+    skills_catalog = agent_skills.skill_catalog(agent_context["skills"])
     visible_dynamic_context = json.loads(json.dumps(dynamic_context))
     visible_dynamic_context.get("workspace", {}).pop("report_root", None)
     return f"""{project_context}
@@ -412,6 +416,10 @@ def test_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
 {common_context}
 
 {static_context}
+
+{skills_catalog}
+
+Load skill details only when needed by calling activate_skill with the skill name. If an activated skill lists resources, read only the specific relevant resource files with read_skill_resource.
 
 Selected Model:
 ```json

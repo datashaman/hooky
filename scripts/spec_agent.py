@@ -19,6 +19,7 @@ from string import Template
 from typing import Any
 
 import eval_runtime
+import agent_skills
 
 
 ARTIFACT_ROOT = Path("docs/specs")
@@ -155,6 +156,8 @@ def generate_contract_with_openrouter(
 
     model = selected_model()
     agent_context = load_agent_context()
+    working_folder = Path(dynamic_context["workspace"]["working_folder"])
+    agent_context["skills"] = agent_skills.discover_skills(working_folder)
     runtime = ToolRuntime(
         working_folder=dynamic_context["workspace"]["working_folder"],
         final_report_schema=spec_agent_finish_schema(),
@@ -163,9 +166,10 @@ def generate_contract_with_openrouter(
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda report: validate_spec_finish_report(
             report,
-            Path(dynamic_context["workspace"]["working_folder"]),
+            working_folder,
         ),
-        write_validator=lambda path, content: validate_spec_write(path, content, Path(dynamic_context["workspace"]["working_folder"])),
+        write_validator=lambda path, content: validate_spec_write(path, content, working_folder),
+        skills=agent_context["skills"],
         write_enabled=True,
         spec_contract_write_enabled=True,
         write_allowed_prefixes=[
@@ -454,11 +458,16 @@ def spec_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) 
         },
     )
     common_context = format_context_block("Common Agent Runtime Context", agent_context["common_static_files"])
+    skills_catalog = agent_skills.skill_catalog(agent_context.get("skills", []))
     return f"""{project_context}
 
 {common_context}
 
 {static_context}
+
+{skills_catalog}
+
+Load skill details only when needed by calling activate_skill with the skill name. If an activated skill lists resources, read only the specific relevant resource files with read_skill_resource.
 
 Selected Model:
 ```json

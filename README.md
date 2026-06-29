@@ -111,6 +111,27 @@ uv run hooky status
 
 `hooky start` records the workspace in `/tmp/hooky-last-run-path`. `hooky watch` reads that file and follows the pipeline event log, so the viewer command stays the same across runs.
 
+## Agent Skills
+
+Hooky supports agent skills using progressive disclosure. At run start, agents see only a catalog of available skill names and descriptions. They can call `activate_skill` to load a selected `SKILL.md`, and `read_skill_resource` to read specific referenced files from that skill directory.
+
+Skill discovery includes:
+
+- bundled repo skills under `.agents/skills`
+- workspace skills under `<workspace>/.agents/skills`
+- common user roots `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`
+- extra roots from `HOOKY_SKILL_ROOTS`, `AGENT_SKILL_ROOTS`, or `SKILLS_PATH`
+
+Any external skill collection works if it has the shape `<root>/<skill-name>/SKILL.md`:
+
+```bash
+HOOKY_SKILL_ROOTS=/path/to/skills uv run hooky -C /tmp/todomvc skills list
+HOOKY_SKILL_ROOTS=/path/to/skills uv run hooky -C /tmp/todomvc skills show visual-ui-review
+HOOKY_SKILL_ROOTS=/path/to/skills uv run hooky -C /tmp/todomvc start --skill visual-ui-review
+```
+
+`--skill` may be repeated. It preloads those selected skill instructions for the run; agents may still activate other catalogued skills dynamically.
+
 ```bash
 uv run hooky init
 uv run hooky task create --title "Implement TodoMVC" --body-file /tmp/todomvc-issue.md

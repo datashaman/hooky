@@ -27,6 +27,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import builder_agent
 import agent_runtime
+import agent_skills
 import eval_agent
 import generate_eval_report
 import spec_agent
@@ -38,9 +39,11 @@ app = typer.Typer(help="Run the Hooky agentic SDLC pipeline.", no_args_is_help=T
 task_app = typer.Typer(help="Create, inspect, and switch tasks.", no_args_is_help=True)
 run_app = typer.Typer(help="Run pipeline stages for the current task.", no_args_is_help=True)
 approve_app = typer.Typer(help="Record human approval gates.", no_args_is_help=True)
+skills_app = typer.Typer(help="Inspect available agent skills.", no_args_is_help=True)
 app.add_typer(task_app, name="task")
 app.add_typer(run_app, name="run")
 app.add_typer(approve_app, name="approve")
+app.add_typer(skills_app, name="skills")
 
 PIPELINE_STAGES = ["spec", "builder", "verifier", "eval"]
 REMEDIABLE_STAGES = {"spec", "builder", "verifier", "eval"}
@@ -936,6 +939,41 @@ def task_switch(ctx: typer.Context, task_id: Annotated[str, typer.Argument(help=
     typer.echo(f"current task: {task_id}")
 
 
+@skills_app.command("list")
+def skills_list(ctx: typer.Context) -> None:
+    """List available agent skills for this workspace."""
+    workspace = workspace_from_ctx(ctx)
+    skills = agent_skills.discover_skills(workspace)
+    if not skills:
+        typer.echo("No skills found.")
+        return
+    for skill in skills:
+        suffix = f" - {skill.description}" if skill.description else ""
+        typer.echo(f"{skill.name}{suffix}")
+        typer.echo(f"  path: {skill.path}")
+
+
+@skills_app.command("show")
+def skills_show(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Skill name to inspect.")]) -> None:
+    """Show one skill's instructions and resource index."""
+    workspace = workspace_from_ctx(ctx)
+    for skill in agent_skills.discover_skills(workspace):
+        if skill.name != name:
+            continue
+        typer.echo(f"name: {skill.name}")
+        typer.echo(f"description: {skill.description}")
+        typer.echo(f"path: {skill.path}")
+        resources = agent_skills.skill_resources(skill)
+        if resources:
+            typer.echo("resources:")
+            for resource in resources:
+                typer.echo(f"  {resource['path']} ({resource['bytes']} bytes)")
+        typer.echo("")
+        typer.echo(skill.body)
+        return
+    raise typer.BadParameter(f"unknown skill: {name}")
+
+
 @run_app.command("spec")
 def run_spec(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None) -> None:
     """Run the Spec Agent."""
@@ -1238,13 +1276,18 @@ def start(
     auto_approve: Annotated[bool, typer.Option(help="Automatically approve spec gate.")] = True,
     max_remediations: Annotated[int, typer.Option(help="Maximum automatic remediation attempts after Eval creates a remediation plan.")] = 2,
     task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
+    skill: Annotated[list[str] | None, typer.Option("--skill", help="Preselect an agent skill by name for this run. Repeat for multiple skills.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by `hooky watch` to find the latest workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Start the standard pipeline and register this workspace for `hooky watch`."""
     workspace = workspace_from_ctx(ctx)
     ensure_initialized(workspace)
+    if skill:
+        os.environ["HOOKY_ACTIVE_SKILLS"] = ",".join(skill)
     write_last_run_workspace(last_run_path, workspace)
     typer.echo(f"workspace: {workspace}")
+    if skill:
+        typer.echo(f"skills: {', '.join(skill)}")
     typer.echo(f"watch: uv run hooky watch")
     run_pipeline(ctx, auto_approve=auto_approve, max_remediations=max_remediations, task=task)
 

@@ -15,6 +15,7 @@ from typing import Any
 import eval_runtime
 import spec_agent
 import agent_runtime
+import agent_skills
 from agent_runtime import build_runtime_metadata
 
 
@@ -220,6 +221,7 @@ def generate_contract_with_openrouter(
         max_post_success_grace_seconds=int(os.environ.get("BUILDER_AGENT_POST_SUCCESS_GRACE_SECONDS", "180")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract_for_context(contract, dynamic_context),
+        skills=agent_context["skills"],
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=builder ",
@@ -341,6 +343,7 @@ def load_agent_context(working_folder: Path) -> dict[str, Any]:
         "static_files": static_files,
         "project_files": project_files,
         "selected_model": selected_model_metadata(),
+        "skills": agent_skills.discover_skills(working_folder),
     }
 
 
@@ -355,11 +358,16 @@ def builder_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any
             if key != "system.md"
         },
     )
+    skills_catalog = agent_skills.skill_catalog(agent_context["skills"])
     return f"""{project_context}
 
 {common_context}
 
 {static_context}
+
+{skills_catalog}
+
+Load skill details only when needed by calling activate_skill with the skill name. If an activated skill lists resources, read only the specific relevant resource files with read_skill_resource.
 
 Selected Model:
 ```json

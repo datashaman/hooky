@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import agent_skills
 import spec_agent
 
 
@@ -96,6 +97,9 @@ class ToolRuntime:
     max_extension_requests: int = 0
     post_success_grace_seconds_used: int = 0
     max_post_success_grace_seconds: int = 0
+    skills: list[agent_skills.AgentSkill] = field(default_factory=list)
+    activated_skill_names: set[str] = field(default_factory=set)
+    preselected_skill_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -118,6 +122,12 @@ class ToolRuntime:
             self.max_extension_requests = int(os.environ["AGENT_MAX_EXTENSION_REQUESTS"])
         if os.environ.get("AGENT_POST_SUCCESS_GRACE_SECONDS"):
             self.max_post_success_grace_seconds = int(os.environ["AGENT_POST_SUCCESS_GRACE_SECONDS"])
+        if os.environ.get("HOOKY_ACTIVE_SKILLS") and not self.preselected_skill_names:
+            self.preselected_skill_names = [
+                item.strip()
+                for item in os.environ["HOOKY_ACTIVE_SKILLS"].split(",")
+                if item.strip()
+            ]
 
     def tools(self) -> list[dict[str, Any]]:
         tools = [
@@ -255,6 +265,29 @@ class ToolRuntime:
                 },
             },
         ]
+        if self.skills:
+            tools.insert(
+                -3,
+                tool_schema(
+                    "activate_skill",
+                    "Load one available agent skill's SKILL.md instructions and list its optional resources.",
+                    {"name": string_schema()},
+                    ["name"],
+                ),
+            )
+            tools.insert(
+                -3,
+                tool_schema(
+                    "read_skill_resource",
+                    "Read a file resource from an already activated skill directory.",
+                    {
+                        "name": string_schema(),
+                        "path": string_schema(),
+                        "max_bytes": integer_schema(default=20000, minimum=1, maximum=100000),
+                    },
+                    ["name", "path"],
+                ),
+            )
         if self.spec_contract_write_enabled:
             tools.insert(
                 4,
@@ -310,9 +343,55 @@ class ToolRuntime:
             "web_search": self.web_search,
             "fetch_url": self.fetch_url,
             "request_time_extension": self.request_time_extension,
+            "activate_skill": self.activate_skill,
+            "read_skill_resource": self.read_skill_resource,
             "todo_read": self.todo_read,
             "todo_write": self.todo_write,
             "final_report": self.finish,
+        }
+
+    def skill_by_name(self, name: str) -> agent_skills.AgentSkill:
+        for skill in self.skills:
+            if skill.name == name:
+                return skill
+        raise ValueError(f"unknown skill: {name}")
+
+    def activate_skill(self, args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("skill name is required")
+        skill = self.skill_by_name(name)
+        already_active = skill.name in self.activated_skill_names
+        self.activated_skill_names.add(skill.name)
+        resources = agent_skills.skill_resources(skill)
+        return {
+            "ok": True,
+            "name": skill.name,
+            "description": skill.description,
+            "skill_path": skill.path.as_posix(),
+            "body": skill.body,
+            "resources": resources,
+            "already_active": already_active,
+        }
+
+    def read_skill_resource(self, args: dict[str, Any]) -> dict[str, Any]:
+        name = str(args.get("name") or "").strip()
+        resource_path = str(args.get("path") or "").strip()
+        if not name or not resource_path:
+            raise ValueError("name and path are required")
+        if name not in self.activated_skill_names:
+            raise ValueError(f"activate skill before reading resources: {name}")
+        skill = self.skill_by_name(name)
+        path = agent_skills.resolve_skill_resource(skill, resource_path)
+        max_bytes = int(args.get("max_bytes") or 20000)
+        content = read_text_prefix(path, max_bytes)
+        return {
+            "ok": True,
+            "name": skill.name,
+            "path": resource_path,
+            "bytes": path.stat().st_size,
+            "content": content,
+            "truncated": path.stat().st_size > len(content.encode("utf-8")),
         }
 
     def request_time_extension(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -1184,6 +1263,17 @@ def run_tool_agent(
     from openrouter import OpenRouter
 
     messages: list[Any] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    preselected_skill_message = preselected_skills_message(runtime)
+    if preselected_skill_message:
+        messages.append(preselected_skill_message)
+        transcript.append(
+            {
+                "role": "skill_activation",
+                "message": preselected_skill_message["content"],
+                "started_at": utc_timestamp(),
+                "ended_at": utc_timestamp(),
+            }
+        )
     if runtime.initial_image_paths:
         initial_images = [
             {"path": relative_to((path if path.is_absolute() else runtime.working_folder / path), runtime.working_folder), "label": "Initial visual evidence"}
@@ -1445,6 +1535,37 @@ def start_heartbeat_thread(
     return thread
 
 
+def preselected_skills_message(runtime: ToolRuntime) -> dict[str, Any] | None:
+    if not runtime.preselected_skill_names:
+        return None
+    activated = []
+    errors = []
+    for name in runtime.preselected_skill_names:
+        try:
+            activated.append(runtime.activate_skill({"name": name}))
+        except Exception as exc:  # noqa: BLE001 - invalid operator-selected skills should be visible.
+            errors.append({"name": name, "error": str(exc)})
+    if not activated and not errors:
+        return None
+    lines = ["Preselected Agent Skills loaded by the harness:"]
+    for result in activated:
+        lines.append(f"\n--- {result['name']} ({result['skill_path']}) ---")
+        if result.get("description"):
+            lines.append(str(result["description"]))
+        lines.append(str(result["body"]))
+        resources = result.get("resources") if isinstance(result.get("resources"), list) else []
+        if resources:
+            lines.append("\nResources available via read_skill_resource:")
+            for resource in resources[:50]:
+                if isinstance(resource, dict):
+                    lines.append(f"- {resource.get('path')} ({resource.get('bytes')} bytes)")
+    if errors:
+        lines.append("\nSkill activation errors:")
+        for error in errors:
+            lines.append(f"- {error['name']}: {error['error']}")
+    return {"role": "user", "content": "\n".join(lines)}
+
+
 def maybe_compact_messages(
     client: Any,
     model: str,
@@ -1493,11 +1614,16 @@ def maybe_compact_messages(
         return messages, None, archive
     payload = json.loads(content)
     runtime.anchored_summary = payload["summary"]
-    summary_message = {
-        "role": "user",
-        "content": "Anchored context summary for continuing this agent run:\n\n" + runtime.anchored_summary,
-    }
-    compacted = prefix + [summary_message] + recent
+    summary_messages = [
+        {
+            "role": "user",
+            "content": "Anchored context summary for continuing this agent run:\n\n" + runtime.anchored_summary,
+        }
+    ]
+    active_skill_message = activated_skills_compaction_message(runtime)
+    if active_skill_message:
+        summary_messages.append(active_skill_message)
+    compacted = prefix + summary_messages + recent
     after_tokens = estimate_tokens(compacted)
     event = {
         "reason": "context_threshold",
@@ -1511,6 +1637,28 @@ def maybe_compact_messages(
         "usage": spec_agent.response_usage(completion),
     }
     return compacted, event, archive
+
+
+def activated_skills_compaction_message(runtime: ToolRuntime) -> dict[str, Any] | None:
+    if not runtime.activated_skill_names:
+        return None
+    lines = ["Active Agent Skills that remain loaded after context compaction:"]
+    for name in sorted(runtime.activated_skill_names):
+        try:
+            result = runtime.activate_skill({"name": name})
+        except Exception:
+            continue
+        lines.append(f"\n--- {result['name']} ({result['skill_path']}) ---")
+        if result.get("description"):
+            lines.append(str(result["description"]))
+        lines.append(str(result["body"]))
+        resources = result.get("resources") if isinstance(result.get("resources"), list) else []
+        if resources:
+            lines.append("\nResources available via read_skill_resource:")
+            for resource in resources[:50]:
+                if isinstance(resource, dict):
+                    lines.append(f"- {resource.get('path')} ({resource.get('bytes')} bytes)")
+    return {"role": "user", "content": "\n".join(lines)}
 
 
 def compaction_system_prompt(runtime: ToolRuntime) -> str:
@@ -1747,6 +1895,11 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         if ports:
             detail += f" ports={quote_value(','.join(ports), 120)}"
         return detail
+    if name == "activate_skill":
+        resources = result.get("resources") if isinstance(result.get("resources"), list) else []
+        return f"name={quote_value(str(result.get('name') or arguments.get('name') or ''), 120)} resources={len(resources)} already_active={result.get('already_active')}"
+    if name == "read_skill_resource":
+        return f"name={quote_value(str(result.get('name') or arguments.get('name') or ''), 120)} path={quote_value(str(result.get('path') or arguments.get('path') or ''), 180)} bytes={result.get('bytes')}"
     if name in {"list_files", "find_files"}:
         entries = result.get("entries") if name == "list_files" else result.get("matches")
         count = len(entries) if isinstance(entries, list) else 0
@@ -2067,13 +2220,27 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append(f"url: `{result.get('url') or arguments.get('url')}`")
         summary.append(f"status: {result.get('status')}")
         summary.append(f"bytes read: {len(content.encode('utf-8'))}")
+    elif name == "activate_skill":
+        summary.append(f"skill: `{result.get('name') or arguments.get('name')}`")
+        summary.append(f"description: {result.get('description') or ''}")
+        summary.append(f"skill path: `{result.get('skill_path')}`")
+        resources = result.get("resources") if isinstance(result.get("resources"), list) else []
+        summary.append(f"resources: {len(resources)}")
+        for resource in resources[:12]:
+            if isinstance(resource, dict):
+                summary.append(f"resource: `{resource.get('path')}` ({resource.get('bytes')} bytes)")
+    elif name == "read_skill_resource":
+        content = str(result.get("content") or "")
+        summary.append(f"skill: `{result.get('name') or arguments.get('name')}`")
+        summary.append(f"path: `{result.get('path') or arguments.get('path')}`")
+        summary.append(f"bytes read: {len(content.encode('utf-8'))}")
     elif name == "final_report":
         summary.append("final report submitted")
     return summary
 
 
 def display_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if name in {"read_file", "write_file", "fetch_url"}:
+    if name in {"read_file", "write_file", "fetch_url", "read_skill_resource"}:
         return {key: value for key, value in arguments.items() if key != "content"}
     if name == "todo_write":
         return {}
@@ -2224,6 +2391,8 @@ def available_tool_names() -> list[str]:
         "web_search",
         "fetch_url",
         "request_time_extension",
+        "activate_skill",
+        "read_skill_resource",
         "todo_read",
         "todo_write",
     ]

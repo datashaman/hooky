@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import agent_runtime  # noqa: E402
+import agent_skills  # noqa: E402
 
 
 class ProtectedPathTests(unittest.TestCase):
@@ -300,6 +301,50 @@ class ProtectedPathTests(unittest.TestCase):
 
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["content"], "{}\n")
+
+    def test_runtime_can_activate_skill_and_read_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_path = root / ".agents/skills/example/SKILL.md"
+            skill_path.parent.mkdir(parents=True)
+            skill_path.write_text(
+                "---\nname: example\ndescription: Example skill.\n---\n\n# Example\n\nUse references only when needed.\n",
+                encoding="utf-8",
+            )
+            (skill_path.parent / "references").mkdir()
+            (skill_path.parent / "references/details.md").write_text("Detailed guidance.\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                skills=agent_skills.discover_skills(root),
+            )
+
+            activated = runtime.activate_skill({"name": "example"})
+            resource = runtime.read_skill_resource({"name": "example", "path": "references/details.md"})
+
+            self.assertTrue(activated["ok"], activated)
+            self.assertIn("Use references only when needed.", activated["body"])
+            self.assertEqual(resource["content"], "Detailed guidance.\n")
+
+    def test_runtime_requires_skill_activation_before_resource_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_path = root / ".agents/skills/example/SKILL.md"
+            skill_path.parent.mkdir(parents=True)
+            skill_path.write_text("# Example\n", encoding="utf-8")
+            (skill_path.parent / "details.md").write_text("secret\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                skills=agent_skills.discover_skills(root),
+            )
+
+            with self.assertRaisesRegex(ValueError, "activate skill before reading resources"):
+                runtime.read_skill_resource({"name": "example", "path": "details.md"})
 
     def test_detect_project_environment_finds_package_manager_and_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
