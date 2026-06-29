@@ -313,7 +313,7 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Use the available tools to inspect prior-stage artifacts and relevant implementation files. Prefer git_status/git_diff/git_show for read-only git inspection, read_file_excerpt/read_many_files over shell snippets, and run_tests only when a deterministic rerun is necessary for evidence.
+Use the available tools to inspect prior-stage artifacts and relevant implementation files. Prefer git_status/git_diff/git_show for read-only git inspection, latest_test_failure_context for failed test diagnostics, read_file_excerpt/read_many_files over shell snippets, and run_tests only when a deterministic rerun is necessary for evidence.
 Dynamic context contains file paths, status summaries, and counts only. Read files from the workspace when you need detailed evidence.
 The deterministic_facts block is system-generated evidence. Do not contradict it. If a stage failed after writing files, report both facts: the stage failed and files exist.
 If deterministic_facts shows failed approved test runs, include those failures explicitly in findings or trajectory/tooling findings. Do not describe the implementation as satisfying all acceptance criteria when approved tests failed.

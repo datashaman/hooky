@@ -348,7 +348,8 @@ Do not edit approved tests, prior-stage artifacts, or runtime configuration.
 Use managed process tools for long-running local servers: start_process, read_process, stop_process, and list_processes. Do not background servers through bash with `&`, shell job control, or manual port cleanup unless you are only diagnosing an already-orphaned external process.
 Run the approved test suite deliberately:
 - Run a full approved test command at most twice after implementation changes unless the previous full run passed.
-- After a failure, inspect run_tests summary/output_path evidence and rerun only the specific failing test file or focused test while debugging.
+- After a failed run_tests call, use latest_test_failure_context before reading raw logs or shelling into test artifacts. It writes a concise system-owned diagnostic bundle with the failing command, parsed failures, output tail, and related Playwright error-context files.
+- Rerun only the specific failing test file or focused test while debugging.
 - If approved tests still fail after three implementation attempts, call final_report with tests_passing false and exact failures_remaining instead of continuing to churn.
 Keep failure diagnosis inside the product workspace:
 - Do inspect approved tests, project source/config, run_tests output artifacts, Playwright error-context files under test-results, browser-visible DOM state, and screenshots.

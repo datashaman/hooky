@@ -163,6 +163,16 @@ class ToolRuntime:
                 [],
             ),
             tool_schema(
+                "latest_test_failure_context",
+                "Write and return a concise, file-backed diagnostic bundle for the latest failed run_tests call.",
+                {
+                    "max_output_bytes": integer_schema(default=8000, minimum=1000, maximum=50000),
+                    "max_artifact_bytes": integer_schema(default=12000, minimum=1000, maximum=50000),
+                    "max_artifacts": integer_schema(default=3, minimum=0, maximum=10),
+                },
+                [],
+            ),
+            tool_schema(
                 "capture_visual_snapshot",
                 "Capture a browser screenshot for visual verification and return layout metrics.",
                 {
@@ -271,6 +281,7 @@ class ToolRuntime:
             "grep_files": self.grep_files,
             "detect_project_environment": self.detect_project_environment,
             "run_tests": self.run_tests,
+            "latest_test_failure_context": self.latest_test_failure_context,
             "capture_visual_snapshot": self.capture_visual_snapshot,
             "git_status": self.git_status,
             "git_diff": self.git_diff,
@@ -558,6 +569,54 @@ class ToolRuntime:
             result["ok"] = False
             result["error"] = "test command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20])
         return result
+
+    def latest_test_failure_context(self, args: dict[str, Any]) -> dict[str, Any]:
+        max_output_bytes = int(args.get("max_output_bytes") or 8000)
+        max_artifact_bytes = int(args.get("max_artifact_bytes") or 12000)
+        max_artifacts = int(args.get("max_artifacts") or 3)
+        event = latest_failed_run_tests_event(self.tool_events)
+        if event is None:
+            return {"ok": False, "error": "no failed run_tests event is available"}
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        output_path = str(result.get("output_path") or "")
+        output = ""
+        if output_path:
+            try:
+                resolved_output = self.resolve_path(output_path)
+                self.validate_read_path(resolved_output)
+                output = read_tail(resolved_output, max_output_bytes)
+            except Exception:
+                output = str(result.get("output_tail") or "")[-max_output_bytes:]
+        else:
+            output = str(result.get("output_tail") or "")[-max_output_bytes:]
+        artifacts = latest_error_context_artifacts(self.working_folder, max_artifacts, max_artifact_bytes)
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        failed_tests = summary.get("failed_tests") if isinstance(summary.get("failed_tests"), list) else []
+        bundle = render_failure_context_bundle(
+            command=str(result.get("command") or ""),
+            returncode=result.get("returncode"),
+            timed_out=bool(result.get("timed_out")),
+            output_path=output_path,
+            failed_tests=[str(item) for item in failed_tests],
+            output_tail=output,
+            artifacts=artifacts,
+        )
+        context_path = write_tool_result_artifact(self.working_folder, "failure-context", bundle)
+        return {
+            "ok": True,
+            "context_path": context_path,
+            "command": result.get("command"),
+            "returncode": result.get("returncode"),
+            "timed_out": result.get("timed_out"),
+            "output_path": output_path,
+            "failed_tests": failed_tests[:10],
+            "artifacts": [
+                {"path": item["path"], "bytes": item["bytes"], "truncated": item["truncated"]}
+                for item in artifacts
+            ],
+            "content": bundle[: max_output_bytes + max_artifact_bytes],
+            "truncated": len(bundle.encode("utf-8")) > max_output_bytes + max_artifact_bytes,
+        }
 
     def capture_visual_snapshot(self, args: dict[str, Any]) -> dict[str, Any]:
         url = str(args.get("url") or "").strip()
@@ -1541,6 +1600,15 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         if failed_tests:
             detail += f" failing={quote_value(single_line('; '.join(str(item) for item in failed_tests[:3]), 180), 180)}"
         return detail
+    if name == "latest_test_failure_context":
+        failed_tests = result.get("failed_tests") if isinstance(result.get("failed_tests"), list) else []
+        detail = (
+            f"context_path={quote_value(str(result.get('context_path') or ''), 180)} "
+            f"failed_tests={len(failed_tests)} artifacts={len(result.get('artifacts') or [])}"
+        )
+        if failed_tests:
+            detail += f" failing={quote_value(single_line('; '.join(str(item) for item in failed_tests[:2]), 180), 180)}"
+        return detail
     if name == "capture_visual_snapshot":
         metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
         detail = (
@@ -1814,6 +1882,17 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         output_tail = str(result.get("output_tail") or "").strip()
         if output_tail:
             summary.append("output tail: " + single_line(output_tail, 500))
+    elif name == "latest_test_failure_context":
+        summary.append(f"context path: `{result.get('context_path')}`")
+        summary.append(f"command: `{result.get('command')}`")
+        summary.append(f"returncode: {result.get('returncode')}")
+        failed_tests = result.get("failed_tests") if isinstance(result.get("failed_tests"), list) else []
+        for failed in failed_tests[:8]:
+            summary.append("failed test: " + single_line(str(failed), 300))
+        artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else []
+        for artifact in artifacts[:8]:
+            if isinstance(artifact, dict):
+                summary.append(f"artifact: `{artifact.get('path')}`")
     elif name == "capture_visual_snapshot":
         summary.append(f"url: `{result.get('url') or arguments.get('url')}`")
         summary.append(f"screenshot path: `{result.get('screenshot_path')}`")
@@ -2018,6 +2097,7 @@ def available_tool_names() -> list[str]:
         "find_files",
         "detect_project_environment",
         "run_tests",
+        "latest_test_failure_context",
         "capture_visual_snapshot",
         "git_status",
         "git_diff",
@@ -2228,6 +2308,87 @@ def parse_test_output(output: str, returncode: int) -> dict[str, Any]:
         "counts": counts,
         "truncated": len(failed_tests) > 50,
     }
+
+
+def latest_failed_run_tests_event(tool_events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(tool_events):
+        if event.get("name") != "run_tests":
+            continue
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        if result.get("ok") is False:
+            return event
+    return None
+
+
+def latest_error_context_artifacts(root: Path, max_artifacts: int, max_bytes: int) -> list[dict[str, Any]]:
+    if max_artifacts <= 0:
+        return []
+    candidates = sorted(
+        (path for path in (root / "test-results").rglob("error-context.md") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    artifacts: list[dict[str, Any]] = []
+    for path in candidates[:max_artifacts]:
+        content = read_text_prefix(path, max_bytes)
+        artifacts.append(
+            {
+                "path": relative_to(path, root),
+                "bytes": path.stat().st_size,
+                "content": content,
+                "truncated": path.stat().st_size > len(content.encode("utf-8")),
+            }
+        )
+    return artifacts
+
+
+def render_failure_context_bundle(
+    *,
+    command: str,
+    returncode: Any,
+    timed_out: bool,
+    output_path: str,
+    failed_tests: list[str],
+    output_tail: str,
+    artifacts: list[dict[str, Any]],
+) -> str:
+    lines = [
+        "# Latest Test Failure Context",
+        "",
+        "## Command",
+        "",
+        f"- command: `{command}`",
+        f"- returncode: {returncode}",
+        f"- timed_out: {timed_out}",
+        f"- output_path: `{output_path}`",
+        "",
+        "## Failed Tests",
+        "",
+    ]
+    if failed_tests:
+        lines.extend(f"- {single_line(item, 500)}" for item in failed_tests[:20])
+    else:
+        lines.append("- No individual failed test names were parsed from output.")
+    lines.extend(["", "## Output Tail", "", "```text", output_tail.strip(), "```", ""])
+    if artifacts:
+        lines.extend(["## Related Error Context Artifacts", ""])
+        for artifact in artifacts:
+            lines.extend(
+                [
+                    f"### `{artifact['path']}`",
+                    "",
+                    f"- bytes: {artifact['bytes']}",
+                    f"- truncated: {artifact['truncated']}",
+                    "",
+                    "```markdown",
+                    str(artifact.get("content") or "").strip(),
+                    "```",
+                    "",
+                ]
+            )
+    else:
+        lines.extend(["## Related Error Context Artifacts", "", "No `test-results/**/error-context.md` artifacts were found.", ""])
+    return "\n".join(lines)
 
 
 def extract_failed_test_names(output: str) -> list[str]:

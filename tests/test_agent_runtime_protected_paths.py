@@ -306,6 +306,40 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertIn("tests/example.spec.js", result["summary"]["failed_tests"][0])
             self.assertTrue((root / result["output_path"]).exists())
 
+    def test_latest_test_failure_context_writes_bundle_with_error_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            error_context = root / "test-results" / "example-failure" / "error-context.md"
+            error_context.parent.mkdir(parents=True)
+            error_context.write_text("# Page snapshot\n\nbutton: Save\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            test_result = runtime.run_tests(
+                {
+                    "command": "python3 -c \"print('1) tests/example.spec.js:1:1 › suite › fails'); raise SystemExit(1)\"",
+                    "timeout_seconds": 10,
+                }
+            )
+            runtime.tool_events.append({"name": "run_tests", "result": test_result})
+
+            result = runtime.latest_test_failure_context({})
+
+            self.assertTrue(result["ok"])
+            self.assertIn("tests/example.spec.js", result["failed_tests"][0])
+            self.assertEqual(result["artifacts"][0]["path"], "test-results/example-failure/error-context.md")
+            self.assertIn("Page snapshot", result["content"])
+            self.assertTrue((root / result["context_path"]).exists())
+            self.assertIn("failure-context", result["context_path"])
+
+    def test_latest_test_failure_context_reports_missing_failed_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.latest_test_failure_context({})
+
+            self.assertFalse(result["ok"])
+            self.assertIn("no failed run_tests", result["error"])
+
     def test_capture_visual_snapshot_saves_artifact_and_returns_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -354,6 +388,9 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_available_tools_include_visual_snapshot(self) -> None:
         self.assertIn("capture_visual_snapshot", agent_runtime.available_tool_names())
+
+    def test_available_tools_include_latest_test_failure_context(self) -> None:
+        self.assertIn("latest_test_failure_context", agent_runtime.available_tool_names())
 
     def test_available_tools_include_time_extension_request(self) -> None:
         self.assertIn("request_time_extension", agent_runtime.available_tool_names())
