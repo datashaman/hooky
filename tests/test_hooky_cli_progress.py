@@ -499,6 +499,48 @@ class HookyProgressTests(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("contract is not accepted", result.output)
 
+    def test_loop_contract_negotiation_updates_contract_progress_and_log(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+
+        boundary = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "boundary", "--body", "Build a browser todo app."],
+        )
+        proposal = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "propose-contract", "--body", "- Add todos\n- Persist todos"],
+        )
+        review = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "review-contract", "--status", "rejected", "--body", "Missing route criteria."],
+        )
+
+        self.assertEqual(boundary.exit_code, 0, boundary.output)
+        self.assertEqual(proposal.exit_code, 0, proposal.output)
+        self.assertEqual(review.exit_code, 0, review.output)
+        contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
+        self.assertIn("Build a browser todo app.", contract)
+        self.assertIn("- Add todos", contract)
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertIn("Missing route criteria.", log)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertFalse(state["contract_accepted"])
+        self.assertEqual(state["status"], "contract-rejected")
+
+        blocked = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        self.assertNotEqual(blocked.exit_code, 0)
+
+        accepted = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "review-contract", "--status", "accepted", "--body", "Criteria are testable."],
+        )
+
+        self.assertEqual(accepted.exit_code, 0, accepted.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertTrue(state["contract_accepted"])
+        self.assertEqual(state["status"], "contract-accepted")
+
     def test_loop_attempt_lifecycle_creates_trace_and_otel_artifacts(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])

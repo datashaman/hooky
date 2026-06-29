@@ -228,6 +228,37 @@ def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:
     return loop_attempts_dir(workspace) / attempt_id
 
 
+def replace_markdown_section(text: str, heading: str, body: str) -> str:
+    marker = f"## {heading}"
+    lines = text.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip() == marker:
+            start = index
+            break
+    replacement = [marker, "", body.strip(), ""]
+    if start is None:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        return text + "\n".join(replacement) + "\n"
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("## "):
+            end = index
+            break
+    return "\n".join(lines[:start] + replacement + lines[end:]).rstrip() + "\n"
+
+
+def read_body_arg_or_file(body: str | None, body_file: Path | None) -> str:
+    if body and body_file:
+        raise typer.BadParameter("use either --body or --body-file, not both")
+    if body_file:
+        return body_file.read_text(encoding="utf-8")
+    if body:
+        return body
+    raise typer.BadParameter("body is required via --body or --body-file")
+
+
 def read_global_state(workspace: Path) -> dict[str, Any]:
     path = global_state_path(workspace)
     return read_json(path) if path.exists() else {}
@@ -1258,6 +1289,73 @@ def loop_log(
     write_loop_state(workspace, state)
     write_loop_progress(workspace, state, note=title)
     typer.echo(f"log: {loop_log_path(workspace)}")
+
+
+@loop_app.command("boundary")
+def loop_boundary(
+    ctx: typer.Context,
+    body: Annotated[str | None, typer.Option(help="Problem boundary text.")] = None,
+    body_file: Annotated[Path | None, typer.Option(help="Problem boundary Markdown file.")] = None,
+) -> None:
+    """Write the planner problem boundary into contract.md."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    boundary = read_body_arg_or_file(body, body_file)
+    path = loop_contract_path(workspace)
+    path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Boundary", boundary), encoding="utf-8")
+    state = read_loop_state(workspace)
+    state["status"] = "boundary-written"
+    state["contract_accepted"] = False
+    state["last_action"] = "boundary"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note="Problem boundary updated.")
+    append_loop_log(workspace, "planner", "boundary updated")
+    typer.echo(f"contract: {path}")
+
+
+@loop_app.command("propose-contract")
+def loop_propose_contract(
+    ctx: typer.Context,
+    body: Annotated[str | None, typer.Option(help="Done criteria text.")] = None,
+    body_file: Annotated[Path | None, typer.Option(help="Done criteria Markdown file.")] = None,
+) -> None:
+    """Write generator-proposed done criteria into contract.md."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    criteria = read_body_arg_or_file(body, body_file)
+    path = loop_contract_path(workspace)
+    path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Done Criteria", criteria), encoding="utf-8")
+    state = read_loop_state(workspace)
+    state["status"] = "contract-proposed"
+    state["contract_accepted"] = False
+    state["last_action"] = "propose-contract"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note="Done criteria proposed.")
+    append_loop_log(workspace, "generator", "contract proposed")
+    typer.echo(f"contract: {path}")
+
+
+@loop_app.command("review-contract")
+def loop_review_contract(
+    ctx: typer.Context,
+    status: Annotated[str, typer.Option(help="Review status: accepted or rejected.")] = "rejected",
+    body: Annotated[str | None, typer.Option(help="Evaluator review text.")] = None,
+    body_file: Annotated[Path | None, typer.Option(help="Evaluator review Markdown file.")] = None,
+) -> None:
+    """Record evaluator contract review in log.md and progress.md."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    if status not in {"accepted", "rejected"}:
+        raise typer.BadParameter("status must be accepted or rejected")
+    review = read_body_arg_or_file(body, body_file)
+    state = read_loop_state(workspace)
+    state["status"] = "contract-accepted" if status == "accepted" else "contract-rejected"
+    state["contract_accepted"] = status == "accepted"
+    state["last_action"] = f"review-contract:{status}"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=f"Contract review {status}. {review.strip()}")
+    append_loop_log(workspace, "evaluator", f"contract {status}", review)
+    typer.echo(f"contract_review: {status}")
 
 
 @loop_app.command("accept-contract")
