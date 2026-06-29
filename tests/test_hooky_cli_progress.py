@@ -592,6 +592,72 @@ class HookyProgressTests(unittest.TestCase):
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertIn("patching without convergence", log)
 
+    def test_loop_evaluator_report_records_bottleneck_and_report_artifact(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "fail",
+                "--recommendation",
+                "restart-attempt",
+                "--bottleneck",
+                "generator_trajectory",
+                "--finding",
+                "implementation is patching around the contract",
+                "--score",
+                "0.42",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["recommendation"], "restart-attempt")
+        self.assertEqual(report["score"], 0.42)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-attempt")
+        self.assertIsNone(state["current_attempt"])
+        self.assertEqual(state["bottleneck"], "generator_trajectory")
+        self.assertEqual(state["attempts"][0]["status"], "restarted")
+
+    def test_loop_evaluator_report_restart_contract_reopens_contract(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "fail",
+                "--recommendation",
+                "restart-contract",
+                "--bottleneck",
+                "weak_contract",
+                "--finding",
+                "done criteria omit persistence",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-contract")
+        self.assertFalse(state["contract_accepted"])
+        self.assertEqual(state["bottleneck"], "weak_contract")
+
 
 if __name__ == "__main__":
     unittest.main()

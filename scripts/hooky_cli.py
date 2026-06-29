@@ -228,6 +228,21 @@ def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:
     return loop_attempts_dir(workspace) / attempt_id
 
 
+def active_loop_attempt(state: dict[str, Any]) -> str:
+    attempt_id = state.get("current_attempt")
+    if not attempt_id:
+        raise typer.BadParameter("no active attempt")
+    return str(attempt_id)
+
+
+def update_loop_attempt(state: dict[str, Any], attempt_id: str, **updates: Any) -> None:
+    for attempt in state.get("attempts", []):
+        if isinstance(attempt, dict) and attempt.get("id") == attempt_id:
+            attempt.update(updates)
+            return
+    raise typer.BadParameter(f"attempt not found: {attempt_id}")
+
+
 def replace_markdown_section(text: str, heading: str, body: str) -> str:
     marker = f"## {heading}"
     lines = text.splitlines()
@@ -1421,16 +1436,14 @@ def loop_complete_attempt(
     if result not in {"pass", "fail"}:
         raise typer.BadParameter("result must be pass or fail")
     state = read_loop_state(workspace)
-    attempt_id = state.get("current_attempt")
-    if not attempt_id:
-        raise typer.BadParameter("no active attempt")
-    for attempt in state.get("attempts", []):
-        if isinstance(attempt, dict) and attempt.get("id") == attempt_id:
-            attempt["status"] = "passed" if result == "pass" else "failed"
-            attempt["completed_at"] = utc_now()
-            if bottleneck:
-                attempt["bottleneck"] = bottleneck
-            break
+    attempt_id = active_loop_attempt(state)
+    attempt_updates: dict[str, Any] = {
+        "status": "passed" if result == "pass" else "failed",
+        "completed_at": utc_now(),
+    }
+    if bottleneck:
+        attempt_updates["bottleneck"] = bottleneck
+    update_loop_attempt(state, attempt_id, **attempt_updates)
     state["current_attempt"] = None
     state["status"] = "passed" if result == "pass" else "attempt-failed"
     state["last_action"] = f"complete-attempt:{result}"
@@ -1444,6 +1457,80 @@ def loop_complete_attempt(
     append_loop_log(workspace, "evaluation", f"attempt {attempt_id} {result}", note)
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"result: {result}")
+
+
+@loop_app.command("evaluator-report")
+def loop_evaluator_report(
+    ctx: typer.Context,
+    status: Annotated[str, typer.Option(help="Evaluator status: pass or fail.")] = "fail",
+    recommendation: Annotated[str, typer.Option(help="Recommended control action: continue, restart-attempt, restart-contract, or stop.")] = "continue",
+    bottleneck: Annotated[str | None, typer.Option(help="Current bottleneck.")] = None,
+    finding: Annotated[list[str] | None, typer.Option("--finding", help="Evaluator finding. Repeat for multiple findings.")] = None,
+    score: Annotated[float | None, typer.Option(help="Optional subjective/objective score from 0.0 to 1.0.")] = None,
+) -> None:
+    """Write an evaluator report for the active attempt and apply its recommendation."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    if status not in {"pass", "fail"}:
+        raise typer.BadParameter("status must be pass or fail")
+    if recommendation not in {"continue", "restart-attempt", "restart-contract", "stop"}:
+        raise typer.BadParameter("recommendation must be continue, restart-attempt, restart-contract, or stop")
+    if score is not None and (score < 0 or score > 1):
+        raise typer.BadParameter("score must be between 0.0 and 1.0")
+    state = read_loop_state(workspace)
+    attempt_id = active_loop_attempt(state)
+    report = {
+        "schema_version": 1,
+        "attempt": attempt_id,
+        "written_at": utc_now(),
+        "status": status,
+        "recommendation": recommendation,
+        "bottleneck": bottleneck,
+        "findings": finding or [],
+        "score": score,
+    }
+    report_path = loop_attempt_dir(workspace, attempt_id) / "evaluator_report.json"
+    write_json(report_path, report)
+    attempt_status = "passed" if status == "pass" else "failed"
+    if recommendation == "restart-attempt":
+        attempt_status = "restarted"
+    update_loop_attempt(
+        state,
+        attempt_id,
+        status=attempt_status,
+        completed_at=utc_now(),
+        evaluator_report=report_path.relative_to(workspace).as_posix(),
+        **({"bottleneck": bottleneck} if bottleneck else {}),
+    )
+    if recommendation == "restart-attempt":
+        state["current_attempt"] = None
+        state["status"] = "restart-attempt"
+    elif recommendation == "restart-contract":
+        state["current_attempt"] = None
+        state["status"] = "restart-contract"
+        state["contract_accepted"] = False
+    elif status == "pass":
+        state["current_attempt"] = None
+        state["status"] = "passed"
+    elif recommendation == "stop":
+        state["current_attempt"] = None
+        state["status"] = "stopped"
+    else:
+        state["current_attempt"] = None
+        state["status"] = "attempt-failed"
+    state["last_action"] = f"evaluator-report:{recommendation}"
+    if bottleneck:
+        state["bottleneck"] = bottleneck
+    note = f"Evaluator status={status}, recommendation={recommendation}."
+    if bottleneck:
+        note += f" Bottleneck: {bottleneck}."
+    if finding:
+        note += " Findings: " + "; ".join(finding)
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, "evaluator", f"attempt {attempt_id} report", note)
+    typer.echo(f"report: {report_path}")
+    typer.echo(f"recommendation: {recommendation}")
 
 
 @loop_app.command("restart-attempt")
