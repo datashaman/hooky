@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import shutil
 import subprocess
@@ -1234,11 +1235,10 @@ def run_pipeline_with_remediation_loop(
     max_remediations: int,
 ) -> None:
     attempts = 0
-    start_stage = "spec"
     last_failures: list[str] = []
+    failures = run_stage_sequence(ctx, start_stage="spec", auto_approve=auto_approve, task=task)
+    last_failures = failures
     while True:
-        failures = run_stage_sequence(ctx, start_stage=start_stage, auto_approve=auto_approve, task=task)
-        last_failures = failures
         state = load_task_state(workspace, task)
         if pipeline_complete(state):
             set_pipeline_status(workspace, state, "passed", remediation_attempts=attempts)
@@ -1267,8 +1267,6 @@ def run_pipeline_with_remediation_loop(
             message = f"remediation plan has invalid resume stage: {start_stage or 'missing'}"
             set_pipeline_status(workspace, state, "failed", error=message, remediation_attempts=attempts)
             raise RuntimeError(message)
-        recover_artifacts_for_resume(workspace, state, start_stage, auto_approve=auto_approve)
-        state = load_task_state(workspace, task)
         attempts += 1
         set_pipeline_status(
             workspace,
@@ -1278,6 +1276,44 @@ def run_pipeline_with_remediation_loop(
             remediation_plan=plan_path.relative_to(workspace).as_posix(),
             resume_from=start_stage,
         )
+        result = run_remediation_subprocess(workspace=workspace, task=task, auto_approve=auto_approve)
+        state = load_task_state(workspace, task)
+        if pipeline_complete(state):
+            set_pipeline_status(workspace, state, "passed", remediation_attempts=attempts)
+            return
+        if result.returncode != 0:
+            last_failures = [f"remediation attempt {attempts} failed with exit code {result.returncode}"]
+        else:
+            last_failures = []
+
+
+def run_remediation_subprocess(*, workspace: Path, task: str | None, auto_approve: bool) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        (SCRIPT_DIR / "hooky_cli.py").as_posix(),
+        "-C",
+        workspace.as_posix(),
+        "run",
+        "remediation",
+    ]
+    if auto_approve:
+        command.append("--auto-approve")
+    if task:
+        command.extend(["--task", task])
+    append_pipeline_event(
+        workspace,
+        "remediation_process",
+        status="started",
+        command=" ".join(shlex.quote(part) for part in command),
+    )
+    result = subprocess.run(command, cwd=REPO_ROOT, text=True)
+    append_pipeline_event(
+        workspace,
+        "remediation_process",
+        status="exited",
+        returncode=result.returncode,
+    )
+    return result
 
 
 def incomplete_pipeline_stages(state: dict[str, Any]) -> list[str]:
