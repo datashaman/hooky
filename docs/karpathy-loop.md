@@ -10,7 +10,7 @@ Use this vocabulary consistently when discussing this loop.
 The loop has three model roles, each with its own context window and system
 prompt:
 
-- `planner`: turns vague user input into a contract. It never edits code.
+- `planner`: turns vague user input into a problem boundary. It never edits code.
 - `generator`: changes the project to satisfy the contract. It does not grade its
   own work.
 - `evaluator`: assumes the current attempt is broken, inspects diffs, runs tools,
@@ -24,6 +24,24 @@ The `loop-runner` is not a model role. It is harness code. It owns process flow
 and decides whether to continue, resume, restart the attempt, restart the
 contract, stop at a cap, or ask for human input.
 
+## Contract Negotiation
+
+The `planner` does not write the final grading contract. It writes the problem
+boundary. The grading contract is negotiated before implementation:
+
+1. The `planner` writes `planner_spec.md`.
+2. The `generator` proposes `contract.md`, describing what done means.
+3. The `evaluator` reviews `contract.md` and writes `contract_review.md`.
+4. The `generator` revises `contract.md` until the `evaluator` accepts it.
+5. The accepted contract is projected into `feature_list.json` as testable
+   assertions.
+6. Only after contract acceptance may the `generator` write implementation.
+
+The original planner output is the boundary. The negotiated contract is the
+grading instrument. The `generator` may propose criteria, but cannot approve
+them. The `evaluator` may reject weak, vague, missing, or untestable criteria
+before any code is written.
+
 ## Disk State
 
 The loop must be resumable from durable files, not conversation context. The
@@ -31,9 +49,11 @@ primary state should be small enough to read directly:
 
 ```text
 .workflow/loop/
+  planner_spec.md
+  contract_review.md
   feature_list.json
-  progress.md
   contract.md
+  progress.md
   log.md
 ```
 
@@ -60,7 +80,8 @@ The loop distinguishes three actions:
 
 - `resume`: keep the current attempt and continue from disk state.
 - `restart-attempt`: discard generated changes from the current attempt, keep
-  `feature_list.json`, `progress.md`, `contract.md`, and `log.md`.
+  `planner_spec.md`, `contract.md`, `contract_review.md`, `feature_list.json`,
+  `progress.md`, and `log.md`.
 - `restart-contract`: abandon or revise the contract. This requires the `planner`
   or a human because the problem statement changed.
 
