@@ -713,6 +713,63 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(otel_payload["attributes"]["tokens"], 1234)
         self.assertEqual(otel_payload["attributes"]["decision"], "continue")
 
+    def test_loop_run_executes_complete_local_suite(self) -> None:
+        result = CliRunner().invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "run",
+                "--title",
+                "Todo app",
+                "--boundary",
+                "Build a TodoMVC-style app.",
+                "--criteria",
+                "- Add todos\n- Persist todos",
+                "--status",
+                "pass",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("status: passed", result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "passed")
+        self.assertIsNone(state["current_attempt"])
+        self.assertEqual(state["attempts"][0]["status"], "passed")
+        self.assertTrue((self.workspace / ".workflow/loop/attempts/001/evaluator_report.json").exists())
+        self.assertTrue((self.workspace / ".workflow/loop/attempts/001/traces/planner.jsonl").exists())
+        self.assertTrue((self.workspace / ".workflow/loop/attempts/001/otel/spans.jsonl").exists())
+        contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
+        self.assertIn("Build a TodoMVC-style app.", contract)
+        self.assertIn("- Persist todos", contract)
+
+    def test_loop_run_can_record_restart_recommendation(self) -> None:
+        result = CliRunner().invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "run",
+                "--criteria",
+                "- Build the thing",
+                "--status",
+                "fail",
+                "--recommendation",
+                "restart-attempt",
+                "--bottleneck",
+                "generator_trajectory",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-attempt")
+        self.assertEqual(state["attempts"][0]["status"], "restarted")
+        self.assertEqual(state["bottleneck"], "generator_trajectory")
+
 
 if __name__ == "__main__":
     unittest.main()

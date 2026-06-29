@@ -234,6 +234,39 @@ def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:
     return loop_attempts_dir(workspace) / attempt_id
 
 
+def initialize_loop_files(workspace: Path, *, title: str | None, boundary: str = "", force: bool = False) -> Path:
+    loop_root = loop_dir(workspace)
+    if loop_state_path(workspace).exists() and not force:
+        raise typer.BadParameter("loop already initialized. Use --force to overwrite.")
+    loop_root.mkdir(parents=True, exist_ok=True)
+    write_json(loop_feature_list_path(workspace), default_loop_feature_list())
+    state = default_loop_state()
+    state["created_at"] = utc_now()
+    write_loop_state(workspace, state)
+    contract_lines = ["# Loop Contract", ""]
+    if title:
+        contract_lines.extend(["## Problem", "", f"# {title}", ""])
+    if boundary:
+        contract_lines.extend(["## Boundary", "", boundary.strip(), ""])
+    contract_lines.extend(
+        [
+            "## Done Criteria",
+            "",
+            "_The generator proposes criteria here; the evaluator accepts or rejects them before implementation._",
+            "",
+            "## Taste Rubric",
+            "",
+            "_Optional. Required only when subjective quality matters._",
+            "",
+        ]
+    )
+    loop_contract_path(workspace).write_text("\n".join(contract_lines), encoding="utf-8")
+    write_loop_progress(workspace, state, note="Loop initialized.")
+    loop_log_path(workspace).write_text("", encoding="utf-8")
+    append_loop_log(workspace, "init", "loop initialized", f"workspace: {workspace}")
+    return loop_root
+
+
 def active_loop_attempt(state: dict[str, Any]) -> str:
     attempt_id = state.get("current_attempt")
     if not attempt_id:
@@ -1237,36 +1270,8 @@ def loop_init(
 ) -> None:
     """Initialize the Karpathy-style loop durable state files."""
     workspace = workspace_from_ctx(ctx)
-    loop_root = loop_dir(workspace)
-    if loop_state_path(workspace).exists() and not force:
-        raise typer.BadParameter("loop already initialized. Use --force to overwrite.")
     boundary = body_file.read_text(encoding="utf-8").strip() if body_file else ""
-    loop_root.mkdir(parents=True, exist_ok=True)
-    write_json(loop_feature_list_path(workspace), default_loop_feature_list())
-    state = default_loop_state()
-    state["created_at"] = utc_now()
-    write_loop_state(workspace, state)
-    contract_lines = ["# Loop Contract", ""]
-    if title:
-        contract_lines.extend(["## Problem", "", f"# {title}", ""])
-    if boundary:
-        contract_lines.extend(["## Boundary", "", boundary, ""])
-    contract_lines.extend(
-        [
-            "## Done Criteria",
-            "",
-            "_The generator proposes criteria here; the evaluator accepts or rejects them before implementation._",
-            "",
-            "## Taste Rubric",
-            "",
-            "_Optional. Required only when subjective quality matters._",
-            "",
-        ]
-    )
-    loop_contract_path(workspace).write_text("\n".join(contract_lines), encoding="utf-8")
-    write_loop_progress(workspace, state, note="Loop initialized.")
-    loop_log_path(workspace).write_text("", encoding="utf-8")
-    append_loop_log(workspace, "init", "loop initialized", f"workspace: {workspace}")
+    loop_root = initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
     typer.echo(f"loop: {loop_root}")
     typer.echo("next: hooky loop status")
 
@@ -1292,6 +1297,128 @@ def loop_status(ctx: typer.Context) -> None:
         for attempt in attempts:
             if isinstance(attempt, dict):
                 typer.echo(f"  {attempt.get('id')}: {attempt.get('status')}")
+
+
+@loop_app.command("run")
+def loop_run(
+    ctx: typer.Context,
+    title: Annotated[str | None, typer.Option(help="Problem title used when initializing a new loop.")] = None,
+    boundary: Annotated[str, typer.Option(help="Planner boundary text for contract.md.")] = "",
+    criteria: Annotated[str, typer.Option(help="Generator-proposed done criteria.")] = "- Define done criteria explicitly.",
+    review: Annotated[str, typer.Option(help="Evaluator contract review text.")] = "Contract criteria are accepted for this local run.",
+    status: Annotated[str, typer.Option(help="Evaluator status: pass or fail.")] = "pass",
+    recommendation: Annotated[str, typer.Option(help="Evaluator recommendation: continue, restart-attempt, restart-contract, or stop.")] = "continue",
+    bottleneck: Annotated[str | None, typer.Option(help="Evaluator bottleneck.")] = None,
+    force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
+) -> None:
+    """Run the local Karpathy-style loop suite through one attempt."""
+    workspace = workspace_from_ctx(ctx)
+    if not loop_state_path(workspace).exists() or force:
+        initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
+    elif boundary:
+        path = loop_contract_path(workspace)
+        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Boundary", boundary), encoding="utf-8")
+    if status not in {"pass", "fail"}:
+        raise typer.BadParameter("status must be pass or fail")
+    if recommendation not in {"continue", "restart-attempt", "restart-contract", "stop"}:
+        raise typer.BadParameter("recommendation must be continue, restart-attempt, restart-contract, or stop")
+
+    contract_path = loop_contract_path(workspace)
+    contract_path.write_text(
+        replace_markdown_section(contract_path.read_text(encoding="utf-8"), "Done Criteria", criteria),
+        encoding="utf-8",
+    )
+    append_loop_log(workspace, "generator", "contract proposed", criteria)
+    state = read_loop_state(workspace)
+    state["status"] = "contract-accepted"
+    state["contract_accepted"] = True
+    state["last_action"] = "run:contract-accepted"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=f"Contract accepted. {review}")
+    append_loop_log(workspace, "evaluator", "contract accepted", review)
+
+    attempt_id = next_loop_attempt_id(state)
+    attempt_dir = loop_attempt_dir(workspace, attempt_id)
+    (attempt_dir / "traces").mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "otel").mkdir(parents=True, exist_ok=True)
+    for role in ("planner", "generator", "evaluator"):
+        append_jsonl(
+            attempt_dir / "traces" / f"{role}.jsonl",
+            {
+                "timestamp": utc_now(),
+                "attempt": attempt_id,
+                "role": role,
+                "kind": "run",
+                "content": f"local loop run {role}",
+            },
+        )
+    append_jsonl(
+        attempt_dir / "otel/spans.jsonl",
+        {
+            "timestamp": utc_now(),
+            "name": "attempt_started",
+            "attributes": {"attempt": attempt_id, "decision": "continue"},
+        },
+    )
+    state = read_loop_state(workspace)
+    state.setdefault("attempts", []).append(
+        {
+            "id": attempt_id,
+            "status": "running",
+            "started_at": utc_now(),
+            "path": attempt_dir.relative_to(workspace).as_posix(),
+        }
+    )
+    state["current_attempt"] = attempt_id
+    state["status"] = "attempt-running"
+    state["last_action"] = "run:start-attempt"
+    write_loop_state(workspace, state)
+    append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
+
+    report = {
+        "schema_version": 1,
+        "attempt": attempt_id,
+        "written_at": utc_now(),
+        "status": status,
+        "recommendation": recommendation,
+        "bottleneck": bottleneck,
+        "findings": [],
+        "score": 1.0 if status == "pass" else 0.0,
+    }
+    report_path = attempt_dir / "evaluator_report.json"
+    write_json(report_path, report)
+    attempt_status = "passed" if status == "pass" else "failed"
+    if recommendation == "restart-attempt":
+        attempt_status = "restarted"
+    update_loop_attempt(
+        state,
+        attempt_id,
+        status=attempt_status,
+        completed_at=utc_now(),
+        evaluator_report=report_path.relative_to(workspace).as_posix(),
+        **({"bottleneck": bottleneck} if bottleneck else {}),
+    )
+    if recommendation == "restart-attempt":
+        state["status"] = "restart-attempt"
+    elif recommendation == "restart-contract":
+        state["status"] = "restart-contract"
+        state["contract_accepted"] = False
+    elif status == "pass":
+        state["status"] = "passed"
+    elif recommendation == "stop":
+        state["status"] = "stopped"
+    else:
+        state["status"] = "attempt-failed"
+    state["current_attempt"] = None
+    state["last_action"] = f"run:evaluator-report:{recommendation}"
+    if bottleneck:
+        state["bottleneck"] = bottleneck
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=f"Run completed with status={status}, recommendation={recommendation}.")
+    append_loop_log(workspace, "evaluator", f"attempt {attempt_id} {status}", f"recommendation: {recommendation}")
+    typer.echo(f"attempt: {attempt_id}")
+    typer.echo(f"status: {state['status']}")
+    typer.echo(f"report: {report_path}")
 
 
 @loop_app.command("log")
