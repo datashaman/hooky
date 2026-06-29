@@ -188,6 +188,7 @@ def verifier_agent_contract_schema() -> dict[str, Any]:
             "scope_violations",
             "test_integrity_findings",
             "acceptance_coverage_findings",
+            "visual_findings",
             "security_findings",
             "required_actions",
             "safe_to_open_pr",
@@ -212,6 +213,7 @@ def verifier_agent_contract_schema() -> dict[str, Any]:
             "scope_violations": spec_agent.string_array_schema(),
             "test_integrity_findings": spec_agent.string_array_schema(),
             "acceptance_coverage_findings": spec_agent.string_array_schema(),
+            "visual_findings": spec_agent.string_array_schema(),
             "security_findings": spec_agent.string_array_schema(),
             "required_actions": spec_agent.string_array_schema(),
             "safe_to_open_pr": {"type": "boolean"},
@@ -290,11 +292,12 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Use the available tools to inspect files and run deterministic checks.
+Use the available tools to inspect files and run deterministic checks. Prefer detect_project_environment before choosing commands, run_tests for deterministic checks, capture_visual_snapshot for browser UI visual/layout evidence, git_status/git_diff/git_show for read-only git inspection, and read_file_excerpt/read_many_files over shell snippets.
 Use todo tools to track the verification work.
 You must not edit code, tests, dependency manifests, config, or prior-stage artifacts.
 Run the project-defined test command for the detected toolchain. If lint, static analysis, or security commands are defined, run them too.
 Compare approved test artifact contents against files in the working folder when content is available in prior-stage contracts.
+When the project exposes a browser UI or visual surface, start the project using its existing dev/server command, capture at least one visual snapshot at a representative viewport, inspect the returned screenshot path and layout metrics, and include visual findings. Do not pass a UI project based only on functional tests when the visual snapshot shows obvious layout failures such as clipped primary content, huge unintended whitespace, overlapping controls, horizontal overflow, missing visible controls, console errors, or content that is implausibly off-screen. For non-UI projects, set visual_findings to ["not_applicable: no browser or visual UI surface detected"].
 Finish only by calling final_report with the Verifier Agent contract.
 """
 
@@ -307,6 +310,7 @@ def validate_contract(contract: dict[str, Any]) -> None:
         "scope_violations",
         "test_integrity_findings",
         "acceptance_coverage_findings",
+        "visual_findings",
         "security_findings",
         "required_actions",
         "safe_to_open_pr",
@@ -320,6 +324,9 @@ def validate_contract(contract: dict[str, Any]) -> None:
         raise ValueError("safe_to_open_pr may be true only when status is pass")
     if contract["status"] == "fail" and not contract["required_actions"]:
         raise ValueError("failed verifier output must include required_actions")
+    visual_findings = contract.get("visual_findings")
+    if not isinstance(visual_findings, list):
+        raise ValueError("visual_findings must be a list")
 
 
 def write_artifacts(
@@ -345,6 +352,7 @@ def write_artifacts(
         "scope_violations": spec_agent.md_list(contract.get("scope_violations", [])),
         "test_integrity_findings": spec_agent.md_list(contract.get("test_integrity_findings", [])),
         "acceptance_coverage_findings": spec_agent.md_list(contract.get("acceptance_coverage_findings", [])),
+        "visual_findings": spec_agent.md_list(contract.get("visual_findings", [])),
         "security_findings": spec_agent.md_list(contract.get("security_findings", [])),
         "required_actions": spec_agent.md_list(contract.get("required_actions", [])),
         "safe_to_open_pr": str(contract.get("safe_to_open_pr", False)),

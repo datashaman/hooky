@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import artifact_policy
+import agent_runtime
 import builder_agent
 import command_result
 import eval_runtime
@@ -270,6 +271,7 @@ def prepare_attempt_workspace(workspace_fixture: Path, attempt_dir: Path) -> Non
     if not workspace_fixture.exists():
         raise FileNotFoundError(f"workspace fixture does not exist: {workspace_fixture}")
     shutil.copytree(workspace_fixture, attempt_dir, dirs_exist_ok=True)
+    agent_runtime.ensure_git_baseline(attempt_dir)
 
 
 def protected_file_hashes(working_folder: Path) -> dict[str, str]:

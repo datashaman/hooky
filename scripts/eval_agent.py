@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
@@ -309,9 +310,11 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Use the available tools to inspect prior-stage artifacts and relevant implementation files.
+Use the available tools to inspect prior-stage artifacts and relevant implementation files. Prefer git_status/git_diff/git_show for read-only git inspection, read_file_excerpt/read_many_files over shell snippets, and run_tests only when a deterministic rerun is necessary for evidence.
 Dynamic context contains file paths, status summaries, and counts only. Read files from the workspace when you need detailed evidence.
 The deterministic_facts block is system-generated evidence. Do not contradict it. If a stage failed after writing files, report both facts: the stage failed and files exist.
+If deterministic_facts shows failed approved test runs, include those failures explicitly in findings or trajectory/tooling findings. Do not describe the implementation as satisfying all acceptance criteria when approved tests failed.
+When evaluating a remediation run, use the remediation context. If the remediation root cause is Builder trajectory/tooling and the rerun produces no source changes but passes Builder and Verifier deterministically, do not fail solely because the patch is empty. Judge whether the remediation actually addressed the prior failure mode.
 Use todo tools to track the evaluation work.
 You must not edit any files.
 Evaluate the full pipeline trajectory even when an earlier stage failed or Verifier did not run.
@@ -400,6 +403,24 @@ def validate_fact_consistency(contract: dict[str, Any], dynamic_context: dict[st
             raise ValueError("eval contradicts deterministic facts: builder wrote implementation/workspace files")
         if not stages_overlap(dynamic_context, "test", "builder") and contains_any(text, ["builder started concurrently", "concurrently with test"]):
             raise ValueError("eval contradicts deterministic facts: builder did not overlap test runtime")
+        test_failures = builder.get("test_failures") if isinstance(builder.get("test_failures"), dict) else {}
+        failed_test_runs = int(test_failures.get("failed_runs") or 0)
+        failing_tests = [str(item) for item in test_failures.get("failing_tests") or []]
+        if failed_test_runs > 0:
+            if contains_any(
+                text,
+                [
+                    "covers all acceptance criteria",
+                    "covers all 19 acceptance criteria",
+                    "satisfies all acceptance criteria",
+                    "all acceptance criteria are covered",
+                ],
+            ):
+                raise ValueError("eval contradicts deterministic facts: builder had failed approved test runs")
+            failure_terms = ["playwright", "approved test", "test failure", "tests failed", "failing test", "failed test"]
+            failure_terms.extend(test_name_fragment(name) for name in failing_tests[:5])
+            if not contains_any(text, [term for term in failure_terms if term]):
+                raise ValueError("eval omitted deterministic failed approved-test evidence")
     approvals = facts.get("approvals") if isinstance(facts.get("approvals"), dict) else {}
     if approvals and contains_any(text, ["no human sign-off recorded", "no human approval recorded", "without approval recorded"]):
         raise ValueError("eval contradicts deterministic facts: approvals are recorded")
@@ -687,6 +708,7 @@ def deterministic_facts(working_folder: Path) -> dict[str, Any]:
         stage_fact["total_tokens"] = usage.get("total_tokens")
         if stage == "builder":
             stage_fact.update(builder_artifact_facts(working_folder, tool_events))
+            stage_fact["test_failures"] = builder_test_failure_facts(tool_events)
         facts["stages"][stage] = stage_fact
     return facts
 
@@ -747,6 +769,76 @@ def builder_artifact_facts(working_folder: Path, tool_events: list[dict[str, Any
         "workspace_file_count": workspace_files["file_count"],
         "workspace_files_sample": workspace_files["files"][:80],
     }
+
+
+def builder_test_failure_facts(tool_events: list[dict[str, Any]]) -> dict[str, Any]:
+    failed_commands: list[dict[str, Any]] = []
+    failing_tests: list[str] = []
+    for event in tool_events:
+        if event.get("name") != "bash":
+            continue
+        arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+        command = str(arguments.get("command") or "")
+        if not command_looks_like_test_run(command):
+            continue
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        returncode = result.get("returncode")
+        ok = result.get("ok")
+        if ok is False or (isinstance(returncode, int) and returncode != 0):
+            output = " ".join(str(result.get(key) or "") for key in ("stdout", "stderr", "error"))
+            failed_commands.append(
+                {
+                    "command": command[:300],
+                    "returncode": returncode,
+                    "output_sample": truncate_value(output, 900),
+                }
+            )
+            failing_tests.extend(extract_test_names(output))
+    unique_tests = sorted(set(failing_tests))
+    return {
+        "failed_runs": len(failed_commands),
+        "failed_commands": failed_commands[:8],
+        "failing_tests": unique_tests[:20],
+        "truncated": len(failed_commands) > 8 or len(unique_tests) > 20,
+    }
+
+
+def command_looks_like_test_run(command: str) -> bool:
+    lowered = command.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "playwright test",
+            "npm test",
+            "pnpm test",
+            "yarn test",
+            "bun test",
+            "pytest",
+            "cargo test",
+            "go test",
+            "phpunit",
+            "rspec",
+        )
+    )
+
+
+def extract_test_names(output: str) -> list[str]:
+    names: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if "›" in stripped:
+            names.append(re.sub(r"\s+", " ", stripped))
+        elif re.match(r"^\d+\)\s+", stripped):
+            names.append(re.sub(r"\s+", " ", stripped))
+    return names
+
+
+def test_name_fragment(name: str) -> str:
+    lowered = name.lower()
+    for token in re.split(r"[^a-z0-9_-]+", lowered):
+        if len(token) >= 8:
+            return token
+    return lowered[:40]
 
 
 def workspace_file_facts(working_folder: Path) -> dict[str, Any]:

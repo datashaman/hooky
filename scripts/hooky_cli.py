@@ -849,6 +849,8 @@ def init(
     copy_missing(repo_file(".workflow/agents"), workspace / ".workflow/agents", force=force)
     copy_missing(repo_file("AGENTS.md"), workspace / "AGENTS.md", force=force)
     (workspace / ".workflow/tasks").mkdir(parents=True, exist_ok=True)
+    if git:
+        agent_runtime.ensure_git_baseline(workspace)
     typer.echo(f"initialized: {workspace}")
 
 
@@ -1211,6 +1213,7 @@ def run_remediation(
 def run_pipeline(
     ctx: typer.Context,
     auto_approve: Annotated[bool, typer.Option(help="Automatically approve spec and test gates.")] = False,
+    max_remediations: Annotated[int, typer.Option(help="Maximum automatic remediation attempts after Eval creates a remediation plan.")] = 2,
     task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
 ) -> None:
     """Run all stages for the current task."""
@@ -1218,27 +1221,80 @@ def run_pipeline(
         raise typer.BadParameter("run pipeline requires --auto-approve. Use individual `hooky run ...` commands for human-gated flow.")
     workspace = workspace_from_ctx(ctx)
     state = load_task_state(workspace, task)
-    set_pipeline_status(workspace, state, "running")
-    failures = run_stage_sequence(ctx, start_stage="spec", auto_approve=auto_approve, task=task)
-    try:
-        if failures:
+    set_pipeline_status(workspace, state, "running", max_remediations=max_remediations)
+    run_pipeline_with_remediation_loop(ctx, workspace=workspace, task=task, auto_approve=auto_approve, max_remediations=max_remediations)
+
+
+def run_pipeline_with_remediation_loop(
+    ctx: typer.Context,
+    *,
+    workspace: Path,
+    task: str | None,
+    auto_approve: bool,
+    max_remediations: int,
+) -> None:
+    attempts = 0
+    start_stage = "spec"
+    last_failures: list[str] = []
+    while True:
+        failures = run_stage_sequence(ctx, start_stage=start_stage, auto_approve=auto_approve, task=task)
+        last_failures = failures
+        state = load_task_state(workspace, task)
+        if pipeline_complete(state):
+            set_pipeline_status(workspace, state, "passed", remediation_attempts=attempts)
+            return
+
+        plan_path = current_remediation_path(workspace)
+        if failures and not plan_path.exists():
             message = "; ".join(failures)
-            state = load_task_state(workspace, task)
-            set_pipeline_status(workspace, state, "failed", error=message)
+            set_pipeline_status(workspace, state, "failed", error=message, remediation_attempts=attempts)
             raise RuntimeError(message)
-    except Exception:
-        raise
-    state = load_task_state(workspace, task)
-    if not pipeline_complete(state):
-        missing = [
-            stage
-            for stage in PIPELINE_STAGES
-            if state.get("stage_status", {}).get(stage, {}).get("status") != "passed"
-        ]
-        message = "pipeline cannot pass before stages pass: " + ", ".join(missing)
-        set_pipeline_status(workspace, state, "failed", error=message)
-        raise RuntimeError(message)
-    set_pipeline_status(workspace, state, "passed")
+        if not plan_path.exists():
+            fail_incomplete_pipeline(workspace, state, attempts, last_failures)
+
+        if attempts >= max_remediations:
+            missing = incomplete_pipeline_stages(state)
+            message = (
+                f"pipeline remediation limit reached ({max_remediations}) before stages pass"
+                + (": " + ", ".join(missing) if missing else "")
+            )
+            set_pipeline_status(workspace, state, "failed", error=message, remediation_attempts=attempts)
+            raise RuntimeError(message)
+
+        plan = read_json(plan_path)
+        start_stage = str(plan.get("resume_from_stage") or plan.get("root_cause_stage") or "")
+        if start_stage not in PIPELINE_STAGES:
+            message = f"remediation plan has invalid resume stage: {start_stage or 'missing'}"
+            set_pipeline_status(workspace, state, "failed", error=message, remediation_attempts=attempts)
+            raise RuntimeError(message)
+        recover_artifacts_for_resume(workspace, state, start_stage, auto_approve=auto_approve)
+        state = load_task_state(workspace, task)
+        attempts += 1
+        set_pipeline_status(
+            workspace,
+            state,
+            "running",
+            remediation_attempts=attempts,
+            remediation_plan=plan_path.relative_to(workspace).as_posix(),
+            resume_from=start_stage,
+        )
+
+
+def incomplete_pipeline_stages(state: dict[str, Any]) -> list[str]:
+    return [
+        stage
+        for stage in PIPELINE_STAGES
+        if state.get("stage_status", {}).get(stage, {}).get("status") != "passed"
+    ]
+
+
+def fail_incomplete_pipeline(workspace: Path, state: dict[str, Any], attempts: int, failures: list[str]) -> None:
+    missing = incomplete_pipeline_stages(state)
+    message = "pipeline cannot pass before stages pass: " + ", ".join(missing)
+    if failures:
+        message += "; failures: " + "; ".join(failures)
+    set_pipeline_status(workspace, state, "failed", error=message, remediation_attempts=attempts)
+    raise RuntimeError(message)
 
 
 def require_approval(state: dict[str, Any], stage: str) -> None:

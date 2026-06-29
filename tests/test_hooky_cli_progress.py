@@ -49,6 +49,21 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn(f"owner_pid={os.getpid()}", pipeline_log)
         self.assertIn("trace=.workflow/artifacts/test-agent/runtime_events.log", pipeline_log)
 
+    def test_init_creates_git_baseline_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "package.json").write_text('{"scripts":{}}\n', encoding="utf-8")
+
+            result = CliRunner().invoke(hooky_cli.app, ["-C", str(workspace), "init"])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            head = hooky_cli.git_command(workspace, ["rev-parse", "--verify", "HEAD"], check=False)
+            show = hooky_cli.git_command(workspace, ["show", "HEAD:package.json"], check=False)
+            status = hooky_cli.git_command(workspace, ["status", "--short"], check=False)
+            self.assertEqual(head.returncode, 0)
+            self.assertEqual(show.stdout, '{"scripts":{}}\n')
+            self.assertEqual(status.stdout, "")
+
     def test_status_marks_running_stage_interrupted_when_owner_pid_is_gone(self) -> None:
         state = hooky_cli.load_task_state(self.workspace)
         state["stage_status"] = {
@@ -254,6 +269,66 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(saved["pipeline_status"]["status"], "failed")
         self.assertEqual(saved["stage_status"]["spec"]["status"], "passed")
         self.assertEqual(saved["artifacts"]["spec"]["contract"], "docs/specs/issue-1001-progress/contract.json")
+
+    def test_pipeline_auto_runs_remediation_plan_until_passed(self) -> None:
+        calls: list[str] = []
+
+        def stage_sequence(ctx: object, start_stage: str, auto_approve: bool, task: str | None) -> list[str]:
+            calls.append(start_stage)
+            state = hooky_cli.load_task_state(self.workspace, task)
+            if start_stage == "spec":
+                state["stage_status"] = {stage: {"status": "passed"} for stage in hooky_cli.PIPELINE_STAGES}
+                state["stage_status"]["eval"] = {"status": "fail"}
+                eval_contract_path = self.workspace / ".workflow/artifacts/eval-agent/contract.json"
+                eval_contract_path.parent.mkdir(parents=True)
+                eval_contract_path.write_text("{}", encoding="utf-8")
+                hooky_cli.create_remediation_plan(
+                    self.workspace,
+                    state,
+                    {"status": "fail", "safe_to_merge": False, "root_cause_stage": "builder", "findings": ["retry builder"]},
+                    eval_contract_path,
+                )
+                return []
+            state["stage_status"] = {stage: {"status": "passed"} for stage in hooky_cli.PIPELINE_STAGES}
+            hooky_cli.save_task_state(self.workspace, state)
+            return []
+
+        with mock.patch.object(hooky_cli, "run_stage_sequence", side_effect=stage_sequence):
+            result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "pipeline", "--auto-approve"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(calls, ["spec", "builder"])
+        saved = hooky_cli.load_task_state(self.workspace)
+        self.assertEqual(saved["pipeline_status"]["status"], "passed")
+        self.assertEqual(saved["pipeline_status"]["remediation_attempts"], 1)
+
+    def test_pipeline_auto_remediation_stops_at_limit(self) -> None:
+        def stage_sequence(ctx: object, start_stage: str, auto_approve: bool, task: str | None) -> list[str]:
+            state = hooky_cli.load_task_state(self.workspace, task)
+            state["stage_status"] = {stage: {"status": "passed"} for stage in hooky_cli.PIPELINE_STAGES}
+            state["stage_status"]["eval"] = {"status": "fail"}
+            eval_contract_path = self.workspace / ".workflow/artifacts/eval-agent/contract.json"
+            eval_contract_path.parent.mkdir(parents=True, exist_ok=True)
+            eval_contract_path.write_text("{}", encoding="utf-8")
+            hooky_cli.create_remediation_plan(
+                self.workspace,
+                state,
+                {"status": "fail", "safe_to_merge": False, "root_cause_stage": "builder", "findings": ["retry builder"]},
+                eval_contract_path,
+            )
+            return []
+
+        with mock.patch.object(hooky_cli, "run_stage_sequence", side_effect=stage_sequence):
+            result = CliRunner().invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "run", "pipeline", "--auto-approve", "--max-remediations", "1"],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        saved = hooky_cli.load_task_state(self.workspace)
+        self.assertEqual(saved["pipeline_status"]["status"], "failed")
+        self.assertIn("pipeline remediation limit reached (1)", saved["pipeline_status"]["error"])
+        self.assertEqual(saved["pipeline_status"]["remediation_attempts"], 1)
 
 
 if __name__ == "__main__":

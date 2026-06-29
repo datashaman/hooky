@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import eval_spec_agent
+import agent_runtime
 import artifact_policy
 import eval_runtime
 import spec_agent
@@ -266,6 +267,7 @@ def prepare_attempt_workspace(project_fixture: Path, attempt_dir: Path) -> None:
     if not project_fixture.exists():
         raise FileNotFoundError(f"project fixture does not exist: {project_fixture}")
     shutil.copytree(project_fixture, attempt_dir, dirs_exist_ok=True)
+    agent_runtime.ensure_git_baseline(attempt_dir)
 
 
 def args_fixture_source(fixture: dict[str, Any]) -> str:

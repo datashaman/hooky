@@ -89,7 +89,7 @@ def generate_build_artifacts(
         report_root=report_root,
     )
     contract, usage = generate_contract(dynamic_context=dynamic_context, working_folder=working_folder)
-    validate_contract(contract)
+    validate_contract_for_context(contract, dynamic_context)
     apply_file_writes(working_folder, contract)
     report_dir = working_folder / report_root
     write_artifacts(report_dir=report_dir, contract=contract, dynamic_context=dynamic_context, generated_at=generated_at)
@@ -186,7 +186,7 @@ def generate_contract_with_openrouter(
         max_cost_usd=float(os.environ.get("BUILDER_AGENT_MAX_COST_USD", "0.50")),
         max_seconds=int(os.environ.get("BUILDER_AGENT_MAX_SECONDS", "420")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
-        final_validator=validate_contract,
+        final_validator=lambda contract: validate_contract_for_context(contract, dynamic_context),
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=builder ",
@@ -335,11 +335,16 @@ Dynamic Context:
 {json.dumps(dynamic_context, indent=2, sort_keys=True)}
 ```
 
-Use the available tools to inspect project files, approved tests, and runtime behavior as needed.
+Use the available tools to inspect project files, approved tests, and runtime behavior as needed. Prefer read_file_excerpt/read_many_files over shell snippets, detect_project_environment over package-manager probes, and run_tests over bash for test execution.
 Use todo tools to track substantive work. You may write production implementation files only.
 You may create or update dependency manifests, lockfiles, build config, and toolchain config only when required by the approved spec or project context.
 Do not edit approved tests, prior-stage artifacts, or runtime configuration.
 Use managed process tools for long-running local servers: start_process, read_process, stop_process, and list_processes. Do not background servers through bash with `&`, shell job control, or manual port cleanup unless you are only diagnosing an already-orphaned external process.
+Run the approved test suite deliberately:
+- Run a full approved test command at most twice after implementation changes unless the previous full run passed.
+- After a failure, inspect run_tests summary/output_path evidence and rerun only the specific failing test file or focused test while debugging.
+- If approved tests still fail after three implementation attempts, call final_report with tests_passing false and exact failures_remaining instead of continuing to churn.
+If you receive a runtime soft-deadline notice, do not start another long command. Call final_report immediately with the current implementation state, tests_run, tests_passing, and failures_remaining.
 If deterministic evidence shows the approved tests are invalid, contradictory, or unimplementable without editing tests, stop and report it instead of weakening tests or churning dependencies.
 For invalid approved tests, call final_report with tests_passing false, failures_remaining populated, and test_contract_findings explaining the evidence.
 Finish only by calling final_report with the Builder Agent contract.
@@ -347,6 +352,10 @@ Finish only by calling final_report with the Builder Agent contract.
 
 
 def validate_contract(contract: dict[str, Any]) -> None:
+    validate_contract_for_context(contract, {})
+
+
+def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dict[str, Any]) -> None:
     required = [
         "summary",
         "file_writes",
@@ -364,10 +373,15 @@ def validate_contract(contract: dict[str, Any]) -> None:
         raise ValueError("builder contract must require verifier")
     if contract["tests_passing"] is False and not contract["failures_remaining"]:
         raise ValueError("builder contract with tests_passing false must list failures_remaining")
-    if not contract["file_writes"] and not contract.get("test_contract_findings"):
+    if not contract["file_writes"] and not contract.get("test_contract_findings") and not remediation_noop_allowed(contract, dynamic_context):
         raise ValueError("builder contract must include production file writes unless reporting invalid approved tests")
     for file_write in contract["file_writes"]:
         validate_file_write(file_write)
+
+
+def remediation_noop_allowed(contract: dict[str, Any], dynamic_context: dict[str, Any]) -> bool:
+    remediation = dynamic_context.get("remediation") if isinstance(dynamic_context.get("remediation"), dict) else {}
+    return bool(remediation) and contract.get("tests_passing") is True and bool(contract.get("tests_run"))
 
 
 def validate_file_write(file_write: dict[str, Any]) -> None:

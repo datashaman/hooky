@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import artifact_policy
+import agent_runtime
 import eval_runtime
 import spec_agent
 
@@ -429,6 +430,7 @@ def run_attempt(
     artifact_root = attempt_dir / "docs/specs"
     sidecar_root = attempt_dir / ".workflow/artifacts/specs"
     attempt_dir.mkdir(parents=True, exist_ok=True)
+    agent_runtime.ensure_git_baseline(attempt_dir)
 
     previous_model = os.environ.get("OPENROUTER_MODEL")
     previous_reasoning = os.environ.get("OPENROUTER_REASONING")

@@ -24,6 +24,10 @@
 
 {{ acceptance_coverage_findings }}
 
+## Visual Findings
+
+{{ visual_findings }}
+
 ## Security Findings
 
 {{ security_findings }}
@@ -35,4 +39,3 @@
 ## Safe To Open PR
 
 {{ safe_to_open_pr }}
-

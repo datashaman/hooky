@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import eval_agent  # noqa: E402
+
+
+class EvalAgentForensicsTests(unittest.TestCase):
+    def test_builder_test_failure_facts_extract_failed_test_runs(self) -> None:
+        facts = eval_agent.builder_test_failure_facts(
+            [
+                {
+                    "name": "bash",
+                    "arguments": {"command": "npx playwright test 2>&1"},
+                    "result": {
+                        "ok": False,
+                        "returncode": 1,
+                        "stdout": "1) tests/todo-routing.spec.js:19:3 › TodoMVC route filtering › AC16: Routes are supported",
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(facts["failed_runs"], 1)
+        self.assertIn("tests/todo-routing.spec.js", facts["failing_tests"][0])
+
+    def test_eval_cannot_claim_all_acceptance_criteria_when_builder_tests_failed(self) -> None:
+        contract = minimal_eval_contract(
+            findings=["Implementation covers all 19 acceptance criteria."],
+            trajectory_findings=["Builder timed out."],
+        )
+        dynamic_context = context_with_builder_test_failures()
+
+        with self.assertRaisesRegex(ValueError, "failed approved test runs"):
+            eval_agent.validate_contract_for_context(contract, dynamic_context)
+
+    def test_eval_must_mention_failed_test_evidence_when_builder_tests_failed(self) -> None:
+        contract = minimal_eval_contract(
+            findings=["Builder timed out after writing implementation files."],
+            trajectory_findings=["Builder made several bash calls."],
+        )
+        dynamic_context = context_with_builder_test_failures()
+
+        with self.assertRaisesRegex(ValueError, "omitted deterministic failed approved-test evidence"):
+            eval_agent.validate_contract_for_context(contract, dynamic_context)
+
+    def test_eval_accepts_failed_test_evidence_when_named(self) -> None:
+        contract = minimal_eval_contract(
+            findings=["Approved Playwright tests failed in tests/todo-routing.spec.js."],
+            trajectory_findings=["Builder timed out before final_report."],
+        )
+        dynamic_context = context_with_builder_test_failures()
+
+        eval_agent.validate_contract_for_context(contract, dynamic_context)
+
+
+def minimal_eval_contract(**overrides: object) -> dict[str, object]:
+    contract: dict[str, object] = {
+        "status": "fail",
+        "scores": {
+            "spec_alignment": 5,
+            "maintainability": 5,
+            "architecture_fit": 5,
+            "risk_awareness": 5,
+            "trajectory_quality": 1,
+            "pr_summary_quality": 1,
+        },
+        "findings": ["Approved tests failed."],
+        "root_cause_stage": "builder",
+        "trajectory_findings": ["Builder failed."],
+        "artifact_findings": ["Builder wrote implementation files."],
+        "tooling_findings": ["Builder did not call final_report."],
+        "cost_findings": ["Builder spent cost before timing out."],
+        "human_review_focus": ["Inspect builder failures."],
+        "safe_to_merge": False,
+    }
+    contract.update(overrides)
+    return contract
+
+
+def context_with_builder_test_failures() -> dict[str, object]:
+    return {
+        "verifier_reports": {},
+        "pipeline_state": {"task_state": {"stage_status": {"verifier": {"status": "not-run"}}}},
+        "deterministic_facts": {
+            "stages": {
+                "builder": {
+                    "todo_calls": 1,
+                    "files_written_count": 2,
+                    "workspace_file_count": 5,
+                    "test_failures": {
+                        "failed_runs": 1,
+                        "failing_tests": ["tests/todo-routing.spec.js:19:3 › TodoMVC route filtering › AC16"],
+                    },
+                }
+            },
+            "approvals": {},
+        },
+    }
+
+
+if __name__ == "__main__":
+    unittest.main()

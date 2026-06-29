@@ -140,6 +140,10 @@ def generate_contract_with_openrouter(
         live_log_root=report_root,
         live_event_log_paths=[Path(dynamic_context["workspace"]["working_folder"]) / ".workflow/runtime_events.log"],
         live_event_prefix="stage=test ",
+        bash_command_validator=lambda command: package_manager_command_violation(
+            command,
+            str(dynamic_context.get("package_manager", {}).get("selected") or "npm"),
+        ),
     )
     runtime.final_validator = lambda contract: validate_contract_with_tool_events(
         contract,
@@ -290,10 +294,12 @@ def build_dynamic_context(
     project_root: Path,
     report_root: Path,
 ) -> dict[str, Any]:
+    package_manager = detect_js_package_manager(project_root)
     return {
         "source": "approved_spec_contract",
         "spec_source": spec_source,
         "approved_spec": approved_spec,
+        "package_manager": package_manager,
         "workspace": {
             "working_folder": working_folder.as_posix(),
             "project_root": project_root.as_posix(),
@@ -344,6 +350,49 @@ def selected_model_metadata() -> dict[str, Any]:
     return {"model": "openai/gpt-4.1-mini", "source": "fallback"}
 
 
+def detect_js_package_manager(project_root: Path) -> dict[str, str]:
+    if (project_root / "pnpm-lock.yaml").exists():
+        return {"selected": "pnpm", "source": "pnpm-lock.yaml"}
+    if (project_root / "yarn.lock").exists():
+        return {"selected": "yarn", "source": "yarn.lock"}
+    if (project_root / "bun.lock").exists() or (project_root / "bun.lockb").exists():
+        return {"selected": "bun", "source": "bun.lock"}
+    if (project_root / "package-lock.json").exists():
+        return {"selected": "npm", "source": "package-lock.json"}
+    package_json = project_root / "package.json"
+    if package_json.exists():
+        try:
+            package_manager = str(spec_agent.read_json(package_json).get("packageManager") or "")
+        except (OSError, json.JSONDecodeError):
+            package_manager = ""
+        for name in ("pnpm", "yarn", "bun", "npm"):
+            if package_manager.startswith(name + "@"):
+                return {"selected": name, "source": "package.json packageManager"}
+        return {"selected": "npm", "source": "package.json default"}
+    return {"selected": "npm", "source": "no JavaScript package-manager metadata; npm default"}
+
+
+def package_manager_command_violation(command: str, selected: str) -> str | None:
+    package_managers = {"npm", "pnpm", "yarn", "bun"}
+    selected = selected if selected in package_managers else "npm"
+    for segment in split_shell_segments(command):
+        tokens = shell_tokens(segment)
+        if not tokens:
+            continue
+        executable = Path(tokens[0]).name
+        if executable in package_managers and executable != selected:
+            return f"project JavaScript package manager is {selected}; do not probe or use {executable}"
+        if executable in {"which", "where", "whereis"} and len(tokens) >= 2:
+            target = Path(tokens[1]).name
+            if target in package_managers and target != selected:
+                return f"project JavaScript package manager is {selected}; do not probe or use {target}"
+        if executable == "command" and len(tokens) >= 3 and tokens[1] == "-v":
+            target = Path(tokens[2]).name
+            if target in package_managers and target != selected:
+                return f"project JavaScript package manager is {selected}; do not probe or use {target}"
+    return None
+
+
 def test_prompt(agent_context: dict[str, Any], dynamic_context: dict[str, Any]) -> str:
     project_context = spec_agent.format_context_block("Project Context", agent_context["project_files"])
     common_context = spec_agent.format_context_block("Common Agent Runtime Context", agent_context["common_static_files"])
@@ -373,10 +422,12 @@ Dynamic Context:
 {json.dumps(visible_dynamic_context, indent=2, sort_keys=True)}
 ```
 
-You have filesystem and shell tools scoped to the working folder. Use the todo tools to plan and track work.
+You have filesystem and command tools scoped to the working folder. Use the todo tools to plan and track work.
 Inspect the project context and existing files as needed. Write executable test artifacts at project-native relative paths that match the app's conventions.
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
-You may run commands to set up declared project test dependencies, check syntax, discover tests, and run tests. Do not write production implementation.
+Use detect_project_environment before choosing package-manager or test commands.
+Use run_tests for syntax checks, test discovery, and test execution so Hooky captures structured evidence and full output artifacts. Use bash only when no targeted tool fits. Do not write production implementation.
+For JavaScript/Node tooling, use the package manager in Dynamic Context package_manager.selected. Do not probe or use alternative JavaScript package managers.
 If you run any setup, syntax, discovery, or test command, include it in test_execution_checks with its actual status. Test failures are expected before Builder runs; report them as failed, not fixed.
 Before running browser or end-to-end tests, inspect whether the project has the production app entrypoint those tests need, such as index.html and the referenced source files. If the production app entrypoint is absent because Builder has not run yet, do not run the browser suite; run static syntax/discovery checks that can execute without the app, and include the browser test command as skipped with a reason that the production app implementation is not present yet. Do not try to force a red phase from server error pages, browser security errors, missing selectors caused by an absent app, or other harness/runtime failures.
 You may install required test tooling and add testing-only dependencies when the approved test strategy or project context requires them. Record every dependency addition, removal, or version change in dependency_changes.
@@ -466,32 +517,30 @@ def validate_dependency_change_shape(value: Any) -> None:
 
 def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
     checks = list(contract.get("test_execution_checks") or [])
-    dependency_changes = list(contract.get("dependency_changes") or [])
-    bash_events = [event for event in tool_events if event.get("name") == "bash"]
-    for event in bash_events:
-        command = str(event.get("arguments", {}).get("command") or "")
+    command_events = [event for event in tool_events if event.get("name") in {"bash", "run_tests"}]
+    for event in command_events:
+        command = event_command(event)
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
         if is_reportable_test_command(command):
+            if command_masks_failure(command):
+                continue
             matching_checks = [check for check in checks if commands_match(str(check.get("command") or ""), command)]
             if not matching_checks:
                 raise ValueError(f"setup or test command missing from test_execution_checks: {command}")
             validate_matching_execution_checks(command, result, matching_checks)
-        if command_may_change_dependencies(command) and not dependency_changes:
-            raise ValueError(f"dependency-changing command requires dependency_changes entries: {command}")
-
     for check in checks:
         command = str(check.get("command") or "")
         if str(check.get("status")) != "passed":
             continue
         matching_events = [
             event
-            for event in bash_events
-            if commands_match(command, str(event.get("arguments", {}).get("command") or ""))
+            for event in command_events
+            if commands_match(command, event_command(event))
         ]
         if not matching_events:
-            raise ValueError(f"test_execution_checks claims passed without matching bash event: {command}")
-        if not any(bash_event_passed(event) for event in matching_events):
-            raise ValueError(f"test_execution_checks claims passed but matching bash command did not pass: {command}")
+            raise ValueError(f"test_execution_checks claims passed without matching command event: {command}")
+        if not any(command_event_passed(event) for event in matching_events):
+            raise ValueError(f"test_execution_checks claims passed but matching command did not pass: {command}")
 
 
 def validate_matching_execution_checks(command: str, result: dict[str, Any], checks: list[dict[str, Any]]) -> None:
@@ -528,6 +577,7 @@ def is_reportable_test_command(command: str) -> bool:
         "mix deps.get",
         "npm ci",
         "npm install",
+        "node -c",
         "node --check",
         "npm test",
         "npm run test",
@@ -561,14 +611,6 @@ def command_masks_failure(command: str) -> bool:
     return "|| true" in command.lower()
 
 
-def command_may_change_dependencies(command: str) -> bool:
-    for segment in split_shell_segments(command):
-        tokens = shell_tokens(segment)
-        if tokens and dependency_change_command(tokens):
-            return True
-    return False
-
-
 def split_shell_segments(command: str) -> list[str]:
     return [part.strip() for part in re.split(r"\s*(?:&&|\|\||;)\s*", command) if part.strip()]
 
@@ -578,27 +620,6 @@ def shell_tokens(command: str) -> list[str]:
         return shlex.split(command)
     except ValueError:
         return command.split()
-
-
-def dependency_change_command(tokens: list[str]) -> bool:
-    executable = Path(tokens[0]).name
-    if executable == "npm" and len(tokens) >= 2:
-        return tokens[1] in {"add", "install", "i", "ci"}
-    if executable in {"pnpm", "yarn", "bun"} and len(tokens) >= 2:
-        return tokens[1] in {"add", "install"}
-    if executable == "composer" and len(tokens) >= 2:
-        return tokens[1] in {"install", "require"}
-    if executable == "poetry" and len(tokens) >= 2:
-        return tokens[1] in {"install", "add"}
-    if executable == "uv" and len(tokens) >= 2:
-        return tokens[1] in {"sync", "add"} or (len(tokens) >= 3 and tokens[1:3] == ["pip", "install"])
-    if executable == "pip" and len(tokens) >= 2:
-        return tokens[1] == "install"
-    if executable == "go" and len(tokens) >= 2:
-        return tokens[1] in {"get", "mod"}
-    if executable in {"bundle", "cargo", "mix"} and len(tokens) >= 2:
-        return tokens[1] in {"install", "fetch", "deps.get"}
-    return False
 
 
 def commands_match(reported: str, actual: str) -> bool:
@@ -615,7 +636,13 @@ def normalize_command(command: str) -> str:
     return " ".join(command.strip().split())
 
 
-def bash_event_passed(event: dict[str, Any]) -> bool:
+def event_command(event: dict[str, Any]) -> str:
+    arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+    result = event.get("result") if isinstance(event.get("result"), dict) else {}
+    return str(arguments.get("command") or result.get("command") or "")
+
+
+def command_event_passed(event: dict[str, Any]) -> bool:
     result = event.get("result") if isinstance(event.get("result"), dict) else {}
     return bash_result_passed(result)
 

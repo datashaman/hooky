@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import artifact_policy
+import agent_runtime
 import eval_cases
 import eval_runtime
 import eval_spec_agent
@@ -181,6 +182,7 @@ def run_case(model_info: dict[str, Any], case: dict[str, Any], run_root: Path) -
     case_name = case["manifest"]["name"]
     attempt_dir = run_root / eval_spec_agent.safe_name(variant_id) / case_name
     shutil.copytree(case["path"], attempt_dir, dirs_exist_ok=True)
+    agent_runtime.ensure_git_baseline(attempt_dir)
     before = artifact_policy.snapshot(attempt_dir, exclude_prefixes=verifier_mutable_prefixes())
     with eval_cases.attempt_time_limit("verification", max(1, test_agent.openrouter_timeout_ms() // 1000)):
         report_dir, contract, usage = verifier_agent.generate_verification_artifacts(

@@ -162,6 +162,7 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("SPEC_AGENT_MAX_SECONDS", "180")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=validate_spec_finish_report,
+        write_validator=lambda path, content: validate_spec_write(path, content, Path(dynamic_context["workspace"]["working_folder"])),
         write_enabled=True,
         write_allowed_prefixes=[
             dynamic_context["workspace"]["artifact_root"],
@@ -246,6 +247,20 @@ def validate_spec_finish_report(report: dict[str, Any]) -> None:
     contract_path = report.get("contract_path")
     if not isinstance(contract_path, str) or not contract_path.strip():
         raise ValueError("final_report must include contract_path")
+
+
+def validate_spec_write(path: Path, content: str, working_folder: Path) -> None:
+    try:
+        relative = path.resolve().relative_to(working_folder.resolve()).as_posix()
+    except ValueError:
+        return
+    if not relative.startswith("docs/specs/") or not relative.endswith("/contract.json"):
+        return
+    try:
+        contract = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"spec contract JSON is invalid at line {exc.lineno} column {exc.colno}: {exc.msg}") from exc
+    validate_contract(contract)
 
 
 def load_contract_from_finish_report(report: dict[str, Any], working_folder: Path) -> dict[str, Any]:

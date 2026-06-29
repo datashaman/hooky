@@ -6,7 +6,10 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import signal
+import shlex
+import socket
 import subprocess
 import threading
 import time
@@ -60,6 +63,7 @@ class ToolRuntime:
     max_seconds: int
     bash_timeout_seconds: int = 30
     final_validator: FinalValidator | None = None
+    write_validator: Callable[[Path, str], None] | None = None
     context_window_tokens: int | None = None
     compaction_threshold: float = 0.65
     compaction_keep_recent_messages: int = 16
@@ -100,10 +104,73 @@ class ToolRuntime:
     def tools(self) -> list[dict[str, Any]]:
         return [
             tool_schema("read_file", "Read a UTF-8 text file from the working folder.", {"path": string_schema()}, ["path"]),
+            tool_schema(
+                "read_file_excerpt",
+                "Read selected lines from a UTF-8 text file in the working folder.",
+                {
+                    "path": string_schema(),
+                    "start_line": integer_schema(default=1, minimum=1),
+                    "max_lines": integer_schema(default=120, minimum=1, maximum=500),
+                },
+                ["path"],
+            ),
+            tool_schema(
+                "read_many_files",
+                "Read multiple UTF-8 text files from the working folder with per-file truncation.",
+                {
+                    "paths": string_array_schema(),
+                    "max_bytes_per_file": integer_schema(default=12000, minimum=1, maximum=50000),
+                },
+                ["paths"],
+            ),
             tool_schema("write_file", "Write a UTF-8 text file inside the working folder.", {"path": string_schema(), "content": string_schema()}, ["path", "content"]),
             tool_schema("list_files", "List direct children of a directory in the working folder.", {"path": string_schema(default=".")}, []),
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("grep_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
+            tool_schema(
+                "detect_project_environment",
+                "Detect language/package manager hints, scripts, lockfiles, and likely test commands.",
+                {},
+                [],
+            ),
+            tool_schema(
+                "run_tests",
+                "Run a project test command and return structured pass/fail evidence with full output saved to an artifact.",
+                {
+                    "command": string_schema(default=""),
+                    "test_file": string_schema(default=""),
+                    "test_name": string_schema(default=""),
+                    "list_only": {"type": "boolean", "default": False},
+                    "timeout_seconds": integer_schema(default=120, minimum=1, maximum=600),
+                },
+                [],
+            ),
+            tool_schema(
+                "capture_visual_snapshot",
+                "Capture a browser screenshot for visual verification and return layout metrics.",
+                {
+                    "url": string_schema(default=""),
+                    "wait_selector": string_schema(default="body"),
+                    "viewport_width": integer_schema(default=1280, minimum=320, maximum=3840),
+                    "viewport_height": integer_schema(default=900, minimum=240, maximum=2160),
+                    "full_page": {"type": "boolean", "default": True},
+                    "timeout_seconds": integer_schema(default=30, minimum=1, maximum=120),
+                },
+                ["url"],
+            ),
+            tool_schema("git_status", "Read git working-tree status without modifying files.", {}, []),
+            tool_schema(
+                "git_diff",
+                "Read git diff output without modifying files.",
+                {"path": string_schema(default=""), "staged": {"type": "boolean", "default": False}, "max_bytes": integer_schema(default=20000, minimum=1, maximum=100000)},
+                [],
+            ),
+            tool_schema(
+                "git_show",
+                "Read a file or object from git without modifying files.",
+                {"ref": string_schema(default="HEAD"), "path": string_schema(default=""), "max_bytes": integer_schema(default=20000, minimum=1, maximum=100000)},
+                [],
+            ),
             tool_schema("bash", "Run a shell command in the working folder with a timeout.", {"command": string_schema()}, ["command"]),
             tool_schema(
                 "start_process",
@@ -111,6 +178,8 @@ class ToolRuntime:
                 {
                     "command": string_schema(),
                     "name": string_schema(default="process"),
+                    "port": integer_schema(default=0, minimum=0, maximum=65535),
+                    "auto_allocate_port": {"type": "boolean", "default": False},
                     "wait_for_url": string_schema(default=""),
                     "wait_seconds": integer_schema(default=3, minimum=0, maximum=60),
                 },
@@ -153,10 +222,18 @@ class ToolRuntime:
             raise TimeoutError(f"agent runtime exceeded {self.max_seconds}s")
         handlers: dict[str, ToolHandler] = {
             "read_file": self.read_file,
+            "read_file_excerpt": self.read_file_excerpt,
+            "read_many_files": self.read_many_files,
             "write_file": self.write_file,
             "list_files": self.list_files,
             "find_files": self.find_files,
             "grep_files": self.grep_files,
+            "detect_project_environment": self.detect_project_environment,
+            "run_tests": self.run_tests,
+            "capture_visual_snapshot": self.capture_visual_snapshot,
+            "git_status": self.git_status,
+            "git_diff": self.git_diff,
+            "git_show": self.git_show,
             "bash": self.bash,
             "start_process": self.start_process,
             "read_process": self.read_process,
@@ -186,6 +263,41 @@ class ToolRuntime:
         self.validate_read_path(path)
         return {"ok": True, "path": relative_to(path, self.working_folder), "content": path.read_text(encoding="utf-8")}
 
+    def read_file_excerpt(self, args: dict[str, Any]) -> dict[str, Any]:
+        path = self.resolve_path(str(args["path"]))
+        self.validate_read_path(path)
+        start_line = int(args.get("start_line") or 1)
+        max_lines = int(args.get("max_lines") or 120)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start_index = max(start_line - 1, 0)
+        excerpt = lines[start_index : start_index + max_lines]
+        return {
+            "ok": True,
+            "path": relative_to(path, self.working_folder),
+            "start_line": start_index + 1,
+            "end_line": start_index + len(excerpt),
+            "total_lines": len(lines),
+            "content": "\n".join(excerpt),
+            "truncated": start_index + max_lines < len(lines),
+        }
+
+    def read_many_files(self, args: dict[str, Any]) -> dict[str, Any]:
+        max_bytes = int(args.get("max_bytes_per_file") or 12000)
+        files = []
+        for raw_path in list(args.get("paths") or [])[:50]:
+            path = self.resolve_path(str(raw_path))
+            self.validate_read_path(path)
+            content = read_text_prefix(path, max_bytes)
+            files.append(
+                {
+                    "path": relative_to(path, self.working_folder),
+                    "content": content,
+                    "bytes": path.stat().st_size,
+                    "truncated": path.stat().st_size > len(content.encode("utf-8")),
+                }
+            )
+        return {"ok": True, "files": files, "truncated": len(list(args.get("paths") or [])) > 50}
+
     def is_read_blocked(self, path: Path) -> bool:
         relative = relative_to(path.resolve(), self.working_folder)
         parts = Path(relative).parts
@@ -202,8 +314,11 @@ class ToolRuntime:
     def write_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
         self.validate_write_path(path)
+        content = str(args["content"])
+        if self.write_validator:
+            self.write_validator(path, content)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(args["content"]), encoding="utf-8")
+        path.write_text(content, encoding="utf-8")
         return {"ok": True, "path": relative_to(path, self.working_folder), "bytes": path.stat().st_size}
 
     def validate_write_path(self, path: Path) -> None:
@@ -267,6 +382,163 @@ class ToolRuntime:
                         return {"ok": True, "matches": matches, "truncated": True}
         return {"ok": True, "matches": matches, "truncated": False}
 
+    def detect_project_environment(self, _args: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, **detect_project_environment(self.working_folder)}
+
+    def run_tests(self, args: dict[str, Any]) -> dict[str, Any]:
+        environment = detect_project_environment(self.working_folder)
+        command = str(args.get("command") or "").strip()
+        if not command:
+            command = default_test_command(environment, bool(args.get("list_only")))
+        test_file = str(args.get("test_file") or "").strip()
+        test_name = str(args.get("test_name") or "").strip()
+        list_only = bool(args.get("list_only"))
+        if test_file and test_file not in command:
+            command = append_shell_arg(command, test_file)
+        if test_name:
+            command = append_test_name_filter(command, test_name)
+        if list_only and " --list" not in command and "playwright test" in command:
+            command += " --list"
+        if self.bash_command_validator:
+            violation = self.bash_command_validator(command)
+            if violation:
+                return {"ok": False, "error": f"test command blocked by agent policy: {violation}", "command": command}
+        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
+        timeout_seconds = int(args.get("timeout_seconds") or self.bash_timeout_seconds)
+        started = utc_timestamp()
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=self.working_folder,
+                shell=True,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+            timed_out = False
+        except subprocess.TimeoutExpired as exc:
+            completed = subprocess.CompletedProcess(command, 124, stdout=exc.stdout or "", stderr=exc.stderr or "")
+            timed_out = True
+        ended = utc_timestamp()
+        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
+        output = normalize_subprocess_output(completed.stdout) + normalize_subprocess_output(completed.stderr)
+        output_path = write_tool_result_artifact(self.working_folder, "test-runs", output)
+        result = {
+            "ok": completed.returncode == 0 and not timed_out and not protected_changes,
+            "command": command,
+            "returncode": completed.returncode,
+            "timed_out": timed_out,
+            "started_at": started,
+            "ended_at": ended,
+            "output_path": output_path,
+            "output_tail": output[-8000:],
+            "summary": parse_test_output(output, completed.returncode),
+        }
+        if protected_changes:
+            restore_protected_paths(self.working_folder, before, protected_changes)
+            result["ok"] = False
+            result["error"] = "test command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20])
+        return result
+
+    def capture_visual_snapshot(self, args: dict[str, Any]) -> dict[str, Any]:
+        url = str(args.get("url") or "").strip()
+        if not url:
+            raise ValueError("capture_visual_snapshot requires a URL; start a dev server first when needed")
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("capture_visual_snapshot URL must be http or https")
+        viewport_width = int(args.get("viewport_width") or 1280)
+        viewport_height = int(args.get("viewport_height") or 900)
+        wait_selector = str(args.get("wait_selector") or "body")
+        full_page = bool(args.get("full_page", True))
+        timeout_seconds = int(args.get("timeout_seconds") or 30)
+        output_dir = self.working_folder / ".workflow" / "tool-results" / "visual-snapshots"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ%f")[:22]
+        screenshot_path = output_dir / f"{stamp}.png"
+        script_path = output_dir / f"{stamp}.cjs"
+        script_path.write_text(visual_snapshot_script(), encoding="utf-8")
+        completed = subprocess.run(
+            [
+                "node",
+                script_path.as_posix(),
+                url,
+                screenshot_path.as_posix(),
+                str(viewport_width),
+                str(viewport_height),
+                wait_selector,
+                "1" if full_page else "0",
+            ],
+            cwd=self.working_folder,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        if completed.returncode != 0:
+            return {
+                "ok": False,
+                "url": url,
+                "returncode": completed.returncode,
+                "error": single_line(stderr or stdout or "visual snapshot command failed", 1000),
+                "screenshot_path": relative_to(screenshot_path, self.working_folder) if screenshot_path.exists() else "",
+            }
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            return {
+                "ok": False,
+                "url": url,
+                "returncode": completed.returncode,
+                "error": f"visual snapshot returned invalid JSON: {exc}",
+                "stdout": single_line(stdout, 1000),
+                "stderr": single_line(stderr, 1000),
+            }
+        payload["ok"] = True
+        payload["screenshot_path"] = relative_to(screenshot_path, self.working_folder)
+        payload["script_path"] = relative_to(script_path, self.working_folder)
+        if stderr:
+            payload["stderr"] = single_line(stderr, 1000)
+        return payload
+
+    def git_status(self, _args: dict[str, Any]) -> dict[str, Any]:
+        return self.run_git(["status", "--short"])
+
+    def git_diff(self, args: dict[str, Any]) -> dict[str, Any]:
+        command = ["diff"]
+        if bool(args.get("staged")):
+            command.append("--cached")
+        path = str(args.get("path") or "").strip()
+        if path:
+            resolved = self.resolve_path(path)
+            self.validate_read_path(resolved)
+            command.extend(["--", path])
+        return self.run_git(command, max_bytes=int(args.get("max_bytes") or 20000))
+
+    def git_show(self, args: dict[str, Any]) -> dict[str, Any]:
+        ref = str(args.get("ref") or "HEAD")
+        path = str(args.get("path") or "").strip()
+        if path:
+            resolved = self.resolve_path(path)
+            self.validate_read_path(resolved)
+            spec = f"{ref}:{path}"
+        else:
+            spec = ref
+        return self.run_git(["show", "--no-ext-diff", spec], max_bytes=int(args.get("max_bytes") or 20000))
+
+    def run_git(self, command: list[str], max_bytes: int = 20000) -> dict[str, Any]:
+        completed = subprocess.run(
+            ["git", "--no-pager", *command],
+            cwd=self.working_folder,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        stdout = sanitize_output_for_read_policy(completed.stdout[-max_bytes:], self.read_blocked_prefixes)
+        stderr = sanitize_output_for_read_policy(completed.stderr[-max_bytes:], self.read_blocked_prefixes)
+        return {"ok": completed.returncode == 0, "returncode": completed.returncode, "stdout": stdout, "stderr": stderr}
+
     def bash(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
         lowered = command.lower()
@@ -307,6 +579,30 @@ class ToolRuntime:
 
     def start_process(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
+        wait_for_url = str(args.get("wait_for_url") or "").strip()
+        requested_ports = set(requested_ports_from_command(command + " " + wait_for_url))
+        explicit_port = int(args.get("port") or 0)
+        if explicit_port:
+            requested_ports.add(explicit_port)
+        allocated_port = None
+        env = os.environ.copy()
+        if bool(args.get("auto_allocate_port")):
+            allocated_port = explicit_port if explicit_port else allocate_tcp_port()
+            requested_ports.add(allocated_port)
+            env["PORT"] = str(allocated_port)
+            env["HOOKY_PORT"] = str(allocated_port)
+        requested_ports_list = sorted(requested_ports)
+        busy_ports = [port for port in requested_ports_list if tcp_port_is_listening(port)]
+        if busy_ports:
+            return {
+                "ok": False,
+                "error": "requested port already in use: " + ", ".join(str(port) for port in busy_ports),
+                "command": command,
+                "requested_ports": requested_ports_list,
+                "allocated_port": allocated_port,
+                "ports": [],
+                "listeners": [],
+            }
         process_id = f"proc-{self.next_process_id}"
         self.next_process_id += 1
         log_path = self.working_folder / ".workflow" / "managed-processes" / f"{process_id}.log"
@@ -320,25 +616,33 @@ class ToolRuntime:
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
         process._hooky_log_handle = log_handle  # type: ignore[attr-defined]
         process._hooky_log_path = log_path  # type: ignore[attr-defined]
         process._hooky_command = command  # type: ignore[attr-defined]
         process._hooky_name = str(args.get("name") or "process")  # type: ignore[attr-defined]
+        process._hooky_requested_ports = requested_ports_list  # type: ignore[attr-defined]
+        process._hooky_allocated_port = allocated_port  # type: ignore[attr-defined]
         self.managed_processes[process_id] = process
         wait_seconds = int(args.get("wait_seconds") or 0)
-        wait_for_url = str(args.get("wait_for_url") or "").strip()
         ready = False
         if wait_for_url:
             ready = wait_for_http_url(wait_for_url, wait_seconds)
         elif wait_seconds > 0:
             time.sleep(wait_seconds)
+        listeners = process_listeners(process.pid)
+        ports = sorted({int(item["port"]) for item in listeners})
         return {
             "ok": process.poll() is None,
             "process_id": process_id,
             "pid": process.pid,
             "name": process._hooky_name,  # type: ignore[attr-defined]
             "command": command,
+            "requested_ports": requested_ports_list,
+            "allocated_port": allocated_port,
+            "ports": ports,
+            "listeners": listeners,
             "log_path": relative_to(log_path, self.working_folder),
             "ready": ready if wait_for_url else None,
             "returncode": process.poll(),
@@ -348,11 +652,14 @@ class ToolRuntime:
     def read_process(self, args: dict[str, Any]) -> dict[str, Any]:
         process = self.require_process(str(args["process_id"]))
         log_path = process._hooky_log_path  # type: ignore[attr-defined]
+        listeners = process_listeners(process.pid)
         return {
             "ok": True,
             "process_id": str(args["process_id"]),
             "running": process.poll() is None,
             "returncode": process.poll(),
+            "ports": sorted({int(item["port"]) for item in listeners}),
+            "listeners": listeners,
             "output": read_tail(log_path, int(args.get("max_bytes") or 8000)),
         }
 
@@ -370,9 +677,10 @@ class ToolRuntime:
         }
 
     def list_processes(self, _args: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "processes": [
+        processes = []
+        for process_id, process in self.managed_processes.items():
+            listeners = process_listeners(process.pid)
+            processes.append(
                 {
                     "process_id": process_id,
                     "pid": process.pid,
@@ -380,10 +688,16 @@ class ToolRuntime:
                     "command": process._hooky_command,  # type: ignore[attr-defined]
                     "running": process.poll() is None,
                     "returncode": process.poll(),
+                    "requested_ports": list(getattr(process, "_hooky_requested_ports", requested_ports_from_command(process._hooky_command))),  # type: ignore[attr-defined]
+                    "allocated_port": getattr(process, "_hooky_allocated_port", None),
+                    "ports": sorted({int(item["port"]) for item in listeners}),
+                    "listeners": listeners,
                     "log_path": relative_to(process._hooky_log_path, self.working_folder),  # type: ignore[attr-defined]
                 }
-                for process_id, process in self.managed_processes.items()
-            ],
+            )
+        return {
+            "ok": True,
+            "processes": processes,
         }
 
     def require_process(self, process_id: str) -> subprocess.Popen[str]:
@@ -452,6 +766,161 @@ class ToolRuntime:
         return {"ok": True, "final_report_received": True}
 
 
+def visual_snapshot_script() -> str:
+    return r"""
+const fs = require('fs');
+
+async function loadPlaywright() {
+  try {
+    return require('playwright');
+  } catch (firstError) {
+    try {
+      return require('@playwright/test');
+    } catch (_secondError) {
+      throw firstError;
+    }
+  }
+}
+
+(async () => {
+  const [url, screenshotPath, widthRaw, heightRaw, waitSelector, fullPageRaw] = process.argv.slice(2);
+  const width = Number(widthRaw || 1280);
+  const height = Number(heightRaw || 900);
+  const fullPage = fullPageRaw === '1';
+  const consoleMessages = [];
+  const { chromium } = await loadPlaywright();
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width, height } });
+  page.on('console', message => {
+    if (['error', 'warning'].includes(message.type())) {
+      consoleMessages.push({ type: message.type(), text: message.text().slice(0, 500) });
+    }
+  });
+  page.on('pageerror', error => {
+    consoleMessages.push({ type: 'pageerror', text: String(error.message || error).slice(0, 500) });
+  });
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  if (waitSelector) {
+    await page.waitForSelector(waitSelector, { timeout: 10000 });
+  }
+  const metrics = await page.evaluate(() => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const doc = document.documentElement;
+    const body = document.body;
+    const visibleElements = [];
+    const interactiveElements = [];
+    const textBlocks = [];
+    const selectors = 'a,button,input,textarea,select,[role="button"],[role="link"],[tabindex]';
+    function isVisible(element, rect, style) {
+      return rect.width > 0 && rect.height > 0 &&
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        Number(style.opacity || '1') > 0;
+    }
+    function asRect(rect) {
+      return {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom),
+      };
+    }
+    for (const element of Array.from(document.body.querySelectorAll('*'))) {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      if (!isVisible(element, rect, style)) continue;
+      const tag = element.tagName.toLowerCase();
+      const item = {
+        tag,
+        id: element.id || '',
+        className: typeof element.className === 'string' ? element.className.slice(0, 120) : '',
+        role: element.getAttribute('role') || '',
+        text: (element.innerText || element.getAttribute('aria-label') || element.getAttribute('placeholder') || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+        rect: asRect(rect),
+      };
+      visibleElements.push(item);
+      if (element.matches(selectors)) interactiveElements.push(item);
+      if (item.text && rect.width > 10 && rect.height > 10) textBlocks.push(item);
+    }
+    const rects = visibleElements.map(item => item.rect).filter(rect => rect.width > 0 && rect.height > 0);
+    const clippedElements = visibleElements.filter(item =>
+      item.rect.x < 0 ||
+      item.rect.y < 0 ||
+      item.rect.right > viewport.width ||
+      item.rect.bottom > viewport.height
+    );
+    const intersectionArea = rects.reduce((total, rect) => {
+      const width = Math.max(0, Math.min(rect.right, viewport.width) - Math.max(rect.x, 0));
+      const height = Math.max(0, Math.min(rect.bottom, viewport.height) - Math.max(rect.y, 0));
+      return total + width * height;
+    }, 0);
+    let bounds = null;
+    if (rects.length) {
+      bounds = {
+        x: Math.min(...rects.map(rect => rect.x)),
+        y: Math.min(...rects.map(rect => rect.y)),
+        right: Math.max(...rects.map(rect => rect.right)),
+        bottom: Math.max(...rects.map(rect => rect.bottom)),
+      };
+      bounds.width = bounds.right - bounds.x;
+      bounds.height = bounds.bottom - bounds.y;
+    }
+    const viewportArea = viewport.width * viewport.height;
+    const boundsArea = bounds ? Math.max(bounds.width, 0) * Math.max(bounds.height, 0) : 0;
+    const center = bounds ? {
+      x: Math.round(bounds.x + bounds.width / 2),
+      y: Math.round(bounds.y + bounds.height / 2),
+      offsetX: Math.round(bounds.x + bounds.width / 2 - viewport.width / 2),
+      offsetY: Math.round(bounds.y + bounds.height / 2 - viewport.height / 2),
+    } : null;
+    const headings = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]')).map(element => ({
+      text: (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+      rect: asRect(element.getBoundingClientRect()),
+    }));
+    return {
+      title: document.title,
+      location: window.location.href,
+      viewport,
+      document: {
+        scrollWidth: doc.scrollWidth,
+        scrollHeight: doc.scrollHeight,
+        bodyTextLength: (body.innerText || '').length,
+      },
+      contentBounds: bounds,
+      contentCenter: center,
+      viewportCoverage: Number((boundsArea / viewportArea).toFixed(4)),
+      visiblePaintCoverage: Number((intersectionArea / viewportArea).toFixed(4)),
+      topGapRatio: bounds ? Number((Math.max(bounds.y, 0) / viewport.height).toFixed(4)) : 1,
+      leftGapRatio: bounds ? Number((Math.max(bounds.x, 0) / viewport.width).toFixed(4)) : 1,
+      horizontalOverflow: doc.scrollWidth > viewport.width + 2,
+      verticalOverflow: doc.scrollHeight > viewport.height + 2,
+      clippedElementCount: clippedElements.length,
+      visibleElementCount: visibleElements.length,
+      interactiveElementCount: interactiveElements.length,
+      headings: headings.slice(0, 12),
+      sampleClippedElements: clippedElements.slice(0, 20),
+      sampleVisibleElements: visibleElements.slice(0, 40),
+      sampleInteractiveElements: interactiveElements.slice(0, 30),
+      sampleTextBlocks: textBlocks.slice(0, 30),
+    };
+  });
+  await page.screenshot({ path: screenshotPath, fullPage });
+  await browser.close();
+  console.log(JSON.stringify({
+    url,
+    screenshotBytes: fs.statSync(screenshotPath).size,
+    consoleMessages,
+    metrics,
+  }));
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+});
+"""
+
+
 def run_tool_agent(
     *,
     model: str,
@@ -468,6 +937,7 @@ def run_tool_agent(
     pre_compaction_archives: list[dict[str, Any]] = []
     total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     started_at = utc_timestamp()
+    soft_deadline_sent = False
 
     def current_result() -> AgentRunResult:
         return AgentRunResult(
@@ -516,10 +986,30 @@ def run_tool_agent(
     try:
         with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
             while runtime.final_report is None:
-                if time.monotonic() - runtime.started_at > runtime.max_seconds:
+                elapsed_seconds = time.monotonic() - runtime.started_at
+                if elapsed_seconds > runtime.max_seconds:
                     raise AgentRunError(f"agent runtime exceeded {runtime.max_seconds}s", current_result())
                 if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
                     raise AgentRunError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget", current_result())
+                remaining_seconds = max(0, int(runtime.max_seconds - elapsed_seconds))
+                if not soft_deadline_sent and runtime.max_seconds >= 60 and elapsed_seconds >= runtime.max_seconds * 0.85:
+                    soft_deadline_sent = True
+                    warning = (
+                        f"Runtime soft deadline: about {remaining_seconds}s remain before the hard timeout. "
+                        "If the task is not complete, call final_report now with current status, concrete failures, "
+                        "and next steps instead of starting another long debugging cycle."
+                    )
+                    messages.append({"role": "user", "content": warning})
+                    transcript.append(
+                        {
+                            "role": "runtime_notice",
+                            "message": warning,
+                            "started_at": utc_timestamp(),
+                            "ended_at": utc_timestamp(),
+                        }
+                    )
+                    append_live_event(runtime, f"{utc_timestamp()} runtime_notice kind=soft_deadline remaining_seconds={remaining_seconds}")
+                    flush_live_log()
 
                 messages, compaction_event, pre_compaction_archive = maybe_compact_messages(client, model, runtime, messages)
                 if pre_compaction_archive:
@@ -857,12 +1347,54 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         if stderr:
             detail += f" stderr={quote_value(stderr, 180)}"
         return detail
+    if name == "run_tests":
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        detail = (
+            f"command={quote_value(str(result.get('command') or ''), 180)} "
+            f"returncode={result.get('returncode')} passed={summary.get('passed')} "
+            f"failed={summary.get('failed')} output_path={quote_value(str(result.get('output_path') or ''), 180)}"
+        )
+        failed_tests = summary.get("failed_tests") if isinstance(summary.get("failed_tests"), list) else []
+        if failed_tests:
+            detail += f" failing={quote_value(single_line('; '.join(str(item) for item in failed_tests[:3]), 180), 180)}"
+        return detail
+    if name == "capture_visual_snapshot":
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        detail = (
+            f"url={quote_value(str(result.get('url') or arguments.get('url') or ''), 180)} "
+            f"screenshot_path={quote_value(str(result.get('screenshot_path') or ''), 180)} "
+            f"coverage={metrics.get('viewportCoverage')} top_gap={metrics.get('topGapRatio')} "
+            f"elements={metrics.get('visibleElementCount')}"
+        )
+        console_messages = result.get("consoleMessages") if isinstance(result.get("consoleMessages"), list) else []
+        if console_messages:
+            detail += f" console_messages={len(console_messages)}"
+        return detail
+    if name == "detect_project_environment":
+        return (
+            f"package_manager={quote_value(str(result.get('package_manager') or ''), 80)} "
+            f"scripts={len(result.get('scripts') or {})} test_commands={len(result.get('test_commands') or [])}"
+        )
+    if name in {"git_status", "git_diff", "git_show"}:
+        stdout = single_line(str(result.get("stdout") or ""), 180)
+        detail = f"returncode={result.get('returncode')}"
+        if stdout:
+            detail += f" stdout={quote_value(stdout, 180)}"
+        return detail
     if name == "start_process":
+        ports = ",".join(str(port) for port in result.get("ports") or [])
+        requested_ports = ",".join(str(port) for port in result.get("requested_ports") or [])
         detail = (
             f"process_id={quote_value(str(result.get('process_id') or ''), 80)} "
             f"pid={result.get('pid')} ready={result.get('ready')} "
             f"command={quote_value(str(arguments.get('command') or ''), 180)}"
         )
+        if requested_ports:
+            detail += f" requested_ports={quote_value(requested_ports, 80)}"
+        if result.get("allocated_port"):
+            detail += f" allocated_port={result.get('allocated_port')}"
+        if ports:
+            detail += f" ports={quote_value(ports, 80)}"
         output = single_line(str(result.get("output") or ""), 180)
         if output:
             detail += f" output={quote_value(output, 180)}"
@@ -884,7 +1416,11 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
     if name == "list_processes":
         processes = result.get("processes") if isinstance(result.get("processes"), list) else []
         running = sum(1 for item in processes if isinstance(item, dict) and item.get("running") is True)
-        return f"processes={len(processes)} running={running}"
+        ports = sorted({str(port) for item in processes if isinstance(item, dict) for port in item.get("ports") or []})
+        detail = f"processes={len(processes)} running={running}"
+        if ports:
+            detail += f" ports={quote_value(','.join(ports), 120)}"
+        return detail
     if name in {"list_files", "find_files"}:
         entries = result.get("entries") if name == "list_files" else result.get("matches")
         count = len(entries) if isinstance(entries, list) else 0
@@ -952,7 +1488,7 @@ def todo_label(item: dict[str, Any]) -> str:
 
 def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
     lines = ["# Runtime Timeline", ""]
-    items = [item for item in transcript if item.get("role") in {"assistant", "tool", "compaction", "pre_compaction"}]
+    items = [item for item in transcript if item.get("role") in {"assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}]
     if not items:
         lines.append("No runtime events recorded.")
         lines.append("")
@@ -990,7 +1526,10 @@ def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
             lines.append("")
         else:
             lines.append(f"## {index}. `{role}`")
-            lines.extend(f"- {detail}" for detail in summarize_tool_timing(item))
+            details = summarize_tool_timing(item)
+            if role == "runtime_notice" and item.get("message"):
+                details.append("message: " + single_line(str(item["message"]), 500))
+            lines.extend(f"- {detail}" for detail in details)
             lines.append("")
     return "\n".join(lines)
 
@@ -1066,10 +1605,55 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
             summary.append("stdout: " + single_line(stdout, 500))
         if stderr:
             summary.append("stderr: " + single_line(stderr, 500))
+    elif name == "run_tests":
+        summary.append(f"command: `{result.get('command')}`")
+        summary.append(f"returncode: {result.get('returncode')}")
+        summary.append(f"timed out: {result.get('timed_out')}")
+        summary.append(f"output path: `{result.get('output_path')}`")
+        parsed = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        summary.append(f"passed: {parsed.get('passed')}")
+        summary.append(f"failed: {parsed.get('failed')}")
+        failed_tests = parsed.get("failed_tests") if isinstance(parsed.get("failed_tests"), list) else []
+        for failed in failed_tests[:8]:
+            summary.append("failed test: " + single_line(str(failed), 300))
+        output_tail = str(result.get("output_tail") or "").strip()
+        if output_tail:
+            summary.append("output tail: " + single_line(output_tail, 500))
+    elif name == "capture_visual_snapshot":
+        summary.append(f"url: `{result.get('url') or arguments.get('url')}`")
+        summary.append(f"screenshot path: `{result.get('screenshot_path')}`")
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        summary.append(f"viewport coverage: {metrics.get('viewportCoverage')}")
+        summary.append(f"top gap ratio: {metrics.get('topGapRatio')}")
+        summary.append(f"left gap ratio: {metrics.get('leftGapRatio')}")
+        summary.append(f"visible elements: {metrics.get('visibleElementCount')}")
+        console_messages = result.get("consoleMessages") if isinstance(result.get("consoleMessages"), list) else []
+        if console_messages:
+            summary.append("console messages: " + str(len(console_messages)))
+    elif name == "detect_project_environment":
+        summary.append(f"package manager: {result.get('package_manager')}")
+        summary.append("lockfiles: " + ", ".join(str(item) for item in result.get("lockfiles") or []))
+        test_commands = result.get("test_commands") if isinstance(result.get("test_commands"), list) else []
+        for command in test_commands[:8]:
+            summary.append("test command: `" + str(command) + "`")
+    elif name in {"git_status", "git_diff", "git_show"}:
+        summary.append(f"returncode: {result.get('returncode')}")
+        stdout = str(result.get("stdout") or "").strip()
+        stderr = str(result.get("stderr") or "").strip()
+        if stdout:
+            summary.append("stdout: " + single_line(stdout, 500))
+        if stderr:
+            summary.append("stderr: " + single_line(stderr, 500))
     elif name == "start_process":
         summary.append(f"process id: `{result.get('process_id')}`")
         summary.append(f"pid: {result.get('pid')}")
         summary.append(f"ready: {result.get('ready')}")
+        if result.get("requested_ports"):
+            summary.append("requested ports: " + ", ".join(str(port) for port in result.get("requested_ports") or []))
+        if result.get("allocated_port"):
+            summary.append(f"allocated port: {result.get('allocated_port')}")
+        if result.get("ports"):
+            summary.append("listening ports: " + ", ".join(str(port) for port in result.get("ports") or []))
         summary.append(f"log path: `{result.get('log_path')}`")
         output = str(result.get("output") or "").strip()
         if output:
@@ -1078,6 +1662,8 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append(f"process id: `{arguments.get('process_id')}`")
         summary.append(f"running: {result.get('running')}")
         summary.append(f"returncode: {result.get('returncode')}")
+        if result.get("ports"):
+            summary.append("listening ports: " + ", ".join(str(port) for port in result.get("ports") or []))
         output = str(result.get("output") or "").strip()
         if output:
             summary.append("output: " + single_line(output, 500))
@@ -1097,6 +1683,10 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
                         220,
                     )
                 )
+                if process.get("ports"):
+                    summary.append("ports: " + ", ".join(str(port) for port in process.get("ports") or []))
+                if process.get("allocated_port"):
+                    summary.append(f"allocated port: {process.get('allocated_port')}")
     elif name == "todo_read":
         items = result.get("items") if isinstance(result.get("items"), list) else []
         summary.append(f"todo items: {len(items)}")
@@ -1182,10 +1772,18 @@ def openrouter_timeout_ms() -> int:
 def available_tool_names() -> list[str]:
     return [
         "read_file",
+        "read_file_excerpt",
+        "read_many_files",
         "write_file",
         "list_files",
         "grep_files",
         "find_files",
+        "detect_project_environment",
+        "run_tests",
+        "capture_visual_snapshot",
+        "git_status",
+        "git_diff",
+        "git_show",
         "bash",
         "start_process",
         "read_process",
@@ -1237,6 +1835,246 @@ def read_tail(path: Path, max_bytes: int) -> str:
         return handle.read(max_bytes).decode("utf-8", errors="replace")
 
 
+def read_text_prefix(path: Path, max_bytes: int) -> str:
+    with path.open("rb") as handle:
+        return handle.read(max(1, max_bytes)).decode("utf-8", errors="replace")
+
+
+def detect_project_environment(root: Path) -> dict[str, Any]:
+    lockfiles = [
+        name
+        for name in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "uv.lock", "requirements.txt", "Cargo.lock", "go.sum")
+        if (root / name).exists()
+    ]
+    package_json_path = root / "package.json"
+    package_json: dict[str, Any] = {}
+    scripts: dict[str, str] = {}
+    package_manager = ""
+    if package_json_path.exists():
+        try:
+            package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            package_json = {}
+        scripts = {str(key): str(value) for key, value in (package_json.get("scripts") or {}).items()}
+        package_manager = package_manager_from_package_json(package_json)
+    if not package_manager:
+        package_manager = package_manager_from_lockfiles(lockfiles)
+    test_commands = likely_test_commands(root, package_manager, scripts)
+    return {
+        "package_manager": package_manager,
+        "lockfiles": lockfiles,
+        "scripts": scripts,
+        "test_commands": test_commands,
+        "has_package_json": package_json_path.exists(),
+        "languages": language_hints(root),
+    }
+
+
+def package_manager_from_package_json(package_json: dict[str, Any]) -> str:
+    raw = str(package_json.get("packageManager") or "")
+    if raw.startswith("pnpm@"):
+        return "pnpm"
+    if raw.startswith("yarn@"):
+        return "yarn"
+    if raw.startswith("bun@"):
+        return "bun"
+    if raw.startswith("npm@"):
+        return "npm"
+    return ""
+
+
+def package_manager_from_lockfiles(lockfiles: list[str]) -> str:
+    if "pnpm-lock.yaml" in lockfiles:
+        return "pnpm"
+    if "yarn.lock" in lockfiles:
+        return "yarn"
+    if "bun.lockb" in lockfiles:
+        return "bun"
+    if "package-lock.json" in lockfiles:
+        return "npm"
+    if "uv.lock" in lockfiles:
+        return "uv"
+    if "Cargo.lock" in lockfiles:
+        return "cargo"
+    return "npm" if lockfiles and any(name.startswith("package") for name in lockfiles) else ""
+
+
+def likely_test_commands(root: Path, package_manager: str, scripts: dict[str, str]) -> list[str]:
+    commands: list[str] = []
+    if scripts.get("test"):
+        commands.append(f"{package_manager or 'npm'} test")
+    if (root / "playwright.config.js").exists() or (root / "playwright.config.cjs").exists() or (root / "playwright.config.mjs").exists():
+        runner = "npx"
+        if package_manager == "pnpm":
+            runner = "pnpm exec"
+        elif package_manager == "yarn":
+            runner = "yarn"
+        elif package_manager == "bun":
+            runner = "bunx"
+        commands.append(f"{runner} playwright test")
+    if (root / "pytest.ini").exists() or (root / "tests").exists() and any((root / "tests").glob("test_*.py")):
+        commands.append("pytest")
+    if (root / "Cargo.toml").exists():
+        commands.append("cargo test")
+    if (root / "go.mod").exists():
+        commands.append("go test ./...")
+    return dedupe_strings(commands)
+
+
+def language_hints(root: Path) -> list[str]:
+    hints = []
+    markers = {
+        "javascript": ["package.json"],
+        "python": ["pyproject.toml", "requirements.txt"],
+        "rust": ["Cargo.toml"],
+        "go": ["go.mod"],
+        "php": ["composer.json"],
+        "ruby": ["Gemfile"],
+    }
+    for language, names in markers.items():
+        if any((root / name).exists() for name in names):
+            hints.append(language)
+    return hints
+
+
+def default_test_command(environment: dict[str, Any], list_only: bool) -> str:
+    commands = environment.get("test_commands") if isinstance(environment.get("test_commands"), list) else []
+    if commands:
+        command = str(commands[0])
+    else:
+        package_manager = str(environment.get("package_manager") or "npm")
+        command = f"{package_manager} test"
+    if list_only and "playwright test" in command and " --list" not in command:
+        command += " --list"
+    return command
+
+
+def append_shell_arg(command: str, value: str) -> str:
+    return command + " " + shlex.quote(value)
+
+
+def append_test_name_filter(command: str, test_name: str) -> str:
+    if "playwright test" in command:
+        return command + " -g " + shlex.quote(test_name)
+    if "pytest" in command:
+        return command + " -k " + shlex.quote(test_name)
+    return command
+
+
+def normalize_subprocess_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def write_tool_result_artifact(root: Path, category: str, content: str) -> str:
+    directory = root / ".workflow" / "tool-results" / category
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = utc_timestamp().replace(":", "").replace("+", "Z") + ".log"
+    path = directory / filename
+    path.write_text(content, encoding="utf-8")
+    return relative_to(path, root)
+
+
+def parse_test_output(output: str, returncode: int) -> dict[str, Any]:
+    failed_tests = extract_failed_test_names(output)
+    counts = parse_test_counts(output)
+    passed = returncode == 0
+    return {
+        "passed": passed,
+        "failed": not passed,
+        "failed_tests": failed_tests[:50],
+        "counts": counts,
+        "truncated": len(failed_tests) > 50,
+    }
+
+
+def extract_failed_test_names(output: str) -> list[str]:
+    names: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if re.match(r"^\d+\)\s+", stripped):
+            names.append(re.sub(r"\s+", " ", stripped))
+        elif "›" in stripped and ("failed" in stripped.lower() or re.search(r"^\d+\)", stripped)):
+            names.append(re.sub(r"\s+", " ", stripped))
+    return dedupe_strings(names)
+
+
+def parse_test_counts(output: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for key in ("failed", "passed", "skipped", "timed out"):
+        match = re.search(rf"(\d+)\s+{re.escape(key)}", output, flags=re.IGNORECASE)
+        if match:
+            counts[key.replace(" ", "_")] = int(match.group(1))
+    return counts
+
+
+def dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def sanitize_output_for_read_policy(output: str, blocked_prefixes: list[str]) -> str:
+    if not blocked_prefixes:
+        return output
+    lines = []
+    for line in output.splitlines():
+        if any(prefix and prefix in line for prefix in blocked_prefixes):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def ensure_git_baseline(workspace: Path, message: str = "Initial workspace baseline") -> None:
+    workspace = Path(workspace).resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    git_run(workspace, ["init"], check=True)
+    ensure_git_identity(workspace)
+    git_run(workspace, ["add", "-A"], check=True)
+    if git_has_head(workspace):
+        if git_staged_changes(workspace):
+            git_run(workspace, ["commit", "-m", message], check=True)
+        return
+    if git_staged_changes(workspace):
+        git_run(workspace, ["commit", "-m", message], check=True)
+    else:
+        git_run(workspace, ["commit", "--allow-empty", "-m", message], check=True)
+
+
+def ensure_git_identity(workspace: Path) -> None:
+    if git_run(workspace, ["config", "user.email"], check=False).returncode != 0:
+        git_run(workspace, ["config", "user.email", "hooky@example.local"], check=True)
+    if git_run(workspace, ["config", "user.name"], check=False).returncode != 0:
+        git_run(workspace, ["config", "user.name", "Hooky"], check=True)
+
+
+def git_has_head(workspace: Path) -> bool:
+    return git_run(workspace, ["rev-parse", "--verify", "HEAD"], check=False).returncode == 0
+
+
+def git_staged_changes(workspace: Path) -> bool:
+    return git_run(workspace, ["diff", "--cached", "--quiet"], check=False).returncode == 1
+
+
+def git_run(workspace: Path, args: list[str], check: bool) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=workspace,
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
 def stop_managed_process(process: subprocess.Popen[str]) -> bool:
     if process.poll() is not None:
         close_process_log(process)
@@ -1256,6 +2094,133 @@ def stop_managed_process(process: subprocess.Popen[str]) -> bool:
         process.wait(timeout=5)
     close_process_log(process)
     return True
+
+
+def requested_ports_from_command(command: str) -> list[int]:
+    ports: set[int] = set()
+    tokens = shell_tokens_for_ports(command)
+    for index, token in enumerate(tokens):
+        if token in {"--port", "-p"} and index + 1 < len(tokens):
+            add_port(ports, tokens[index + 1])
+            continue
+        for prefix in ("--port=", "-p=", "PORT=", "port="):
+            if token.startswith(prefix):
+                add_port(ports, token[len(prefix) :])
+                break
+    for match in re.finditer(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])[:/](\d{2,5})", command):
+        add_port(ports, match.group(1))
+    for match in re.finditer(r"(?<![\w.:-]):(\d{2,5})(?!\d)", command):
+        add_port(ports, match.group(1))
+    return sorted(ports)
+
+
+def shell_tokens_for_ports(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def add_port(ports: set[int], value: str) -> None:
+    try:
+        port = int(str(value).strip())
+    except ValueError:
+        return
+    if 1 <= port <= 65535:
+        ports.add(port)
+
+
+def tcp_port_is_listening(port: int) -> bool:
+    try:
+        completed = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+            text=True,
+            capture_output=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0 and bool(completed.stdout.strip())
+
+
+def allocate_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def process_tree_pids(pid: int) -> set[int]:
+    pids = {pid}
+    try:
+        completed = subprocess.run(["pgrep", "-P", str(pid)], text=True, capture_output=True, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return pids
+    if completed.returncode not in {0, 1}:
+        return pids
+    for line in completed.stdout.splitlines():
+        try:
+            child = int(line.strip())
+        except ValueError:
+            continue
+        if child not in pids:
+            pids.update(process_tree_pids(child))
+    return pids
+
+
+def process_listeners(pid: int) -> list[dict[str, Any]]:
+    listeners: list[dict[str, Any]] = []
+    for candidate_pid in sorted(process_tree_pids(pid)):
+        try:
+            completed = subprocess.run(
+                ["lsof", "-nP", "-a", "-p", str(candidate_pid), "-iTCP", "-sTCP:LISTEN"],
+                text=True,
+                capture_output=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if completed.returncode != 0:
+            continue
+        for line in completed.stdout.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 9:
+                continue
+            port = listener_port_from_name(parts[-2] if parts[-1] == "(LISTEN)" else parts[-1])
+            if port is None:
+                continue
+            listeners.append(
+                {
+                    "pid": candidate_pid,
+                    "command": parts[0],
+                    "host": listener_host_from_name(parts[-2] if parts[-1] == "(LISTEN)" else parts[-1]),
+                    "port": port,
+                }
+            )
+    return dedupe_listeners(listeners)
+
+
+def listener_port_from_name(name: str) -> int | None:
+    match = re.search(r":(\d+)(?:\s|$)", name)
+    if not match:
+        return None
+    port = int(match.group(1))
+    return port if 1 <= port <= 65535 else None
+
+
+def listener_host_from_name(name: str) -> str:
+    return name.rsplit(":", 1)[0]
+
+
+def dedupe_listeners(listeners: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, Any, Any]] = set()
+    deduped: list[dict[str, Any]] = []
+    for listener in listeners:
+        key = (listener.get("pid"), listener.get("host"), listener.get("port"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(listener)
+    return deduped
 
 
 def close_process_log(process: subprocess.Popen[str]) -> None:

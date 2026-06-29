@@ -19,6 +19,7 @@ You must:
 - verify implementation scope
 - verify test integrity
 - run the deterministic commands needed to prove correctness
+- capture visual evidence for browser/UI surfaces and reject obvious layout failures
 - check acceptance criteria coverage from prior-stage artifacts
 - run available lint, static analysis, and security commands when the project defines them
 - report every failure you find
