@@ -5,6 +5,7 @@ import time
 import unittest
 from pathlib import Path
 import sys
+import os
 import socket
 import subprocess
 from unittest import mock
@@ -93,6 +94,12 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertEqual(agent_runtime.requested_ports_from_command("npm run dev -- --port 5173"), [5173])
         self.assertEqual(agent_runtime.requested_ports_from_command("PORT=4173 npm start"), [4173])
         self.assertEqual(agent_runtime.requested_ports_from_command("serve http://127.0.0.1:8080"), [8080])
+
+    def test_model_request_deadline_respects_remaining_stage_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"OPENROUTER_TIMEOUT_MS": "120000"}):
+            runtime = agent_runtime.ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=180)
+
+            self.assertEqual(agent_runtime.model_request_deadline_seconds(runtime, elapsed_seconds=175.2), 4)
 
     def test_start_process_fails_when_requested_port_is_busy(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

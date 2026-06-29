@@ -1241,7 +1241,12 @@ def run_tool_agent(
                     append_live_event(runtime, f"{utc_timestamp()} runtime_notice kind=soft_deadline remaining_seconds={remaining_seconds}")
                     flush_live_log()
 
-                messages, compaction_event, pre_compaction_archive = maybe_compact_messages(client, model, runtime, messages)
+                request_seconds = model_request_deadline_seconds(runtime, elapsed_seconds)
+                try:
+                    with LocalDeadline(request_seconds, f"agent model request exceeded {request_seconds}s"):
+                        messages, compaction_event, pre_compaction_archive = maybe_compact_messages(client, model, runtime, messages)
+                except TimeoutError as exc:
+                    raise AgentRunError(str(exc), current_result()) from exc
                 if pre_compaction_archive:
                     pre_compaction_archives.append(pre_compaction_archive)
                     transcript.append({"role": "pre_compaction", **pre_compaction_archive})
@@ -1274,13 +1279,18 @@ def run_tool_agent(
 
                 assistant_started_at = utc_timestamp()
                 assistant_start = time.monotonic()
-                completion = client.chat.send(
-                    model=model,
-                    messages=messages,
-                    tools=runtime.tools(),
-                    tool_choice="auto",
-                    **spec_agent.openrouter_request_options(),
-                )
+                request_seconds = model_request_deadline_seconds(runtime, time.monotonic() - runtime.started_at)
+                try:
+                    with LocalDeadline(request_seconds, f"agent model request exceeded {request_seconds}s"):
+                        completion = client.chat.send(
+                            model=model,
+                            messages=messages,
+                            tools=runtime.tools(),
+                            tool_choice="auto",
+                            **spec_agent.openrouter_request_options(),
+                        )
+                except TimeoutError as exc:
+                    raise AgentRunError(str(exc), current_result()) from exc
                 assistant_ended_at = utc_timestamp()
                 assistant_duration_ms = round((time.monotonic() - assistant_start) * 1000, 2)
                 usage = spec_agent.response_usage(completion)
@@ -2075,6 +2085,36 @@ def utc_timestamp() -> str:
 
 def openrouter_timeout_ms() -> int:
     return int(os.environ.get("OPENROUTER_TIMEOUT_MS", "120000"))
+
+
+def model_request_deadline_seconds(runtime: ToolRuntime, elapsed_seconds: float) -> int:
+    remaining = max(1, int(runtime.max_seconds - elapsed_seconds))
+    configured = max(1, openrouter_timeout_ms() // 1000)
+    return max(1, min(configured, remaining))
+
+
+class LocalDeadline:
+    def __init__(self, seconds: int, message: str) -> None:
+        self.seconds = seconds
+        self.message = message
+        self.previous_handler: Any = None
+        self.previous_timer: tuple[float, float] = (0.0, 0.0)
+
+    def __enter__(self) -> "LocalDeadline":
+        self.previous_handler = signal.getsignal(signal.SIGALRM)
+        self.previous_timer = signal.getitimer(signal.ITIMER_REAL)
+        signal.signal(signal.SIGALRM, self._raise_timeout)
+        signal.setitimer(signal.ITIMER_REAL, self.seconds)
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, self.previous_handler)
+        if self.previous_timer[0] > 0:
+            signal.setitimer(signal.ITIMER_REAL, *self.previous_timer)
+
+    def _raise_timeout(self, _signum: int, _frame: Any) -> None:
+        raise TimeoutError(self.message)
 
 
 def image_input_message(runtime: ToolRuntime, images: list[dict[str, str]], text: str) -> dict[str, Any] | None:
