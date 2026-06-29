@@ -140,7 +140,7 @@ def generate_contract_with_openrouter(
         max_cost_usd=float(os.environ.get("VERIFIER_AGENT_MAX_COST_USD", "0.25")),
         max_seconds=int(os.environ.get("VERIFIER_AGENT_MAX_SECONDS", "300")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
-        final_validator=validate_contract,
+        final_validator=lambda contract: validate_contract_for_context(contract, dynamic_context, runtime.tool_events),
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
         live_event_log_paths=[working_folder / ".workflow/runtime_events.log"],
         live_event_prefix="stage=verifier ",
@@ -327,6 +327,44 @@ def validate_contract(contract: dict[str, Any]) -> None:
     visual_findings = contract.get("visual_findings")
     if not isinstance(visual_findings, list):
         raise ValueError("visual_findings must be a list")
+
+
+def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
+    validate_contract(contract)
+    if browser_ui_project(dynamic_context):
+        if not successful_visual_snapshot_events(tool_events):
+            raise ValueError("browser/UI verifier must capture a successful visual snapshot before final_report")
+        if not contract.get("visual_findings"):
+            raise ValueError("browser/UI verifier must include visual_findings from attached screenshot inspection")
+
+
+def browser_ui_project(dynamic_context: dict[str, Any]) -> bool:
+    package_json = dynamic_context.get("package_json") if isinstance(dynamic_context.get("package_json"), dict) else {}
+    dependencies = {}
+    for key in ("dependencies", "devDependencies"):
+        value = package_json.get(key)
+        if isinstance(value, dict):
+            dependencies.update(value)
+    if any(name in dependencies for name in ("react", "vue", "svelte", "@angular/core", "vite", "@vitejs/plugin-react", "@playwright/test")):
+        return True
+    for contract in dynamic_context.get("approved_test_contracts") or []:
+        if not isinstance(contract, dict):
+            continue
+        text = json.dumps(contract, sort_keys=True).lower()
+        if any(marker in text for marker in ("playwright", "browser", "ui", "end-to-end", "e2e")):
+            return True
+    return False
+
+
+def successful_visual_snapshot_events(tool_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    successful = []
+    for event in tool_events:
+        if event.get("name") != "capture_visual_snapshot":
+            continue
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        if result.get("ok") is True and result.get("screenshot_path"):
+            successful.append(event)
+    return successful
 
 
 def write_artifacts(

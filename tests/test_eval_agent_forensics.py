@@ -88,6 +88,20 @@ class EvalAgentForensicsTests(unittest.TestCase):
             self.assertEqual(evidence[0]["path"], ".workflow/tool-results/visual-snapshots/shot.png")
             self.assertEqual(evidence[0]["source"], "verifier_capture_visual_snapshot")
 
+    def test_eval_cannot_pass_browser_ui_without_visual_evidence(self) -> None:
+        contract = minimal_eval_contract(status="pass", safe_to_merge=True)
+        dynamic_context = context_with_passing_verifier_without_visual_evidence()
+
+        with self.assertRaisesRegex(ValueError, "visual image evidence"):
+            eval_agent.validate_contract_for_context(contract, dynamic_context)
+
+    def test_eval_accepts_browser_ui_with_visual_evidence(self) -> None:
+        contract = minimal_eval_contract(status="pass", safe_to_merge=True)
+        dynamic_context = context_with_passing_verifier_without_visual_evidence()
+        dynamic_context["visual_evidence"] = [{"path": ".workflow/tool-results/visual-snapshots/shot.png"}]
+
+        eval_agent.validate_contract_for_context(contract, dynamic_context)
+
 
 def minimal_eval_contract(**overrides: object) -> dict[str, object]:
     contract: dict[str, object] = {
@@ -127,6 +141,26 @@ def context_with_builder_test_failures() -> dict[str, object]:
                         "failed_runs": 1,
                         "failing_tests": ["tests/todo-routing.spec.js:19:3 › TodoMVC route filtering › AC16"],
                     },
+                }
+            },
+            "approvals": {},
+        },
+    }
+
+
+def context_with_passing_verifier_without_visual_evidence() -> dict[str, object]:
+    return {
+        "package_json": {"dependencies": {"react": "^19.0.0"}, "devDependencies": {"@playwright/test": "^1.0.0"}},
+        "verifier_reports": {"contract": {"status": "pass"}},
+        "pipeline_state": {"task_state": {"stage_status": {"verifier": {"status": "passed"}}}},
+        "visual_evidence": [],
+        "deterministic_facts": {
+            "stages": {
+                "builder": {
+                    "todo_calls": 1,
+                    "files_written_count": 2,
+                    "workspace_file_count": 5,
+                    "test_failures": {"failed_runs": 0, "failing_tests": []},
                 }
             },
             "approvals": {},

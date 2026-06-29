@@ -124,6 +124,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         "test_reports": read_contract_summaries(working_folder / TEST_REPORT_ROOT, "contract.json"),
         "builder_reports": read_contract_summaries(working_folder / BUILDER_REPORT_ROOT, "contract.json"),
         "verifier_reports": read_contract_summaries(working_folder / VERIFIER_REPORT_ROOT, "contract.json"),
+        "package_json": read_optional_json(working_folder / "package.json"),
         "upstream_evidence": agent_runtime.upstream_evidence_context(working_folder),
         "pipeline_state": read_pipeline_state(working_folder),
         "runtime_metadata": read_runtime_metadata(working_folder),
@@ -379,6 +380,11 @@ def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dic
             raise ValueError("eval cannot pass when verifier status is missing or not pass")
         if contract["safe_to_merge"] is True:
             raise ValueError("eval cannot mark safe_to_merge true when verifier status is missing or not pass")
+    if browser_ui_project(dynamic_context) and not dynamic_context.get("visual_evidence"):
+        if contract["status"] == "pass":
+            raise ValueError("eval cannot pass browser/UI pipeline without verifier visual image evidence")
+        if contract["safe_to_merge"] is True:
+            raise ValueError("eval cannot mark browser/UI pipeline safe_to_merge without verifier visual image evidence")
     validate_fact_consistency(contract, dynamic_context)
 
 
@@ -476,6 +482,33 @@ def verifier_passed(dynamic_context: dict[str, Any]) -> bool:
             if isinstance(verifier, dict) and verifier.get("status") == "passed":
                 return True
     return False
+
+
+def browser_ui_project(dynamic_context: dict[str, Any]) -> bool:
+    package_json = dynamic_context.get("package_json") if isinstance(dynamic_context.get("package_json"), dict) else {}
+    dependencies = {}
+    for key in ("dependencies", "devDependencies"):
+        value = package_json.get(key)
+        if isinstance(value, dict):
+            dependencies.update(value)
+    if any(name in dependencies for name in ("react", "vue", "svelte", "@angular/core", "vite", "@vitejs/plugin-react", "@playwright/test")):
+        return True
+    reports = dynamic_context.get("test_reports")
+    if isinstance(reports, dict):
+        text = json.dumps(reports, sort_keys=True).lower()
+        if any(marker in text for marker in ("playwright", "browser", "ui", "end-to-end", "e2e")):
+            return True
+    return False
+
+
+def read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = spec_agent.read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def write_artifacts(
