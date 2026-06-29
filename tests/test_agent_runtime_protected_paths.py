@@ -268,6 +268,28 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertEqual(agent_runtime.canonical_tool_name("read_file.json", valid), "read_file")
         self.assertEqual(agent_runtime.canonical_tool_name("missing_tool.json", valid), "missing_tool.json")
 
+    def test_runtime_event_line_displays_canonical_tool_name(self) -> None:
+        line = agent_runtime.format_runtime_event_line(
+            {
+                "role": "assistant",
+                "ended_at": "2026-06-29T15:08:09+00:00",
+                "duration_ms": 73414.35,
+                "usage": {"cost": 0.00060479, "total_tokens": 11263},
+                "message": {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "write_spec_contract<|channel|>commentary",
+                            }
+                        }
+                    ]
+                },
+            }
+        )
+
+        self.assertIn("tools=write_spec_contract", line)
+        self.assertNotIn("<|channel|>", line)
+
     def test_runtime_dispatch_accepts_canonicalized_tool_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

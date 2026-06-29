@@ -1627,7 +1627,7 @@ def format_runtime_event_line(item: dict[str, Any]) -> str:
         tool_calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
         usage = item.get("usage") if isinstance(item.get("usage"), dict) else {}
         names = [
-            str(call.get("function", {}).get("name"))
+            display_tool_call_name(str(call.get("function", {}).get("name")))
             for call in tool_calls
             if isinstance(call, dict) and isinstance(call.get("function"), dict) and call.get("function", {}).get("name")
         ]
@@ -1804,6 +1804,13 @@ def canonical_tool_name(name: str, valid_names: Any) -> str:
     return name
 
 
+def display_tool_call_name(name: str) -> str:
+    for separator in ("<|channel|>", "."):
+        if separator in name:
+            return name.split(separator, 1)[0]
+    return name
+
+
 def active_todo_label(items: list[Any]) -> str | None:
     for item in items:
         if not isinstance(item, dict):
@@ -1845,9 +1852,9 @@ def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
                 f"tokens: {usage.get('total_tokens', 0)}",
             ]
             names = [
-                call.get("function", {}).get("name")
+                display_tool_call_name(str(call.get("function", {}).get("name")))
                 for call in tool_calls
-                if isinstance(call, dict) and isinstance(call.get("function"), dict)
+                if isinstance(call, dict) and isinstance(call.get("function"), dict) and call.get("function", {}).get("name")
             ]
             if names:
                 details.append("tools requested: " + ", ".join(str(name) for name in names))
