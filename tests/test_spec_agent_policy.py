@@ -10,6 +10,12 @@ import spec_agent  # noqa: E402
 
 
 class SpecAgentPolicyTests(unittest.TestCase):
+    def test_final_report_rejects_missing_contract_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, "contract_path does not exist yet"):
+                spec_agent.validate_spec_finish_report({"contract_path": "docs/specs/issue-1/contract.json"}, root)
+
     def test_spec_contract_write_rejects_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

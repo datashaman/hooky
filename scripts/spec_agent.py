@@ -161,7 +161,10 @@ def generate_contract_with_openrouter(
         max_cost_usd=float(os.environ.get("SPEC_AGENT_MAX_COST_USD", "0.10")),
         max_seconds=int(os.environ.get("SPEC_AGENT_MAX_SECONDS", "180")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
-        final_validator=validate_spec_finish_report,
+        final_validator=lambda report: validate_spec_finish_report(
+            report,
+            Path(dynamic_context["workspace"]["working_folder"]),
+        ),
         write_validator=lambda path, content: validate_spec_write(path, content, Path(dynamic_context["workspace"]["working_folder"])),
         write_enabled=True,
         write_allowed_prefixes=[
@@ -237,16 +240,25 @@ def spec_agent_finish_schema() -> dict[str, Any]:
         "properties": {
             "contract_path": {
                 "type": "string",
-                "description": "Path to the JSON Spec Agent contract already written inside docs/specs/<task-id>/contract.json.",
+                "description": "Relative path to the JSON Spec Agent contract already written inside docs/specs/<task-id>/contract.json.",
             },
         },
     }
 
 
-def validate_spec_finish_report(report: dict[str, Any]) -> None:
+def validate_spec_finish_report(report: dict[str, Any], working_folder: Path | None = None) -> None:
     contract_path = report.get("contract_path")
     if not isinstance(contract_path, str) or not contract_path.strip():
         raise ValueError("final_report must include contract_path")
+    if working_folder is None:
+        return
+    resolved = resolve_contract_path(contract_path, working_folder)
+    if not resolved.exists():
+        raise ValueError(
+            f"contract_path does not exist yet: {contract_path}; write the full Spec Agent contract JSON file before final_report"
+        )
+    contract = read_json(resolved)
+    validate_contract(contract)
 
 
 def validate_spec_write(path: Path, content: str, working_folder: Path) -> None:
@@ -265,19 +277,24 @@ def validate_spec_write(path: Path, content: str, working_folder: Path) -> None:
 
 def load_contract_from_finish_report(report: dict[str, Any], working_folder: Path) -> dict[str, Any]:
     validate_spec_finish_report(report)
-    contract_path = Path(str(report["contract_path"]))
-    if contract_path.is_absolute():
-        raise ValueError("contract_path must be relative to the working folder")
-    resolved = (working_folder / contract_path).resolve()
-    working_root = working_folder.resolve()
-    if resolved != working_root and working_root not in resolved.parents:
-        raise ValueError(f"contract_path escapes working folder: {contract_path}")
-    relative = resolved.relative_to(working_root).as_posix()
-    if not relative.startswith("docs/specs/") or not relative.endswith("/contract.json"):
-        raise ValueError("contract_path must point to docs/specs/<task-id>/contract.json")
+    resolved = resolve_contract_path(str(report["contract_path"]), working_folder)
     contract = read_json(resolved)
     validate_contract(contract)
     return contract
+
+
+def resolve_contract_path(contract_path: str, working_folder: Path) -> Path:
+    contract_path_obj = Path(contract_path)
+    if contract_path_obj.is_absolute():
+        raise ValueError("contract_path must be relative to the working folder")
+    resolved = (working_folder / contract_path_obj).resolve()
+    working_root = working_folder.resolve()
+    if resolved != working_root and working_root not in resolved.parents:
+        raise ValueError(f"contract_path escapes working folder: {contract_path_obj}")
+    relative = resolved.relative_to(working_root).as_posix()
+    if not relative.startswith("docs/specs/") or not relative.endswith("/contract.json"):
+        raise ValueError("contract_path must point to docs/specs/<task-id>/contract.json")
+    return resolved
 
 
 def spec_agent_contract_schema() -> dict[str, Any]:
@@ -453,7 +470,7 @@ Dynamic Context:
 ```
 
 Use the available tools to inspect project context as needed. Use todo tools to track substantive work.
-Write the full JSON Spec Agent contract to Dynamic Context workspace.artifact_dir + "/contract.json".
+Before final_report, write the full JSON Spec Agent contract to Dynamic Context workspace.artifact_dir + "/contract.json".
 Do not write .workflow files, production code, tests, dependency manifests, or runtime configuration.
 Finish only by calling final_report with {{"contract_path": "<relative path to contract.json>"}}.
 """
