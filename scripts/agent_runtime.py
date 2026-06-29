@@ -297,17 +297,20 @@ class ToolRuntime:
         max_bytes = int(args.get("max_bytes_per_file") or 12000)
         files = []
         for raw_path in list(args.get("paths") or [])[:50]:
-            path = self.resolve_path(str(raw_path))
-            self.validate_read_path(path)
-            content = read_text_prefix(path, max_bytes)
-            files.append(
-                {
-                    "path": relative_to(path, self.working_folder),
-                    "content": content,
-                    "bytes": path.stat().st_size,
-                    "truncated": path.stat().st_size > len(content.encode("utf-8")),
-                }
-            )
+            try:
+                path = self.resolve_path(str(raw_path))
+                self.validate_read_path(path)
+                content = read_text_prefix(path, max_bytes)
+                files.append(
+                    {
+                        "path": relative_to(path, self.working_folder),
+                        "content": content,
+                        "bytes": path.stat().st_size,
+                        "truncated": path.stat().st_size > len(content.encode("utf-8")),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - preserve batch reads when one file is absent.
+                files.append({"path": str(raw_path), "error": str(exc)})
         return {"ok": True, "files": files, "truncated": len(list(args.get("paths") or [])) > 50}
 
     def is_read_blocked(self, path: Path) -> bool:
@@ -372,11 +375,15 @@ class ToolRuntime:
         root = self.resolve_path(str(args.get("path") or "."))
         self.validate_read_path(root)
         pattern = str(args["pattern"])
-        matches = [
-            relative_to(path, self.working_folder)
-            for path in sorted(root.rglob("*"))
-            if path.is_file() and not self.is_read_blocked(path) and fnmatch.fnmatch(path.name, pattern)
-        ]
+        matches = []
+        for path in sorted(root.rglob("*")):
+            relative = relative_to(path, self.working_folder)
+            if (
+                path.is_file()
+                and not self.is_read_blocked(path)
+                and (fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(relative, pattern))
+            ):
+                matches.append(relative)
         return {"ok": True, "matches": matches[:500], "truncated": len(matches) > 500}
 
     def grep_files(self, args: dict[str, Any]) -> dict[str, Any]:

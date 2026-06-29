@@ -201,6 +201,30 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(excerpt["start_line"], 2)
             self.assertEqual(len(many["files"]), 2)
 
+    def test_read_many_files_reports_per_file_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("one\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.read_many_files({"paths": ["a.txt", "missing.txt"]})
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["files"][0]["content"], "one\n")
+            self.assertEqual(result["files"][1]["path"], "missing.txt")
+            self.assertIn("error", result["files"][1])
+
+    def test_find_files_matches_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/styles.css").write_text("body {}\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.find_files({"pattern": "src/styles.css"})
+
+            self.assertEqual(result["matches"], ["src/styles.css"])
+
     def test_tool_result_artifacts_are_readable_without_exposing_workflow_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

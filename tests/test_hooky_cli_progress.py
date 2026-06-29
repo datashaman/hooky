@@ -223,6 +223,52 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(current["source"], "builder-test-contract-finding")
         self.assertIn("test helper accesses runtime before setup", current["findings"])
 
+    def test_eval_does_not_overwrite_builder_test_contract_remediation(self) -> None:
+        state = hooky_cli.load_task_state(self.workspace)
+        builder_contract_path = self.workspace / ".workflow/artifacts/builder-agent/contract.json"
+        builder_contract_path.parent.mkdir(parents=True)
+        builder_contract_path.write_text("{}", encoding="utf-8")
+        hooky_cli.create_remediation_plan(
+            self.workspace,
+            state,
+            {
+                "status": "fail",
+                "safe_to_merge": False,
+                "root_cause_stage": "test",
+                "findings": ["Approved test contract is invalid."],
+                "trajectory_findings": [],
+                "artifact_findings": [],
+                "tooling_findings": [],
+                "human_review_focus": [],
+            },
+            builder_contract_path,
+            root_cause_stage="test",
+            source="builder-test-contract-finding",
+        )
+        eval_contract_path = self.workspace / ".workflow/artifacts/eval-agent/contract.json"
+        eval_contract_path.parent.mkdir(parents=True)
+        eval_contract_path.write_text("{}", encoding="utf-8")
+
+        plan_path = hooky_cli.maybe_create_remediation_plan(
+            self.workspace,
+            state,
+            {
+                "status": "fail",
+                "safe_to_merge": False,
+                "root_cause_stage": "builder",
+                "findings": ["Builder failed because tests are still failing."],
+            },
+            eval_contract_path,
+        )
+
+        self.assertEqual(plan_path, hooky_cli.current_remediation_path(self.workspace))
+        current = hooky_cli.read_json(hooky_cli.current_remediation_path(self.workspace))
+        self.assertEqual(current["root_cause_stage"], "test")
+        self.assertEqual(current["source"], "builder-test-contract-finding")
+        pipeline_log = hooky_cli.pipeline_log_path(self.workspace).read_text(encoding="utf-8")
+        self.assertIn("status=preserved", pipeline_log)
+        self.assertIn("ignored_eval_root_cause=builder", pipeline_log)
+
     def test_stage_sequence_runs_eval_after_builder_failure(self) -> None:
         calls: list[str] = []
 

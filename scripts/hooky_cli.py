@@ -282,6 +282,25 @@ def create_remediation_plan(
 def maybe_create_remediation_plan(workspace: Path, state: dict[str, Any], eval_contract: dict[str, Any], eval_contract_path: Path) -> Path | None:
     if eval_contract.get("status") == "pass" and eval_contract.get("safe_to_merge") is True:
         return None
+    current_path = current_remediation_path(workspace)
+    if current_path.exists():
+        current = read_json(current_path)
+        if (
+            current.get("source") == "builder-test-contract-finding"
+            and current.get("root_cause_stage") == "test"
+            and eval_contract.get("root_cause_stage") != "test"
+        ):
+            append_pipeline_event(
+                workspace,
+                "remediation",
+                task=state.get("task_id"),
+                status="preserved",
+                root_cause_stage="test",
+                source="builder-test-contract-finding",
+                ignored_eval_root_cause=eval_contract.get("root_cause_stage"),
+                plan=current_path.relative_to(workspace).as_posix(),
+            )
+            return current_path
     return create_remediation_plan(workspace, state, eval_contract, eval_contract_path)
 
 
