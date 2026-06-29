@@ -92,6 +92,27 @@ The loop must not silently wipe the whole workspace. If a clean rebuild is
 needed, the `loop-runner` records the reason in `log.md` and preserves the durable
 loop files unless a human explicitly deletes them.
 
+## Restart Policy
+
+Restart is expected behavior, not exceptional failure handling. The loop should
+prefer a clean new attempt over patching a bad approach until the project becomes
+hard to reason about.
+
+The `evaluator` may recommend `restart-attempt` when:
+
+- the implementation is accumulating patches without converging
+- the `generator` is working around the contract instead of satisfying it
+- the diff is larger or stranger than the task warrants
+- repeated fixes create contradictory structure
+- visual or behavioral failures suggest the approach is wrong
+
+On `restart-attempt`, the `loop-runner` discards generated attempt changes and
+starts a new attempt from `contract.md`, `feature_list.json`, `progress.md`, and
+`log.md`.
+
+The `loop-runner` asks for human input only on `restart-contract`, when the
+`evaluator` says the contract itself is wrong, incomplete, or misleading.
+
 ## Control Rule
 
 Roles may recommend outcomes, but only the `loop-runner` performs control-flow
