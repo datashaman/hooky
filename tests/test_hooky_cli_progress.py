@@ -181,6 +181,7 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_start_skill_option_sets_active_skills_for_run(self) -> None:
         seen: dict[str, str | None] = {}
+        last_run_path = self.workspace / "last-run-path"
 
         def stop_after_recording(*_args: object, **_kwargs: object) -> None:
             seen["skills"] = os.environ.get("HOOKY_ACTIVE_SKILLS")
@@ -192,11 +193,12 @@ class HookyProgressTests(unittest.TestCase):
         ):
             result = CliRunner().invoke(
                 hooky_cli.app,
-                ["-C", str(self.workspace), "start", "--skill", "visual-ui-review"],
+                ["-C", str(self.workspace), "start", "--skill", "visual-ui-review", "--last-run-path", str(last_run_path)],
             )
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertEqual(seen["skills"], "visual-ui-review")
+        self.assertEqual(last_run_path.read_text(encoding="utf-8").strip(), self.workspace.resolve().as_posix())
 
     def test_skills_list_shows_workspace_skill(self) -> None:
         skill_path = self.workspace / ".agents/skills/example/SKILL.md"
