@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -55,6 +57,36 @@ class EvalAgentForensicsTests(unittest.TestCase):
         dynamic_context = context_with_builder_test_failures()
 
         eval_agent.validate_contract_for_context(contract, dynamic_context)
+
+    def test_visual_evidence_images_discovers_verifier_screenshots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            screenshot = root / ".workflow/tool-results/visual-snapshots/shot.png"
+            screenshot.parent.mkdir(parents=True)
+            screenshot.write_bytes(b"png")
+            events = root / ".workflow/artifacts/verifier-agent/tool_events.json"
+            events.parent.mkdir(parents=True)
+            events.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "capture_visual_snapshot",
+                            "result": {
+                                "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                                "url": "http://127.0.0.1:4173",
+                                "metrics": {"clippedElementCount": 1},
+                            },
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            evidence = eval_agent.visual_evidence_images(root)
+
+            self.assertEqual(len(evidence), 1)
+            self.assertEqual(evidence[0]["path"], ".workflow/tool-results/visual-snapshots/shot.png")
+            self.assertEqual(evidence[0]["source"], "verifier_capture_visual_snapshot")
 
 
 def minimal_eval_contract(**overrides: object) -> dict[str, object]:

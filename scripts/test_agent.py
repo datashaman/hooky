@@ -150,6 +150,7 @@ def generate_contract_with_openrouter(
         dynamic_context["approved_spec"],
         runtime.tool_events,
         runtime.working_folder,
+        dynamic_context,
     )
     try:
         result = run_tool_agent(
@@ -426,10 +427,10 @@ You have filesystem and command tools scoped to the working folder. Use the todo
 Inspect the project context and existing files as needed. Write executable test artifacts at project-native relative paths that match the app's conventions.
 Do not write executable tests or fixtures under .workflow; that tree is reserved for Hooky reports and runtime metadata.
 Use detect_project_environment before choosing package-manager or test commands.
-Use run_tests for syntax checks, test discovery, and test execution so Hooky captures structured evidence and full output artifacts. Use bash only when no targeted tool fits. Do not write production implementation.
+Use run_tests for syntax checks and test discovery so Hooky captures structured evidence and full output artifacts. Use bash only when no targeted tool fits. Do not write production implementation.
 For JavaScript/Node tooling, use the package manager in Dynamic Context package_manager.selected. Do not probe or use alternative JavaScript package managers.
 If you run any setup, syntax, discovery, or test command, include it in test_execution_checks with its actual status. Test failures are expected before Builder runs; report them as failed, not fixed.
-Before running browser or end-to-end tests, inspect whether the project has the production app entrypoint those tests need, such as index.html and the referenced source files. If the production app entrypoint is absent because Builder has not run yet, do not run the browser suite; run static syntax/discovery checks that can execute without the app, and include the browser test command as skipped with a reason that the production app implementation is not present yet. Do not try to force a red phase from server error pages, browser security errors, missing selectors caused by an absent app, or other harness/runtime failures.
+Do not run browser or end-to-end suites that launch the application server before Builder has implemented production code. In the Test stage, use static syntax checks and discovery commands such as `playwright test --list`; include the full browser test command as skipped with a reason that it must run after Builder. Do not try to force a red phase from placeholder UI, server error pages, browser security errors, missing selectors caused by an absent app, or other harness/runtime failures.
 You may install required test tooling and add testing-only dependencies when the approved test strategy or project context requires them. Record every dependency addition, removal, or version change in dependency_changes.
 Do not add production implementation dependencies unless the approved spec or project context explicitly defines them as part of the test target. Do not change dependencies silently.
 Do not write workflow reports, contracts, context snapshots, or runtime metadata. Hooky writes system-managed artifacts from final_report.
@@ -476,9 +477,10 @@ def validate_contract_with_tool_events(
     approved_spec: dict[str, Any],
     tool_events: list[dict[str, Any]],
     working_folder: Path,
+    dynamic_context: dict[str, Any] | None = None,
 ) -> None:
     validate_contract(contract, approved_spec, working_folder)
-    validate_execution_checks_against_tool_events(contract, tool_events)
+    validate_execution_checks_against_tool_events(contract, tool_events, dynamic_context or {})
 
 
 def validate_execution_check_shape(value: Any) -> None:
@@ -515,12 +517,14 @@ def validate_dependency_change_shape(value: Any) -> None:
                 raise ValueError(f"dependency_changes[{index}].files_changed entries must be non-empty strings")
 
 
-def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
+def validate_execution_checks_against_tool_events(contract: dict[str, Any], tool_events: list[dict[str, Any]], dynamic_context: dict[str, Any] | None = None) -> None:
     checks = list(contract.get("test_execution_checks") or [])
     command_events = [event for event in tool_events if event.get("name") in {"bash", "run_tests"}]
     for event in command_events:
         command = event_command(event)
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        if browser_suite_command_forbidden_before_builder(command, event, dynamic_context or {}):
+            raise ValueError(f"browser/end-to-end suite must not run before Builder: {command}")
         if is_reportable_test_command(command):
             if command_masks_failure(command):
                 continue
@@ -645,6 +649,39 @@ def event_command(event: dict[str, Any]) -> str:
 def command_event_passed(event: dict[str, Any]) -> bool:
     result = event.get("result") if isinstance(event.get("result"), dict) else {}
     return bash_result_passed(result)
+
+
+def browser_suite_command_forbidden_before_builder(command: str, event: dict[str, Any], dynamic_context: dict[str, Any]) -> bool:
+    if dynamic_context.get("source") != "approved_spec_contract":
+        return False
+    normalized = normalize_command(command).lower()
+    if not browser_suite_command(normalized):
+        return False
+    if browser_discovery_only(normalized, event):
+        return False
+    return True
+
+
+def browser_suite_command(command: str) -> bool:
+    return any(
+        marker in command
+        for marker in (
+            "playwright test",
+            "npm test",
+            "npm run test",
+            "pnpm test",
+            "pnpm run test",
+            "yarn test",
+            "bun test",
+        )
+    )
+
+
+def browser_discovery_only(command: str, event: dict[str, Any]) -> bool:
+    if " --list" in command or command.endswith(" --list"):
+        return True
+    arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+    return bool(arguments.get("list_only"))
 
 
 def bash_result_passed(result: dict[str, Any]) -> bool:

@@ -264,6 +264,22 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(result["metrics"]["clippedElementCount"], 1)
             self.assertIn("visual-snapshots", result["screenshot_path"])
             self.assertTrue((root / result["screenshot_path"]).exists())
+            self.assertEqual(runtime.pending_image_inputs[0]["path"], result["screenshot_path"])
+
+    def test_image_input_message_uses_data_url_content_parts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "shot.png"
+            image.write_bytes(b"png-bytes")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            message = agent_runtime.image_input_message(runtime, [{"path": "shot.png", "label": "Screenshot"}], "Inspect this.")
+
+            self.assertIsNotNone(message)
+            content = message["content"]
+            self.assertEqual(content[0]["type"], "text")
+            self.assertEqual(content[1]["type"], "image_url")
+            self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
 
     def test_available_tools_include_visual_snapshot(self) -> None:
         self.assertIn("capture_visual_snapshot", agent_runtime.available_tool_names())

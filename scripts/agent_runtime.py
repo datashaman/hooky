@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import fnmatch
+import base64
 import json
+import mimetypes
 import os
 import re
 import signal
@@ -84,6 +86,8 @@ class ToolRuntime:
     tool_events: list[dict[str, Any]] = field(default_factory=list)
     managed_processes: dict[str, subprocess.Popen[str]] = field(default_factory=dict)
     next_process_id: int = 1
+    initial_image_paths: list[Path] = field(default_factory=list)
+    pending_image_inputs: list[dict[str, str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -498,9 +502,21 @@ class ToolRuntime:
         payload["ok"] = True
         payload["screenshot_path"] = relative_to(screenshot_path, self.working_folder)
         payload["script_path"] = relative_to(script_path, self.working_folder)
+        self.queue_image_input(screenshot_path, f"Visual snapshot for {url} at {viewport_width}x{viewport_height}")
         if stderr:
             payload["stderr"] = single_line(stderr, 1000)
         return payload
+
+    def queue_image_input(self, path: Path, label: str) -> None:
+        resolved = path if path.is_absolute() else self.working_folder / path
+        if not resolved.exists() or not resolved.is_file():
+            return
+        self.pending_image_inputs.append(
+            {
+                "path": relative_to(resolved, self.working_folder),
+                "label": label,
+            }
+        )
 
     def git_status(self, _args: dict[str, Any]) -> dict[str, Any]:
         return self.run_git(["status", "--short"])
@@ -931,6 +947,14 @@ def run_tool_agent(
     from openrouter import OpenRouter
 
     messages: list[Any] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    if runtime.initial_image_paths:
+        initial_images = [
+            {"path": relative_to((path if path.is_absolute() else runtime.working_folder / path), runtime.working_folder), "label": "Initial visual evidence"}
+            for path in runtime.initial_image_paths
+        ]
+        image_message = image_input_message(runtime, initial_images, "Initial visual evidence attached for inspection.")
+        if image_message:
+            messages.append(image_message)
     transcript: list[dict[str, Any]] = []
     tool_events: list[dict[str, Any]] = []
     compaction_events: list[dict[str, Any]] = []
@@ -1024,6 +1048,23 @@ def run_tool_agent(
                     flush_live_log()
                     if float(total_usage.get("cost") or 0) > runtime.max_cost_usd:
                         raise AgentRunError(f"agent runtime exceeded ${runtime.max_cost_usd:.4f} cost budget after compaction", current_result())
+
+                if runtime.pending_image_inputs:
+                    attachments = list(runtime.pending_image_inputs)
+                    runtime.pending_image_inputs.clear()
+                    image_message = image_input_message(runtime, attachments, "Visual evidence attached. Inspect the image pixels directly before continuing.")
+                    if image_message:
+                        messages.append(image_message)
+                        transcript.append(
+                            {
+                                "role": "image_input",
+                                "images": [{"path": item["path"], "label": item.get("label", "")} for item in attachments],
+                                "started_at": utc_timestamp(),
+                                "ended_at": utc_timestamp(),
+                            }
+                        )
+                        append_live_event(runtime, f"{utc_timestamp()} image_input count={len(attachments)} paths={','.join(item['path'] for item in attachments)}")
+                        flush_live_log()
 
                 assistant_started_at = utc_timestamp()
                 assistant_start = time.monotonic()
@@ -1767,6 +1808,49 @@ def utc_timestamp() -> str:
 
 def openrouter_timeout_ms() -> int:
     return int(os.environ.get("OPENROUTER_TIMEOUT_MS", "120000"))
+
+
+def image_input_message(runtime: ToolRuntime, images: list[dict[str, str]], text: str) -> dict[str, Any] | None:
+    content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    attached: list[str] = []
+    for image in images:
+        relative = str(image.get("path") or "").strip()
+        if not relative:
+            continue
+        try:
+            path = runtime.resolve_path(relative)
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_data_url(path),
+                    },
+                }
+            )
+            label = str(image.get("label") or relative)
+            content[0]["text"] += f"\n- {label}: {relative}"
+            attached.append(relative)
+        except (OSError, ValueError):
+            continue
+    if not attached:
+        return None
+    return {"role": "user", "content": content}
+
+
+def image_data_url(path: Path) -> str:
+    data = path.read_bytes()
+    max_bytes = int(os.environ.get("AGENT_IMAGE_INPUT_MAX_BYTES", "5000000"))
+    if len(data) > max_bytes:
+        raise ValueError(f"image is too large to attach: {relative_or_name(path)} ({len(data)} bytes)")
+    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
+    if mime_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+        raise ValueError(f"unsupported image type for model input: {mime_type}")
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def relative_or_name(path: Path) -> str:
+    return path.as_posix()
 
 
 def available_tool_names() -> list[str]:

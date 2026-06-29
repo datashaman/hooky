@@ -128,6 +128,7 @@ def build_dynamic_context(*, working_folder: Path, generated_at: str, report_roo
         "pipeline_state": read_pipeline_state(working_folder),
         "runtime_metadata": read_runtime_metadata(working_folder),
         "runtime_forensics": read_runtime_forensics(working_folder),
+        "visual_evidence": visual_evidence_images(working_folder),
         "deterministic_facts": deterministic_facts(working_folder),
         "generated_at": generated_at,
     }
@@ -158,6 +159,7 @@ def generate_contract_with_openrouter(
         live_event_prefix="stage=eval ",
         write_enabled=False,
         read_blocked_prefixes=[],
+        initial_image_paths=[Path(item["path"]) for item in dynamic_context.get("visual_evidence", []) if isinstance(item, dict) and item.get("path")],
     )
     try:
         result = run_tool_agent(
@@ -319,6 +321,7 @@ Use todo tools to track the evaluation work.
 You must not edit any files.
 Evaluate the full pipeline trajectory even when an earlier stage failed or Verifier did not run.
 If Verifier status is missing or not pass, return fail and safe_to_merge false.
+If Dynamic Context includes visual_evidence, those images are attached to this conversation as model image inputs. Inspect the pixels directly; do not evaluate visual quality from file paths or numeric metrics alone.
 Perform forensic analysis of the agent pathway: tool sequence, failed calls, skipped stages, handoff quality, runtime/cost behavior, and artifact quality.
 Finish only by calling final_report with the Eval Agent contract.
 """
@@ -587,6 +590,7 @@ def summarize_contract(path: Path) -> dict[str, Any]:
         "failures_remaining",
         "checks_run",
         "scope_violations",
+        "visual_findings",
         "security_findings",
         "required_actions",
         "findings",
@@ -681,6 +685,39 @@ def read_runtime_forensics(working_folder: Path) -> dict[str, Any]:
             stage_data["runtime_metadata"] = spec_agent.read_json(metadata_path)
         forensics[stage] = stage_data
     return forensics
+
+
+def visual_evidence_images(working_folder: Path) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    verifier_events = read_tool_event_list(working_folder / VERIFIER_REPORT_ROOT / "tool_events.json")
+    for event in verifier_events:
+        if event.get("name") != "capture_visual_snapshot":
+            continue
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        screenshot_path = str(result.get("screenshot_path") or "").strip()
+        if not screenshot_path:
+            continue
+        path = working_folder / screenshot_path
+        if path.exists() and path.is_file() and screenshot_path not in seen:
+            seen.add(screenshot_path)
+            evidence.append(
+                {
+                    "source": "verifier_capture_visual_snapshot",
+                    "path": screenshot_path,
+                    "url": result.get("url"),
+                    "metrics": result.get("metrics", {}),
+                }
+            )
+    snapshot_root = working_folder / ".workflow/tool-results/visual-snapshots"
+    if snapshot_root.exists():
+        for path in sorted(snapshot_root.glob("*.png")):
+            relative = path.relative_to(working_folder).as_posix()
+            if relative in seen:
+                continue
+            seen.add(relative)
+            evidence.append({"source": "visual_snapshot_artifact", "path": relative})
+    return evidence[:4]
 
 
 def deterministic_facts(working_folder: Path) -> dict[str, Any]:

@@ -23,7 +23,7 @@ Agents may assume these basic tools exist:
 - `find_files(glob, path)`: find files by name or glob.
 - `detect_project_environment()`: inspect package managers, lockfiles, scripts, languages, and likely test commands.
 - `run_tests(command, test_file, test_name, list_only, timeout_seconds)`: run a structured test/check command and save full output to an artifact.
-- `capture_visual_snapshot(url, wait_selector, viewport_width, viewport_height, full_page, timeout_seconds)`: capture a browser screenshot and return layout metrics for visual verification.
+- `capture_visual_snapshot(url, wait_selector, viewport_width, viewport_height, full_page, timeout_seconds)`: capture a browser screenshot, return layout metrics, and attach the screenshot as a model image input on the next turn for visual verification.
 - `git_status()`: read git working-tree status.
 - `git_diff(path, staged, max_bytes)`: read git diff output.
 - `git_show(ref, path, max_bytes)`: read a file or object from git.
@@ -50,7 +50,7 @@ Agents may assume these basic tools exist:
 - Prefer targeted tools over shell commands.
 - Prefer `detect_project_environment` before probing package managers, scripts, or test commands.
 - Prefer `run_tests` for tests, syntax checks, discovery checks, lint/typecheck commands, and other deterministic verification commands. It stores full output and returns structured pass/fail evidence.
-- Prefer `capture_visual_snapshot` when verifying browser UI layout, visual presence, screenshots, or console errors.
+- Prefer `capture_visual_snapshot` when verifying browser UI layout, visual presence, screenshots, or console errors. Inspect the attached image pixels directly; paths and numeric metrics are supporting evidence only.
 - Prefer `git_status`, `git_diff`, and `git_show` for read-only git inspection.
 - Prefer `read_file_excerpt` or `read_many_files` over `cat`, `head`, `tail`, or `sed` through bash.
 - Prefer `find_files` or `grep_files` over broad shell commands when discovering project context.

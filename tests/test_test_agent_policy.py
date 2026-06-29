@@ -94,6 +94,51 @@ class TestAgentPolicyTests(unittest.TestCase):
             ],
         )
 
+    def test_pre_builder_playwright_suite_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not run before Builder"):
+            test_agent.validate_execution_checks_against_tool_events(
+                {
+                    "test_execution_checks": [
+                        {
+                            "command": "npx playwright test",
+                            "status": "failed",
+                            "reason": "Attempted browser suite before Builder.",
+                        }
+                    ],
+                    "dependency_changes": [],
+                },
+                [
+                    {
+                        "name": "run_tests",
+                        "arguments": {"command": "npx playwright test"},
+                        "result": {"ok": False, "returncode": 1, "command": "npx playwright test"},
+                    }
+                ],
+                {"source": "approved_spec_contract"},
+            )
+
+    def test_pre_builder_playwright_list_is_allowed(self) -> None:
+        test_agent.validate_execution_checks_against_tool_events(
+            {
+                "test_execution_checks": [
+                    {
+                        "command": "npx playwright test --list",
+                        "status": "passed",
+                        "reason": "Discovered generated browser tests without launching the app.",
+                    }
+                ],
+                "dependency_changes": [],
+            },
+            [
+                {
+                    "name": "run_tests",
+                    "arguments": {"command": "npx playwright test --list", "list_only": True},
+                    "result": {"ok": True, "returncode": 0, "command": "npx playwright test --list"},
+                }
+            ],
+            {"source": "approved_spec_contract"},
+        )
+
     def test_package_manager_defaults_to_npm_without_js_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(test_agent.detect_js_package_manager(Path(tmp))["selected"], "npm")

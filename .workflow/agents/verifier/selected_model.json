@@ -1,13 +1,8 @@
 {
-  "actual_cost": 0.00304875,
-  "cached": false,
-  "context_length": 262144,
-  "estimated_cost": 7e-05,
-  "judge_model": "openai/gpt-4.1",
-  "model": "inclusionai/ling-2.6-flash",
+  "context_length": 1047576,
+  "model": "openai/gpt-4.1-mini",
   "reasoning_request": null,
-  "report": ".workflow/eval-runs/verifier-agent/20260627T192617Z/report.json",
-  "source": "eval",
-  "updated_at": "2026-06-27T19:29:46+00:00",
-  "variant_id": "inclusionai/ling-2.6-flash"
+  "source": "manual-multimodal-required",
+  "updated_at": "2026-06-29T06:40:00+00:00",
+  "variant_id": "openai/gpt-4.1-mini"
 }
