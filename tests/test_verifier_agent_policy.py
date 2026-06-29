@@ -61,8 +61,40 @@ class VerifierAgentPolicyTests(unittest.TestCase):
                                     {
                                         "tag": "h1",
                                         "role": "",
-                                        "text": "todos",
+                                        "text": "Create project",
                                         "rect": {"y": -10, "bottom": 10},
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                ],
+            )
+
+    def test_browser_ui_rejects_pass_when_heading_overlaps_input(self) -> None:
+        contract = base_contract()
+        contract["visual_findings"] = ["title and input are visible"]
+
+        with self.assertRaisesRegex(ValueError, "heading overlaps interactive control"):
+            verifier_agent.validate_contract_for_context(
+                contract,
+                browser_context(),
+                [
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                            "metrics": {
+                                "contentBounds": {"y": 57},
+                                "sampleClippedElements": [],
+                                "sampleHeadingInteractiveOverlaps": [
+                                    {
+                                        "headingText": "Create project",
+                                        "headingTag": "h1",
+                                        "interactiveText": "Project name",
+                                        "interactiveTag": "input",
+                                        "overlapRatio": 0.35,
                                     }
                                 ],
                             },
@@ -89,7 +121,7 @@ class VerifierAgentPolicyTests(unittest.TestCase):
                         "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
                         "metrics": {
                             "contentBounds": {"y": -10},
-                            "sampleClippedElements": [{"tag": "h1", "text": "todos"}],
+                            "sampleClippedElements": [{"tag": "h1", "text": "Create project"}],
                         },
                     },
                 }

@@ -381,6 +381,14 @@ def visual_snapshot_blocking_findings(snapshot_events: list[dict[str, Any]]) -> 
             findings.append(f"content starts above viewport y={bounds.get('y')}")
         if metrics.get("horizontalOverflow") is True:
             findings.append("document has horizontal overflow")
+        overlaps = metrics.get("sampleHeadingInteractiveOverlaps") if isinstance(metrics.get("sampleHeadingInteractiveOverlaps"), list) else []
+        for item in overlaps:
+            if not isinstance(item, dict):
+                continue
+            heading = str(item.get("headingText") or item.get("headingTag") or "heading").strip()
+            control = str(item.get("interactiveText") or item.get("interactiveRole") or item.get("interactiveClassName") or item.get("interactiveTag") or "control").strip()
+            ratio = item.get("overlapRatio")
+            findings.append(f"heading overlaps interactive control: {heading[:60]} over {control[:60]} ratio={ratio}")
         clipped = metrics.get("sampleClippedElements") if isinstance(metrics.get("sampleClippedElements"), list) else []
         for item in clipped:
             if not isinstance(item, dict):

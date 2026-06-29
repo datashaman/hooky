@@ -1067,8 +1067,36 @@ async function loadPlaywright() {
     } : null;
     const headings = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]')).map(element => ({
       text: (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+      tag: element.tagName.toLowerCase(),
+      role: element.getAttribute('role') || '',
       rect: asRect(element.getBoundingClientRect()),
     }));
+    function intersectionRatio(a, b) {
+      const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.x, b.x));
+      const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y));
+      const area = width * height;
+      const smallest = Math.max(1, Math.min(a.width * a.height, b.width * b.height));
+      return Number((area / smallest).toFixed(4));
+    }
+    const headingInteractiveOverlaps = [];
+    for (const heading of headings) {
+      for (const interactive of interactiveElements) {
+        const ratio = intersectionRatio(heading.rect, interactive.rect);
+        if (ratio > 0.01) {
+          headingInteractiveOverlaps.push({
+            headingText: heading.text,
+            headingTag: heading.tag,
+            headingRect: heading.rect,
+            interactiveText: interactive.text,
+            interactiveTag: interactive.tag,
+            interactiveRole: interactive.role,
+            interactiveClassName: interactive.className,
+            interactiveRect: interactive.rect,
+            overlapRatio: ratio,
+          });
+        }
+      }
+    }
     return {
       title: document.title,
       location: window.location.href,
@@ -1087,9 +1115,11 @@ async function loadPlaywright() {
       horizontalOverflow: doc.scrollWidth > viewport.width + 2,
       verticalOverflow: doc.scrollHeight > viewport.height + 2,
       clippedElementCount: clippedElements.length,
+      headingInteractiveOverlapCount: headingInteractiveOverlaps.length,
       visibleElementCount: visibleElements.length,
       interactiveElementCount: interactiveElements.length,
       headings: headings.slice(0, 12),
+      sampleHeadingInteractiveOverlaps: headingInteractiveOverlaps.slice(0, 20),
       sampleClippedElements: clippedElements.slice(0, 20),
       sampleVisibleElements: visibleElements.slice(0, 40),
       sampleInteractiveElements: interactiveElements.slice(0, 30),
@@ -1617,6 +1647,8 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
             f"coverage={metrics.get('viewportCoverage')} top_gap={metrics.get('topGapRatio')} "
             f"elements={metrics.get('visibleElementCount')}"
         )
+        if metrics.get("headingInteractiveOverlapCount"):
+            detail += f" heading_control_overlaps={metrics.get('headingInteractiveOverlapCount')}"
         console_messages = result.get("consoleMessages") if isinstance(result.get("consoleMessages"), list) else []
         if console_messages:
             detail += f" console_messages={len(console_messages)}"
@@ -1901,6 +1933,8 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append(f"top gap ratio: {metrics.get('topGapRatio')}")
         summary.append(f"left gap ratio: {metrics.get('leftGapRatio')}")
         summary.append(f"visible elements: {metrics.get('visibleElementCount')}")
+        if metrics.get("headingInteractiveOverlapCount"):
+            summary.append(f"heading/control overlaps: {metrics.get('headingInteractiveOverlapCount')}")
         console_messages = result.get("consoleMessages") if isinstance(result.get("consoleMessages"), list) else []
         if console_messages:
             summary.append("console messages: " + str(len(console_messages)))

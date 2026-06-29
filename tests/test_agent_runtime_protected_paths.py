@@ -357,6 +357,10 @@ class ProtectedPathTests(unittest.TestCase):
                         "visiblePaintCoverage": 0.05,
                         "topGapRatio": 0.2,
                         "clippedElementCount": 1,
+                        "headingInteractiveOverlapCount": 1,
+                        "sampleHeadingInteractiveOverlaps": [
+                            {"headingText": "Create project", "interactiveText": "Project name", "overlapRatio": 0.35}
+                        ],
                         "visibleElementCount": 4,
                     },
                 }
@@ -367,6 +371,7 @@ class ProtectedPathTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertEqual(result["metrics"]["clippedElementCount"], 1)
+            self.assertEqual(result["metrics"]["headingInteractiveOverlapCount"], 1)
             self.assertIn("visual-snapshots", result["screenshot_path"])
             self.assertTrue((root / result["screenshot_path"]).exists())
             self.assertEqual(runtime.pending_image_inputs[0]["path"], result["screenshot_path"])
