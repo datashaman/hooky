@@ -1222,14 +1222,30 @@ def run_verifier(ctx: typer.Context, task: Annotated[str | None, typer.Option(he
     set_stage_status(workspace, state, "verifier", "running")
     try:
         with in_workspace(workspace):
-            report_dir, _contract, usage = verifier_agent.generate_verification_artifacts(working_folder=Path("."), generated_at=utc_now())
+            report_dir, contract, usage = verifier_agent.generate_verification_artifacts(working_folder=Path("."), generated_at=utc_now())
     except Exception as exc:
         set_stage_status(workspace, state, "verifier", "failed", error=str(exc))
         raise
-    state["artifacts"]["verifier"] = {"report_dir": report_dir.as_posix(), "contract": (report_dir / "contract.json").as_posix(), "usage": usage}
-    set_stage_status(workspace, state, "verifier", "passed", contract=(report_dir / "contract.json").as_posix(), report_dir=report_dir.as_posix(), cost=usage.get("cost"))
+    verifier_contract_path = report_dir / "contract.json"
+    state["artifacts"]["verifier"] = {"report_dir": report_dir.as_posix(), "contract": verifier_contract_path.as_posix(), "usage": usage}
+    verifier_passed = contract.get("status") == "pass"
+    verifier_status = "passed" if verifier_passed else "failed"
+    failure_summary = str(contract.get("summary") or "Verifier reported status!=pass")
+    set_stage_status(
+        workspace,
+        state,
+        "verifier",
+        verifier_status,
+        contract=verifier_contract_path.as_posix(),
+        report_dir=report_dir.as_posix(),
+        cost=usage.get("cost"),
+        safe_to_open_pr=contract.get("safe_to_open_pr"),
+        error=None if verifier_passed else failure_summary,
+    )
     save_task_state(workspace, state)
     typer.echo(f"verifier report: {report_dir}")
+    if not verifier_passed:
+        raise RuntimeError(f"verifier reported status={contract.get('status')}: {failure_summary}")
     typer.echo("next: hooky run eval")
 
 

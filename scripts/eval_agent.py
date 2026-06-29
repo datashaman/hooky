@@ -379,6 +379,14 @@ def validate_contract(contract: dict[str, Any]) -> None:
         value = float(scores[name])
         if value < 0 or value > 10:
             raise ValueError(f"eval score out of range for {name}: {value}")
+    if contract["status"] == "pass":
+        score_values = [float(scores[name]) for name in required_scores]
+        average = sum(score_values) / len(score_values)
+        minimum = min(score_values)
+        if average < 8:
+            raise ValueError(f"eval cannot pass with average score below 8: {average:.2f}")
+        if minimum < 6:
+            raise ValueError(f"eval cannot pass with score below 6: {minimum:.2f}")
 
 
 def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dict[str, Any]) -> None:

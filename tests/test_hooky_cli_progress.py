@@ -312,6 +312,43 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(failures, ["builder failed: server timeout"])
         self.assertEqual(calls, ["spec", "approve-spec", "builder", "eval"])
 
+    def test_verifier_failed_contract_marks_stage_failed(self) -> None:
+        state = hooky_cli.load_task_state(self.workspace)
+        builder_contract = self.workspace / ".workflow/artifacts/builder-agent/contract.json"
+        builder_contract.parent.mkdir(parents=True)
+        builder_contract.write_text("{}", encoding="utf-8")
+        state.setdefault("artifacts", {})["builder"] = {
+            "report_dir": ".workflow/artifacts/builder-agent",
+            "contract": ".workflow/artifacts/builder-agent/contract.json",
+        }
+        hooky_cli.save_task_state(self.workspace, state)
+        report_dir = Path(".workflow/artifacts/verifier-agent")
+        contract = {
+            "status": "fail",
+            "summary": "Visual check failed.",
+            "checks_run": [],
+            "scope_violations": [],
+            "test_integrity_findings": [],
+            "acceptance_coverage_findings": [],
+            "visual_findings": ["primary content is clipped"],
+            "security_findings": [],
+            "required_actions": ["Fix clipped primary content."],
+            "safe_to_open_pr": False,
+        }
+
+        with mock.patch.object(
+            hooky_cli.verifier_agent,
+            "generate_verification_artifacts",
+            return_value=(report_dir, contract, {"cost": 0.01}),
+        ):
+            result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "verifier"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        saved = hooky_cli.load_task_state(self.workspace)
+        self.assertEqual(saved["stage_status"]["verifier"]["status"], "failed")
+        self.assertIn("Visual check failed.", saved["stage_status"]["verifier"]["error"])
+        self.assertEqual(saved["phase_status"]["verify"]["status"], "failed")
+
     def test_pipeline_failure_preserves_stage_state_written_during_run(self) -> None:
         def fail_after_stage_update(ctx: object, start_stage: str, auto_approve: bool, task: str | None) -> list[str]:
             state = hooky_cli.load_task_state(self.workspace, task)
