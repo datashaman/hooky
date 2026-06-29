@@ -29,9 +29,10 @@ contract, stop at a cap, or ask for human input.
 The `planner` does not write the final grading contract. It writes the problem
 boundary. The grading contract is negotiated before implementation:
 
-1. The `planner` writes `planner_spec.md`.
-2. The `generator` proposes `contract.md`, describing what done means.
-3. The `evaluator` reviews `contract.md` and writes `contract_review.md`.
+1. The `planner` writes the problem boundary into `contract.md`.
+2. The `generator` revises `contract.md` with proposed done criteria.
+3. The `evaluator` reviews `contract.md`, records objections in `log.md`, and
+   updates `progress.md` with the current contract-negotiation status.
 4. The `generator` revises `contract.md` until the `evaluator` accepts it.
 5. The accepted contract is projected into `feature_list.json` as testable
    assertions.
@@ -49,17 +50,20 @@ primary state should be small enough to read directly:
 
 ```text
 .workflow/loop/
-  planner_spec.md
-  contract_review.md
   feature_list.json
-  contract.md
   progress.md
+  contract.md
   log.md
 ```
 
 Supporting artifacts such as patches, screenshots, test logs, and transcripts
 may live under attempt-specific folders, but those artifacts are evidence. They
 are not the primary loop state.
+
+`contract.md` carries both the problem boundary and the accepted grading
+contract. `feature_list.json` is the structured checklist projected from the
+accepted contract. `progress.md` records the current loop state and next action.
+`log.md` records append-only decisions, objections, restarts, and notable events.
 
 `log.md` is append-only. Entries should use a stable heading format:
 
@@ -80,8 +84,7 @@ The loop distinguishes three actions:
 
 - `resume`: keep the current attempt and continue from disk state.
 - `restart-attempt`: discard generated changes from the current attempt, keep
-  `planner_spec.md`, `contract.md`, `contract_review.md`, `feature_list.json`,
-  `progress.md`, and `log.md`.
+  `feature_list.json`, `progress.md`, `contract.md`, and `log.md`.
 - `restart-contract`: abandon or revise the contract. This requires the `planner`
   or a human because the problem statement changed.
 
