@@ -412,6 +412,39 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertFalse(result["granted"])
             self.assertIn("progress", result["error"])
 
+    def test_passing_tests_near_deadline_grant_report_grace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                max_post_success_grace_seconds=90,
+            )
+            runtime.started_at = time.monotonic() - 25
+
+            result = runtime.grant_post_success_grace({"ok": True, "passed": True})
+
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertGreaterEqual(result["added_seconds"], 80)
+            self.assertGreater(runtime.max_seconds, 100)
+
+    def test_passing_tests_early_do_not_grant_report_grace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=300,
+                max_post_success_grace_seconds=90,
+            )
+
+            result = runtime.grant_post_success_grace({"ok": True, "passed": True})
+
+            self.assertIsNone(result)
+            self.assertEqual(runtime.max_seconds, 300)
+
     def test_git_status_and_diff_are_read_only_structured_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

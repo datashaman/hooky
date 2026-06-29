@@ -93,6 +93,8 @@ class ToolRuntime:
     extension_requests_used: int = 0
     max_extension_seconds: int = 0
     max_extension_requests: int = 0
+    post_success_grace_seconds_used: int = 0
+    max_post_success_grace_seconds: int = 0
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -113,6 +115,8 @@ class ToolRuntime:
             self.max_extension_seconds = int(os.environ["AGENT_MAX_EXTENSION_SECONDS"])
         if os.environ.get("AGENT_MAX_EXTENSION_REQUESTS"):
             self.max_extension_requests = int(os.environ["AGENT_MAX_EXTENSION_REQUESTS"])
+        if os.environ.get("AGENT_POST_SUCCESS_GRACE_SECONDS"):
+            self.max_post_success_grace_seconds = int(os.environ["AGENT_POST_SUCCESS_GRACE_SECONDS"])
 
     def tools(self) -> list[dict[str, Any]]:
         return [
@@ -332,6 +336,29 @@ class ToolRuntime:
             if event.get("name") == "run_tests":
                 saw_test = True
         return saw_successful_tool and (saw_write or saw_test)
+
+    def grant_post_success_grace(self, result: dict[str, Any]) -> dict[str, Any] | None:
+        if self.max_post_success_grace_seconds <= 0:
+            return None
+        if not result.get("ok") or result.get("passed") is not True:
+            return None
+        remaining_budget = self.max_post_success_grace_seconds - self.post_success_grace_seconds_used
+        if remaining_budget <= 0:
+            return None
+        elapsed = time.monotonic() - self.started_at
+        target_deadline = elapsed + remaining_budget
+        if target_deadline <= self.max_seconds:
+            return None
+        added_seconds = int(target_deadline - self.max_seconds)
+        if added_seconds <= 0:
+            return None
+        self.max_seconds += added_seconds
+        self.post_success_grace_seconds_used += added_seconds
+        return {
+            "added_seconds": added_seconds,
+            "max_seconds": self.max_seconds,
+            "post_success_grace_seconds_used": self.post_success_grace_seconds_used,
+        }
 
     def resolve_path(self, value: str) -> Path:
         path = (self.working_folder / value).resolve()
@@ -1217,6 +1244,28 @@ def run_tool_agent(
                     runtime.tool_events.append(event)
                     transcript.append({"role": "tool", **event})
                     append_live_event(runtime, format_runtime_event_line(transcript[-1]))
+                    if name == "run_tests":
+                        grace = runtime.grant_post_success_grace(result)
+                        if grace:
+                            notice = (
+                                "Post-success grace: tests passed near the runtime deadline. "
+                                f"Added {grace['added_seconds']}s for final todo/reporting."
+                            )
+                            transcript.append(
+                                {
+                                    "role": "runtime_notice",
+                                    "message": notice,
+                                    "started_at": utc_timestamp(),
+                                    "ended_at": utc_timestamp(),
+                                }
+                            )
+                            append_live_event(
+                                runtime,
+                                (
+                                    f"{utc_timestamp()} runtime_notice kind=post_success_grace "
+                                    f"added_seconds={grace['added_seconds']} max_seconds={int(grace['max_seconds'])}"
+                                ),
+                            )
                     flush_live_log()
                     messages.append(
                         {

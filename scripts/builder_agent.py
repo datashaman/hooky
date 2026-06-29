@@ -187,6 +187,7 @@ def generate_contract_with_openrouter(
         max_seconds=int(os.environ.get("BUILDER_AGENT_MAX_SECONDS", "420")),
         max_extension_seconds=int(os.environ.get("BUILDER_AGENT_MAX_EXTENSION_SECONDS", "180")),
         max_extension_requests=int(os.environ.get("BUILDER_AGENT_MAX_EXTENSION_REQUESTS", "1")),
+        max_post_success_grace_seconds=int(os.environ.get("BUILDER_AGENT_POST_SUCCESS_GRACE_SECONDS", "180")),
         context_window_tokens=agent_context["selected_model"].get("context_length"),
         final_validator=lambda contract: validate_contract_for_context(contract, dynamic_context),
         live_log_root=working_folder / dynamic_context["workspace"]["report_root"],
