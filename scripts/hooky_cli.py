@@ -190,6 +190,12 @@ def append_loop_log(workspace: Path, op: str, title: str, body: str = "") -> Non
         handle.write(entry)
 
 
+def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
 def write_loop_progress(workspace: Path, state: dict[str, Any], *, note: str | None = None) -> None:
     current_attempt = state.get("current_attempt")
     lines = [
@@ -1531,6 +1537,68 @@ def loop_evaluator_report(
     append_loop_log(workspace, "evaluator", f"attempt {attempt_id} report", note)
     typer.echo(f"report: {report_path}")
     typer.echo(f"recommendation: {recommendation}")
+
+
+@loop_app.command("trace-event")
+def loop_trace_event(
+    ctx: typer.Context,
+    role: Annotated[str, typer.Option(help="Model role: planner, generator, or evaluator.")],
+    content: Annotated[str, typer.Option(help="Transcript content to append.")],
+    kind: Annotated[str, typer.Option(help="Event kind, such as message, tool_call, or decision.")] = "message",
+) -> None:
+    """Append a grep-friendly JSONL trace event for the active attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    if role not in {"planner", "generator", "evaluator"}:
+        raise typer.BadParameter("role must be planner, generator, or evaluator")
+    state = read_loop_state(workspace)
+    attempt_id = active_loop_attempt(state)
+    path = loop_attempt_dir(workspace, attempt_id) / "traces" / f"{role}.jsonl"
+    payload = {
+        "timestamp": utc_now(),
+        "attempt": attempt_id,
+        "role": role,
+        "kind": kind,
+        "content": content,
+    }
+    append_jsonl(path, payload)
+    append_loop_log(workspace, "trace", f"{role} {kind}", f"attempt: {attempt_id}\ntrace: {path.relative_to(workspace).as_posix()}")
+    typer.echo(f"trace: {path}")
+
+
+@loop_app.command("otel-event")
+def loop_otel_event(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Option(help="OpenTelemetry-style event name.")],
+    role: Annotated[str | None, typer.Option(help="Optional role associated with the event.")] = None,
+    decision: Annotated[str | None, typer.Option(help="Optional loop decision.")] = None,
+    cost: Annotated[float | None, typer.Option(help="Optional cost attribute.")] = None,
+    tokens: Annotated[int | None, typer.Option(help="Optional token count attribute.")] = None,
+) -> None:
+    """Append a local OpenTelemetry-style event for the active attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    if role is not None and role not in {"planner", "generator", "evaluator"}:
+        raise typer.BadParameter("role must be planner, generator, or evaluator")
+    state = read_loop_state(workspace)
+    attempt_id = active_loop_attempt(state)
+    path = loop_attempt_dir(workspace, attempt_id) / "otel" / "spans.jsonl"
+    attributes: dict[str, Any] = {"attempt": attempt_id}
+    if role:
+        attributes["role"] = role
+    if decision:
+        attributes["decision"] = decision
+    if cost is not None:
+        attributes["cost"] = cost
+    if tokens is not None:
+        attributes["tokens"] = tokens
+    payload = {
+        "timestamp": utc_now(),
+        "name": name,
+        "attributes": attributes,
+    }
+    append_jsonl(path, payload)
+    typer.echo(f"otel: {path}")
 
 
 @loop_app.command("restart-attempt")

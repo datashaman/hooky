@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -657,6 +658,60 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(state["status"], "restart-contract")
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["bottleneck"], "weak_contract")
+
+    def test_loop_trace_and_otel_events_append_supporting_artifacts(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        trace = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "trace-event",
+                "--role",
+                "generator",
+                "--kind",
+                "decision",
+                "--content",
+                "will implement from accepted contract",
+            ],
+        )
+        otel = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "otel-event",
+                "--name",
+                "attempt_started",
+                "--role",
+                "generator",
+                "--decision",
+                "continue",
+                "--cost",
+                "0.12",
+                "--tokens",
+                "1234",
+            ],
+        )
+
+        self.assertEqual(trace.exit_code, 0, trace.output)
+        self.assertEqual(otel.exit_code, 0, otel.output)
+        trace_line = (self.workspace / ".workflow/loop/attempts/001/traces/generator.jsonl").read_text(encoding="utf-8").strip()
+        trace_payload = json.loads(trace_line)
+        self.assertEqual(trace_payload["role"], "generator")
+        self.assertEqual(trace_payload["kind"], "decision")
+        self.assertIn("accepted contract", trace_payload["content"])
+        otel_line = (self.workspace / ".workflow/loop/attempts/001/otel/spans.jsonl").read_text(encoding="utf-8").strip()
+        otel_payload = json.loads(otel_line)
+        self.assertEqual(otel_payload["name"], "attempt_started")
+        self.assertEqual(otel_payload["attributes"]["tokens"], 1234)
+        self.assertEqual(otel_payload["attributes"]["decision"], "continue")
 
 
 if __name__ == "__main__":
