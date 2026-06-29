@@ -97,6 +97,65 @@ If subjective quality matters but `contract.md` does not include a rubric, the
 objective functionality or recommend `restart-contract` so the rubric can be
 written explicitly.
 
+## Trace Reading
+
+Raw transcripts are supporting evidence. They do not replace the four durable
+state files, but they must be available when the loop behaves badly.
+
+Each attempt should keep grep-friendly raw transcripts for each model role:
+
+```text
+.workflow/loop/attempts/001/traces/
+  planner.jsonl
+  generator.jsonl
+  evaluator.jsonl
+```
+
+Read traces before changing prompts, role instructions, or loop policy. A new
+experiment is not a substitute for understanding where the previous attempt's
+judgment diverged from the intended procedure.
+
+When a prompt or loop policy changes because of trace evidence, record the
+change in `log.md` with a reference to the attempt, role, and trace location.
+The `evaluator` may cite transcript moments when explaining a bad trajectory.
+
+## OpenTelemetry
+
+OpenTelemetry is useful as supporting observability, not as primary loop memory.
+The `loop-runner` may emit OpenTelemetry data for correlation, dashboards, and
+machine-readable trace inspection. The model roles should not need to understand
+OpenTelemetry.
+
+Local runs must not require an external collector. If OpenTelemetry is enabled,
+write a local artifact beside the raw transcripts:
+
+```text
+.workflow/loop/attempts/001/otel/
+  spans.jsonl
+```
+
+Recommended span shape:
+
+- one trace per loop run
+- one span per role invocation
+- child spans for tool calls
+- events for `contract_proposed`, `contract_rejected`, `attempt_started`,
+  `restart_attempt`, `restart_contract`, `evaluation_failed`, and
+  `evaluation_passed`
+
+Useful attributes include:
+
+- `attempt`
+- `role`
+- `model`
+- `cost`
+- `tokens`
+- `contract_version`
+- `decision`
+
+OpenTelemetry must not become the source of truth. The durable loop memory
+remains `feature_list.json`, `progress.md`, `contract.md`, and `log.md`.
+
 ## Resume And Restart
 
 - `resume` handles accidental interruption: process disconnect, context loss,
