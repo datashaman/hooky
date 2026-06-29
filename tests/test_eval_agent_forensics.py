@@ -130,6 +130,28 @@ class EvalAgentForensicsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "score below 6"):
             eval_agent.validate_contract(contract)
 
+    def test_eval_requires_role_boundary_findings_for_all_roles(self) -> None:
+        contract = minimal_eval_contract()
+        contract["role_boundary_findings"] = [
+            {"role": "spec", "status": "kept", "evidence": "Spec wrote only a contract."},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "missing roles"):
+            eval_agent.validate_contract(contract)
+
+    def test_eval_rejects_duplicate_role_boundary_findings(self) -> None:
+        contract = minimal_eval_contract()
+        contract["role_boundary_findings"] = [
+            {"role": "spec", "status": "kept", "evidence": "Spec wrote only a contract."},
+            {"role": "spec", "status": "kept", "evidence": "Duplicate entry."},
+            {"role": "builder", "status": "kept", "evidence": "Builder changed implementation."},
+            {"role": "verifier", "status": "not_run", "evidence": "Verifier did not run."},
+            {"role": "eval", "status": "kept", "evidence": "Eval edited nothing."},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "duplicate role"):
+            eval_agent.validate_contract(contract)
+
 
 def minimal_eval_contract(**overrides: object) -> dict[str, object]:
     contract: dict[str, object] = {
@@ -144,6 +166,12 @@ def minimal_eval_contract(**overrides: object) -> dict[str, object]:
         },
         "findings": ["Approved tests failed."],
         "root_cause_stage": "builder",
+        "role_boundary_findings": [
+            {"role": "spec", "status": "kept", "evidence": "Spec artifact exists and no code writes were reported."},
+            {"role": "builder", "status": "kept", "evidence": "Builder wrote implementation files and did not edit tests."},
+            {"role": "verifier", "status": "not_run", "evidence": "Verifier did not run before Builder failure."},
+            {"role": "eval", "status": "kept", "evidence": "Eval contract is read-only and reports findings only."},
+        ],
         "trajectory_findings": ["Builder failed."],
         "artifact_findings": ["Builder wrote implementation files."],
         "tooling_findings": ["Builder did not call final_report."],

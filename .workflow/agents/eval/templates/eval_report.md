@@ -16,6 +16,10 @@
 
 {{ root_cause_stage }}
 
+## Role Boundary Findings
+
+{{ role_boundary_findings }}
+
 ## Trajectory Findings
 
 {{ trajectory_findings }}

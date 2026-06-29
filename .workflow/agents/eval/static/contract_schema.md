@@ -14,6 +14,13 @@ Return a single JSON object with this structure:
     "pr_summary_quality": 0
   },
   "root_cause_stage": "spec|test|builder|verifier|eval|pipeline|unknown",
+  "role_boundary_findings": [
+    {
+      "role": "spec|builder|verifier|eval",
+      "status": "kept|violated|unknown|not_run",
+      "evidence": "string"
+    }
+  ],
   "findings": ["string"],
   "trajectory_findings": ["string"],
   "artifact_findings": ["string"],
@@ -36,6 +43,8 @@ Rules:
 
 - Eval must still run when prior stages failed or Verifier is missing.
 - If Verifier status is missing or not `pass`, `status` must be `fail` and `safe_to_merge` must be false.
+- `role_boundary_findings` must include exactly one entry for each role: `spec`, `builder`, `verifier`, and `eval`.
+- Use `role_boundary_findings` to state whether each role stayed in bounds, crossed responsibilities, did not run, or cannot be determined from evidence.
 - Do not contradict `deterministic_facts`; they are system-generated evidence.
 - Distinguish "stage failed before final report" from "stage produced no files".
 - `needs_human_review` is appropriate when deterministic checks pass but qualitative risk remains.

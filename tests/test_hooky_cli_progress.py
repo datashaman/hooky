@@ -12,6 +12,15 @@ from typer.testing import CliRunner
 from scripts import hooky_cli
 
 
+def eval_role_boundary_findings() -> list[dict[str, str]]:
+    return [
+        {"role": "spec", "status": "kept", "evidence": "Spec stayed in planning artifacts."},
+        {"role": "builder", "status": "kept", "evidence": "Builder changed implementation artifacts only."},
+        {"role": "verifier", "status": "kept", "evidence": "Verifier inspected artifacts without edits."},
+        {"role": "eval", "status": "kept", "evidence": "Eval reported findings only."},
+    ]
+
+
 class HookyProgressTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -254,6 +263,7 @@ class HookyProgressTests(unittest.TestCase):
                 "root_cause_stage": "test",
                 "safe_to_merge": False,
                 "findings": ["Generated tests are invalid."],
+                "role_boundary_findings": eval_role_boundary_findings(),
                 "trajectory_findings": ["Builder spent time diagnosing generated tests."],
                 "artifact_findings": [],
                 "tooling_findings": [],
@@ -389,7 +399,13 @@ class HookyProgressTests(unittest.TestCase):
             hooky_cli.create_remediation_plan(
                 self.workspace,
                 state,
-                {"status": "fail", "safe_to_merge": False, "root_cause_stage": "builder", "findings": ["retry builder"]},
+                {
+                    "status": "fail",
+                    "safe_to_merge": False,
+                    "root_cause_stage": "builder",
+                    "findings": ["retry builder"],
+                    "role_boundary_findings": eval_role_boundary_findings(),
+                },
                 eval_contract_path,
             )
             return []
@@ -427,7 +443,13 @@ class HookyProgressTests(unittest.TestCase):
             hooky_cli.create_remediation_plan(
                 self.workspace,
                 state,
-                {"status": "fail", "safe_to_merge": False, "root_cause_stage": "builder", "findings": ["retry builder"]},
+                {
+                    "status": "fail",
+                    "safe_to_merge": False,
+                    "root_cause_stage": "builder",
+                    "findings": ["retry builder"],
+                    "role_boundary_findings": eval_role_boundary_findings(),
+                },
                 eval_contract_path,
             )
             return []

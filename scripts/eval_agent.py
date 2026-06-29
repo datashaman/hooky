@@ -205,6 +205,7 @@ def eval_agent_contract_schema() -> dict[str, Any]:
             "scores",
             "findings",
             "root_cause_stage",
+            "role_boundary_findings",
             "trajectory_findings",
             "artifact_findings",
             "tooling_findings",
@@ -237,6 +238,20 @@ def eval_agent_contract_schema() -> dict[str, Any]:
             "findings": spec_agent.string_array_schema(),
             "human_review_focus": spec_agent.string_array_schema(),
             "root_cause_stage": {"type": "string"},
+            "role_boundary_findings": {
+                "type": "array",
+                "minItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "required": ["role", "status", "evidence"],
+                    "properties": {
+                        "role": {"type": "string", "enum": ["spec", "builder", "verifier", "eval"]},
+                        "status": {"type": "string", "enum": ["kept", "violated", "unknown", "not_run"]},
+                        "evidence": {"type": "string"},
+                    },
+                },
+            },
             "trajectory_findings": spec_agent.string_array_schema(),
             "artifact_findings": spec_agent.string_array_schema(),
             "tooling_findings": spec_agent.string_array_schema(),
@@ -332,6 +347,7 @@ Evaluate the full pipeline trajectory even when an earlier stage failed or Verif
 If Verifier status is missing or not pass, return fail and safe_to_merge false.
 If Dynamic Context includes visual_evidence, those images are attached to this conversation as model image inputs. Inspect the pixels directly; do not evaluate visual quality from file paths or numeric metrics alone.
 Perform forensic analysis of the agent pathway: tool sequence, failed calls, skipped stages, handoff quality, runtime/cost behavior, and artifact quality.
+Include role_boundary_findings for spec, builder, verifier, and eval. For each role, state whether it stayed in bounds, violated its role, did not run, or could not be determined, with concrete evidence from artifacts or deterministic_facts.
 Finish only by calling final_report with the Eval Agent contract.
 """
 
@@ -342,6 +358,7 @@ def validate_contract(contract: dict[str, Any]) -> None:
         "scores",
         "findings",
         "root_cause_stage",
+        "role_boundary_findings",
         "trajectory_findings",
         "artifact_findings",
         "tooling_findings",
@@ -363,6 +380,7 @@ def validate_contract(contract: dict[str, Any]) -> None:
     for field in ("trajectory_findings", "artifact_findings", "tooling_findings", "cost_findings", "human_review_focus", "findings"):
         if not isinstance(contract.get(field), list):
             raise ValueError(f"{field} must be a list")
+    validate_role_boundary_findings(contract["role_boundary_findings"])
     required_scores = [
         "spec_alignment",
         "maintainability",
@@ -387,6 +405,32 @@ def validate_contract(contract: dict[str, Any]) -> None:
             raise ValueError(f"eval cannot pass with average score below 8: {average:.2f}")
         if minimum < 6:
             raise ValueError(f"eval cannot pass with score below 6: {minimum:.2f}")
+
+
+def validate_role_boundary_findings(findings: Any) -> None:
+    if not isinstance(findings, list):
+        raise ValueError("role_boundary_findings must be a list")
+    seen: set[str] = set()
+    valid_roles = {"spec", "builder", "verifier", "eval"}
+    valid_statuses = {"kept", "violated", "unknown", "not_run"}
+    for index, item in enumerate(findings):
+        if not isinstance(item, dict):
+            raise ValueError(f"role_boundary_findings[{index}] must be an object")
+        role = item.get("role")
+        status = item.get("status")
+        evidence = item.get("evidence")
+        if role not in valid_roles:
+            raise ValueError(f"role_boundary_findings[{index}].role must be one of: {', '.join(sorted(valid_roles))}")
+        if role in seen:
+            raise ValueError(f"role_boundary_findings contains duplicate role: {role}")
+        seen.add(str(role))
+        if status not in valid_statuses:
+            raise ValueError(f"role_boundary_findings[{index}].status must be one of: {', '.join(sorted(valid_statuses))}")
+        if not isinstance(evidence, str) or not evidence.strip():
+            raise ValueError(f"role_boundary_findings[{index}].evidence must be non-empty")
+    missing = valid_roles - seen
+    if missing:
+        raise ValueError(f"role_boundary_findings missing roles: {', '.join(sorted(missing))}")
 
 
 def validate_contract_for_context(contract: dict[str, Any], dynamic_context: dict[str, Any]) -> None:
@@ -544,6 +588,7 @@ def write_artifacts(
         "findings": spec_agent.md_list(contract.get("findings", [])),
         "human_review_focus": spec_agent.md_list(contract.get("human_review_focus", [])),
         "root_cause_stage": str(contract.get("root_cause_stage") or ""),
+        "role_boundary_findings": spec_agent.md_list(format_role_boundary_findings(contract.get("role_boundary_findings", []))),
         "trajectory_findings": spec_agent.md_list(contract.get("trajectory_findings", [])),
         "artifact_findings": spec_agent.md_list(contract.get("artifact_findings", [])),
         "tooling_findings": spec_agent.md_list(contract.get("tooling_findings", [])),
@@ -554,6 +599,17 @@ def write_artifacts(
     template = (TEMPLATE_ROOT / "eval_report.md").read_text(encoding="utf-8")
     rendered = Template(template.replace("{{ ", "${").replace(" }}", "}")).safe_substitute(report_context)
     (report_dir / "eval_report.md").write_text(rendered, encoding="utf-8")
+
+
+def format_role_boundary_findings(findings: Any) -> list[str]:
+    if not isinstance(findings, list):
+        return []
+    formatted: list[str] = []
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        formatted.append(f"{item.get('role')}: {item.get('status')} - {item.get('evidence')}")
+    return formatted
 
 
 def render_context_snapshot(dynamic_context: dict[str, Any]) -> str:
