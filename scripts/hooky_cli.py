@@ -40,10 +40,12 @@ task_app = typer.Typer(help="Create, inspect, and switch tasks.", no_args_is_hel
 run_app = typer.Typer(help="Run pipeline stages for the current task.", no_args_is_help=True)
 approve_app = typer.Typer(help="Record human approval gates.", no_args_is_help=True)
 skills_app = typer.Typer(help="Inspect available agent skills.", no_args_is_help=True)
+loop_app = typer.Typer(help="Run the Karpathy-style loop.", no_args_is_help=True)
 app.add_typer(task_app, name="task")
 app.add_typer(run_app, name="run")
 app.add_typer(approve_app, name="approve")
 app.add_typer(skills_app, name="skills")
+app.add_typer(loop_app, name="loop")
 
 PIPELINE_STAGES = ["spec", "builder", "verifier", "eval"]
 REMEDIABLE_STAGES = {"spec", "builder", "verifier", "eval"}
@@ -92,6 +94,34 @@ def workflow_dir(workspace: Path) -> Path:
     return workspace / ".workflow"
 
 
+def loop_dir(workspace: Path) -> Path:
+    return workflow_dir(workspace) / "loop"
+
+
+def loop_attempts_dir(workspace: Path) -> Path:
+    return loop_dir(workspace) / "attempts"
+
+
+def loop_feature_list_path(workspace: Path) -> Path:
+    return loop_dir(workspace) / "feature_list.json"
+
+
+def loop_progress_path(workspace: Path) -> Path:
+    return loop_dir(workspace) / "progress.md"
+
+
+def loop_contract_path(workspace: Path) -> Path:
+    return loop_dir(workspace) / "contract.md"
+
+
+def loop_log_path(workspace: Path) -> Path:
+    return loop_dir(workspace) / "log.md"
+
+
+def loop_state_path(workspace: Path) -> Path:
+    return loop_dir(workspace) / "state.json"
+
+
 def tasks_dir(workspace: Path) -> Path:
     return workflow_dir(workspace) / "tasks"
 
@@ -115,6 +145,87 @@ def read_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def default_loop_feature_list() -> dict[str, Any]:
+    return {"schema_version": 1, "features": []}
+
+
+def default_loop_state() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "initialized",
+        "current_attempt": None,
+        "attempts": [],
+        "contract_accepted": False,
+        "last_action": None,
+    }
+
+
+def read_loop_state(workspace: Path) -> dict[str, Any]:
+    path = loop_state_path(workspace)
+    if not path.exists():
+        raise typer.BadParameter("loop is not initialized. Run `hooky loop init` first.")
+    return read_json(path)
+
+
+def write_loop_state(workspace: Path, state: dict[str, Any]) -> None:
+    state["updated_at"] = utc_now()
+    write_json(loop_state_path(workspace), state)
+
+
+def ensure_loop_initialized(workspace: Path) -> None:
+    if not loop_state_path(workspace).exists():
+        raise typer.BadParameter("loop is not initialized. Run `hooky loop init` first.")
+
+
+def append_loop_log(workspace: Path, op: str, title: str, body: str = "") -> None:
+    path = loop_log_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    date = datetime.now(timezone.utc).date().isoformat()
+    entry = f"## [{date}] {op} | {title}\n\n"
+    if body.strip():
+        entry += body.strip() + "\n\n"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+
+
+def write_loop_progress(workspace: Path, state: dict[str, Any], *, note: str | None = None) -> None:
+    current_attempt = state.get("current_attempt")
+    lines = [
+        "# Loop Progress",
+        "",
+        f"- status: {state.get('status', 'unknown')}",
+        f"- current_attempt: {current_attempt if current_attempt is not None else 'none'}",
+        f"- contract_accepted: {str(bool(state.get('contract_accepted'))).lower()}",
+        f"- last_action: {state.get('last_action') or 'none'}",
+    ]
+    if note:
+        lines.extend(["", "## Note", "", note.strip()])
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    if attempts:
+        lines.extend(["", "## Attempts", ""])
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            lines.append(f"- {attempt.get('id')}: {attempt.get('status')} ({attempt.get('started_at')})")
+    loop_progress_path(workspace).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def next_loop_attempt_id(state: dict[str, Any]) -> str:
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    numbers: list[int] = []
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        raw = str(attempt.get("id") or "")
+        if raw.isdigit():
+            numbers.append(int(raw))
+    return f"{(max(numbers) if numbers else 0) + 1:03d}"
+
+
+def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:
+    return loop_attempts_dir(workspace) / attempt_id
 
 
 def read_global_state(workspace: Path) -> dict[str, Any]:
@@ -1063,6 +1174,227 @@ def skills_show(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Sk
         typer.echo(skill.body)
         return
     raise typer.BadParameter(f"unknown skill: {name}")
+
+
+@loop_app.command("init")
+def loop_init(
+    ctx: typer.Context,
+    title: Annotated[str | None, typer.Option(help="Problem title for contract.md.")] = None,
+    body_file: Annotated[Path | None, typer.Option(help="Optional problem boundary Markdown file.")] = None,
+    force: Annotated[bool, typer.Option(help="Overwrite existing loop files.")] = False,
+) -> None:
+    """Initialize the Karpathy-style loop durable state files."""
+    workspace = workspace_from_ctx(ctx)
+    loop_root = loop_dir(workspace)
+    if loop_state_path(workspace).exists() and not force:
+        raise typer.BadParameter("loop already initialized. Use --force to overwrite.")
+    boundary = body_file.read_text(encoding="utf-8").strip() if body_file else ""
+    loop_root.mkdir(parents=True, exist_ok=True)
+    write_json(loop_feature_list_path(workspace), default_loop_feature_list())
+    state = default_loop_state()
+    state["created_at"] = utc_now()
+    write_loop_state(workspace, state)
+    contract_lines = ["# Loop Contract", ""]
+    if title:
+        contract_lines.extend(["## Problem", "", f"# {title}", ""])
+    if boundary:
+        contract_lines.extend(["## Boundary", "", boundary, ""])
+    contract_lines.extend(
+        [
+            "## Done Criteria",
+            "",
+            "_The generator proposes criteria here; the evaluator accepts or rejects them before implementation._",
+            "",
+            "## Taste Rubric",
+            "",
+            "_Optional. Required only when subjective quality matters._",
+            "",
+        ]
+    )
+    loop_contract_path(workspace).write_text("\n".join(contract_lines), encoding="utf-8")
+    write_loop_progress(workspace, state, note="Loop initialized.")
+    loop_log_path(workspace).write_text("", encoding="utf-8")
+    append_loop_log(workspace, "init", "loop initialized", f"workspace: {workspace}")
+    typer.echo(f"loop: {loop_root}")
+    typer.echo("next: hooky loop status")
+
+
+@loop_app.command("status")
+def loop_status(ctx: typer.Context) -> None:
+    """Show Karpathy-style loop state and durable file locations."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    typer.echo(f"loop: {loop_dir(workspace)}")
+    typer.echo(f"status: {state.get('status')}")
+    typer.echo(f"current_attempt: {state.get('current_attempt') or 'none'}")
+    typer.echo(f"contract_accepted: {str(bool(state.get('contract_accepted'))).lower()}")
+    typer.echo("files:")
+    typer.echo(f"  feature_list: {loop_feature_list_path(workspace)}")
+    typer.echo(f"  progress: {loop_progress_path(workspace)}")
+    typer.echo(f"  contract: {loop_contract_path(workspace)}")
+    typer.echo(f"  log: {loop_log_path(workspace)}")
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    if attempts:
+        typer.echo("attempts:")
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                typer.echo(f"  {attempt.get('id')}: {attempt.get('status')}")
+
+
+@loop_app.command("log")
+def loop_log(
+    ctx: typer.Context,
+    op: Annotated[str, typer.Option(help="Operation label for the log heading.")] = "note",
+    title: Annotated[str, typer.Option(help="Short log title.")] = "manual note",
+    body: Annotated[str, typer.Option(help="Optional log body.")] = "",
+) -> None:
+    """Append an entry to .workflow/loop/log.md."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    append_loop_log(workspace, op, title, body)
+    state = read_loop_state(workspace)
+    state["last_action"] = op
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=title)
+    typer.echo(f"log: {loop_log_path(workspace)}")
+
+
+@loop_app.command("accept-contract")
+def loop_accept_contract(ctx: typer.Context) -> None:
+    """Mark contract.md as accepted for implementation."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    state["status"] = "contract-accepted"
+    state["contract_accepted"] = True
+    state["last_action"] = "accept-contract"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note="Contract accepted.")
+    append_loop_log(workspace, "contract", "contract accepted")
+    typer.echo("contract_accepted: true")
+
+
+@loop_app.command("start-attempt")
+def loop_start_attempt(ctx: typer.Context) -> None:
+    """Start a new implementation attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    if not state.get("contract_accepted"):
+        raise typer.BadParameter("contract is not accepted. Run `hooky loop accept-contract` first.")
+    active = state.get("current_attempt")
+    if active:
+        raise typer.BadParameter(f"attempt already active: {active}")
+    attempt_id = next_loop_attempt_id(state)
+    attempt_dir = loop_attempt_dir(workspace, attempt_id)
+    (attempt_dir / "traces").mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "otel").mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "traces/planner.jsonl").touch()
+    (attempt_dir / "traces/generator.jsonl").touch()
+    (attempt_dir / "traces/evaluator.jsonl").touch()
+    (attempt_dir / "otel/spans.jsonl").touch()
+    attempt = {
+        "id": attempt_id,
+        "status": "running",
+        "started_at": utc_now(),
+        "path": attempt_dir.relative_to(workspace).as_posix(),
+    }
+    state.setdefault("attempts", []).append(attempt)
+    state["current_attempt"] = attempt_id
+    state["status"] = "attempt-running"
+    state["last_action"] = "start-attempt"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
+    append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
+    typer.echo(f"attempt: {attempt_id}")
+    typer.echo(f"path: {attempt_dir}")
+
+
+@loop_app.command("complete-attempt")
+def loop_complete_attempt(
+    ctx: typer.Context,
+    result: Annotated[str, typer.Option(help="Evaluator result: pass or fail.")] = "fail",
+    bottleneck: Annotated[str | None, typer.Option(help="Current bottleneck identified by evaluator.")] = None,
+) -> None:
+    """Complete the active attempt from evaluator evidence."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    if result not in {"pass", "fail"}:
+        raise typer.BadParameter("result must be pass or fail")
+    state = read_loop_state(workspace)
+    attempt_id = state.get("current_attempt")
+    if not attempt_id:
+        raise typer.BadParameter("no active attempt")
+    for attempt in state.get("attempts", []):
+        if isinstance(attempt, dict) and attempt.get("id") == attempt_id:
+            attempt["status"] = "passed" if result == "pass" else "failed"
+            attempt["completed_at"] = utc_now()
+            if bottleneck:
+                attempt["bottleneck"] = bottleneck
+            break
+    state["current_attempt"] = None
+    state["status"] = "passed" if result == "pass" else "attempt-failed"
+    state["last_action"] = f"complete-attempt:{result}"
+    if bottleneck:
+        state["bottleneck"] = bottleneck
+    write_loop_state(workspace, state)
+    note = f"Attempt {attempt_id} completed with result={result}."
+    if bottleneck:
+        note += f" Bottleneck: {bottleneck}."
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, "evaluation", f"attempt {attempt_id} {result}", note)
+    typer.echo(f"attempt: {attempt_id}")
+    typer.echo(f"result: {result}")
+
+
+@loop_app.command("restart-attempt")
+def loop_restart_attempt(
+    ctx: typer.Context,
+    reason: Annotated[str, typer.Option(help="Evaluator evidence for restart.")] = "bad trajectory",
+) -> None:
+    """Record a restart-attempt decision and clear the active attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    attempt_id = state.get("current_attempt")
+    if attempt_id:
+        for attempt in state.get("attempts", []):
+            if isinstance(attempt, dict) and attempt.get("id") == attempt_id:
+                attempt["status"] = "restarted"
+                attempt["completed_at"] = utc_now()
+                attempt["restart_reason"] = reason
+                break
+    state["current_attempt"] = None
+    state["status"] = "restart-attempt"
+    state["last_action"] = "restart-attempt"
+    state["bottleneck"] = "bad_attempt"
+    write_loop_state(workspace, state)
+    note = f"Restart attempt requested. Reason: {reason}"
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, "restart-attempt", "attempt restart", note)
+    typer.echo("restart-attempt: recorded")
+
+
+@loop_app.command("restart-contract")
+def loop_restart_contract(
+    ctx: typer.Context,
+    reason: Annotated[str, typer.Option(help="Reason the contract must be revised.")] = "contract is wrong",
+) -> None:
+    """Record a restart-contract decision."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    state["current_attempt"] = None
+    state["status"] = "restart-contract"
+    state["contract_accepted"] = False
+    state["last_action"] = "restart-contract"
+    state["bottleneck"] = "contract"
+    write_loop_state(workspace, state)
+    note = f"Restart contract requested. Reason: {reason}"
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, "restart-contract", "contract restart", note)
+    typer.echo("restart-contract: recorded")
 
 
 @run_app.command("spec")

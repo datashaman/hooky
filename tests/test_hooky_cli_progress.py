@@ -475,6 +475,81 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("pipeline remediation limit reached (1)", saved["pipeline_status"]["error"])
         self.assertEqual(saved["pipeline_status"]["remediation_attempts"], 1)
 
+    def test_loop_init_creates_four_durable_state_files(self) -> None:
+        result = CliRunner().invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "init", "--title", "Build a todo app"],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue((self.workspace / ".workflow/loop/feature_list.json").exists())
+        self.assertTrue((self.workspace / ".workflow/loop/progress.md").exists())
+        self.assertTrue((self.workspace / ".workflow/loop/contract.md").exists())
+        self.assertTrue((self.workspace / ".workflow/loop/log.md").exists())
+        contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
+        self.assertIn("Build a todo app", contract)
+        feature_list = hooky_cli.read_json(self.workspace / ".workflow/loop/feature_list.json")
+        self.assertEqual(feature_list["features"], [])
+
+    def test_loop_start_attempt_requires_accepted_contract(self) -> None:
+        CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+
+        result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("contract is not accepted", result.output)
+
+    def test_loop_attempt_lifecycle_creates_trace_and_otel_artifacts(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+
+        result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        attempt_dir = self.workspace / ".workflow/loop/attempts/001"
+        self.assertTrue((attempt_dir / "traces/planner.jsonl").exists())
+        self.assertTrue((attempt_dir / "traces/generator.jsonl").exists())
+        self.assertTrue((attempt_dir / "traces/evaluator.jsonl").exists())
+        self.assertTrue((attempt_dir / "otel/spans.jsonl").exists())
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["current_attempt"], "001")
+        self.assertEqual(state["status"], "attempt-running")
+
+        complete = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "complete-attempt", "--result", "fail", "--bottleneck", "generator_trajectory"],
+        )
+
+        self.assertEqual(complete.exit_code, 0, complete.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertIsNone(state["current_attempt"])
+        self.assertEqual(state["status"], "attempt-failed")
+        self.assertEqual(state["bottleneck"], "generator_trajectory")
+        progress = (self.workspace / ".workflow/loop/progress.md").read_text(encoding="utf-8")
+        self.assertIn("generator_trajectory", progress)
+
+    def test_loop_restart_attempt_preserves_durable_files(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        result = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "restart-attempt", "--reason", "patching without convergence"],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        for relative in ["feature_list.json", "progress.md", "contract.md", "log.md"]:
+            self.assertTrue((self.workspace / ".workflow/loop" / relative).exists())
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-attempt")
+        self.assertIsNone(state["current_attempt"])
+        self.assertEqual(state["attempts"][0]["status"], "restarted")
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertIn("patching without convergence", log)
+
 
 if __name__ == "__main__":
     unittest.main()
