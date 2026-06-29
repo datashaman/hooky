@@ -201,6 +201,34 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(excerpt["start_line"], 2)
             self.assertEqual(len(many["files"]), 2)
 
+    def test_tool_result_artifacts_are_readable_without_exposing_workflow_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result_path = root / ".workflow/tool-results/test-runs/result.log"
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text("line one\nline two\n", encoding="utf-8")
+            (root / ".workflow/artifacts/state.json").parent.mkdir(parents=True)
+            (root / ".workflow/artifacts/state.json").write_text("{}", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            excerpt = runtime.read_file_excerpt(
+                {"path": ".workflow/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
+            )
+            root_listing = runtime.list_files({"path": "."})
+
+            self.assertEqual(excerpt["content"], "line two")
+            self.assertNotIn(".workflow", [item["path"] for item in root_listing["entries"]])
+            with self.assertRaises(FileNotFoundError):
+                runtime.read_file({"path": ".workflow/artifacts/state.json"})
+            with self.assertRaises(FileNotFoundError):
+                runtime.write_file({"path": ".workflow/tool-results/test-runs/new.log", "content": "nope"})
+
+    def test_todo_text_is_used_for_active_log_label(self) -> None:
+        self.assertEqual(
+            agent_runtime.active_todo_label([{"id": 1, "status": "in_progress", "text": "Analyze existing implementation"}]),
+            "Analyze existing implementation",
+        )
+
     def test_detect_project_environment_finds_package_manager_and_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

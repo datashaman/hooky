@@ -76,6 +76,7 @@ class ToolRuntime:
     heartbeat_seconds: int = 20
     write_enabled: bool = True
     read_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
+    read_allowed_prefixes: list[str] = field(default_factory=lambda: [".workflow/tool-results"])
     write_allowed_prefixes: list[str] = field(default_factory=list)
     write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
     write_blocked_names: list[str] = field(default_factory=list)
@@ -305,6 +306,10 @@ class ToolRuntime:
     def is_read_blocked(self, path: Path) -> bool:
         relative = relative_to(path.resolve(), self.working_folder)
         parts = Path(relative).parts
+        for prefix in self.read_allowed_prefixes:
+            prefix_parts = Path(prefix).parts
+            if parts[: len(prefix_parts)] == prefix_parts:
+                return False
         for prefix in self.read_blocked_prefixes:
             prefix_parts = Path(prefix).parts
             if parts[: len(prefix_parts)] == prefix_parts:
@@ -1521,7 +1526,7 @@ def active_todo_label(items: list[Any]) -> str | None:
 
 
 def todo_label(item: dict[str, Any]) -> str:
-    value = item.get("description") or item.get("content") or item.get("task") or item.get("title")
+    value = item.get("text") or item.get("description") or item.get("content") or item.get("task") or item.get("title")
     if value:
         return str(value)
     return compact_json(item, 180)
