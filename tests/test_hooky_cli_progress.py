@@ -44,9 +44,12 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(stage["status"], "running")
         self.assertEqual(stage["owner_pid"], os.getpid())
         self.assertTrue(stage["trace"].endswith(".workflow/artifacts/test-agent/runtime_events.log"))
+        self.assertEqual(saved["phase_status"]["act"]["status"], "running")
+        self.assertEqual(saved["phase_status"]["act"]["stage"], "test")
 
         pipeline_log = hooky_cli.pipeline_log_path(self.workspace).read_text(encoding="utf-8")
         self.assertIn("stage=test", pipeline_log)
+        self.assertIn("phase=act", pipeline_log)
         self.assertIn(f"owner_pid={os.getpid()}", pipeline_log)
         self.assertIn("trace=.workflow/artifacts/test-agent/runtime_events.log", pipeline_log)
 
@@ -147,6 +150,10 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_status_shows_workspace_last_event_and_next_action(self) -> None:
         hooky_cli.append_pipeline_event(self.workspace, "pipeline", status="running", task=self.state["task_id"])
+        state = hooky_cli.load_task_state(self.workspace)
+        state["stage_status"] = {"builder": {"status": "running", "phase": "act"}}
+        state["phase_status"] = {"act": {"status": "running", "stage": "builder", "agent": "builder"}}
+        hooky_cli.save_task_state(self.workspace, state)
 
         result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "status"])
 
@@ -154,6 +161,8 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn(f"workspace: {self.workspace.resolve()}", result.output)
         self.assertIn("last_event:", result.output)
         self.assertIn("next:", result.output)
+        self.assertIn("phases:", result.output)
+        self.assertIn("  act: running stage=builder", result.output)
 
     def test_start_records_last_run_path_before_running_pipeline(self) -> None:
         last_run_path = self.workspace / "last-run-path"
@@ -239,7 +248,9 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIsNotNone(plan_path)
         current = hooky_cli.read_json(hooky_cli.current_remediation_path(self.workspace))
         self.assertEqual(current["root_cause_stage"], "builder")
+        self.assertEqual(current["root_cause_phase"], "act")
         self.assertEqual(current["resume_from_stage"], "builder")
+        self.assertEqual(current["resume_from_phase"], "act")
         self.assertIn("run remediation --auto-approve", current["rerun_command"])
 
         saved = hooky_cli.load_task_state(self.workspace)

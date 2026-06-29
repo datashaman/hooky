@@ -1,6 +1,14 @@
 # Hooky Agent Context
 
-Hooky is an agentic SDLC pipeline. Work flows through explicit stages:
+Hooky is an agentic SDLC loop. Work flows through explicit phases:
+
+1. Gather
+2. Reason
+3. Act
+4. Verify
+5. Repeat
+
+Agents are implementations of phases, not the top-level architecture. The current default agent mapping is:
 
 1. Spec Agent
 2. Human approval
@@ -10,6 +18,8 @@ Hooky is an agentic SDLC pipeline. Work flows through explicit stages:
 6. System-owned change proposal, then optional hosted pull request or merge
 
 The legacy Test Agent still exists for compatibility and eval work, but it is not part of the default pipeline. Builder owns the task-local TDD loop: it creates or updates executable tests from the approved spec, then implements production code until the suite passes.
+
+See `docs/loop-model.md` for the phase model and stage compatibility mapping.
 
 ## Architecture Rules
 

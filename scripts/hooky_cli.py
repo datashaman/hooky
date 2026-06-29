@@ -47,6 +47,14 @@ app.add_typer(skills_app, name="skills")
 
 PIPELINE_STAGES = ["spec", "builder", "verifier", "eval"]
 REMEDIABLE_STAGES = {"spec", "builder", "verifier", "eval"}
+PIPELINE_PHASES = ["gather", "reason", "act", "verify", "repeat"]
+STAGE_PHASES = {
+    "spec": "reason",
+    "test": "act",
+    "builder": "act",
+    "verifier": "verify",
+    "eval": "repeat",
+}
 DEFAULT_LAST_RUN_PATH = Path("/tmp/hooky-last-run-path")
 
 
@@ -151,19 +159,24 @@ def save_task_state(workspace: Path, state: dict[str, Any]) -> None:
 
 
 def set_stage_status(workspace: Path, state: dict[str, Any], stage: str, status: str, **extra: Any) -> None:
+    phase = phase_for_stage(stage)
     if status == "running":
         extra = {
             "owner_pid": os.getpid(),
             "owner_host": socket.gethostname(),
             "started_at": utc_now(),
             "trace": stage_runtime_events_path(workspace, stage, state),
+            "phase": phase,
             **extra,
         }
+    else:
+        extra.setdefault("phase", phase)
     state.setdefault("stage_status", {})[stage] = {
         "status": status,
         "updated_at": utc_now(),
         **extra,
     }
+    update_phase_status_from_stage(state, stage, status, extra)
     save_task_state(workspace, state)
     event_fields = dict(extra)
     if status == "running":
@@ -180,6 +193,7 @@ def set_stage_status(workspace: Path, state: dict[str, Any], stage: str, status:
 
 def set_pipeline_status(workspace: Path, state: dict[str, Any], status: str, **extra: Any) -> None:
     if status == "running":
+        ensure_gather_phase(state)
         extra = {
             "owner_pid": os.getpid(),
             "owner_host": socket.gethostname(),
@@ -203,6 +217,69 @@ def set_pipeline_status(workspace: Path, state: dict[str, Any], status: str, **e
         status=status,
         **event_fields,
     )
+
+
+def phase_for_stage(stage: str) -> str:
+    return STAGE_PHASES.get(stage, stage)
+
+
+def ensure_gather_phase(state: dict[str, Any]) -> None:
+    phases = state.setdefault("phase_status", {})
+    phases.setdefault(
+        "gather",
+        {
+            "status": "passed",
+            "updated_at": utc_now(),
+            "source": "workspace_task_context",
+        },
+    )
+
+
+def update_phase_status_from_stage(state: dict[str, Any], stage: str, status: str, extra: dict[str, Any]) -> None:
+    phase = phase_for_stage(stage)
+    if phase not in PIPELINE_PHASES:
+        return
+    phase_payload = {
+        "status": status,
+        "updated_at": utc_now(),
+        "stage": stage,
+        "agent": stage,
+    }
+    for key in ("error", "trace", "contract", "report_dir", "cost", "safe_to_merge", "owner_pid", "owner_host", "started_at"):
+        if key in extra and extra[key] is not None:
+            phase_payload[key] = extra[key]
+    state.setdefault("phase_status", {})[phase] = phase_payload
+
+
+def phase_statuses_from_state(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    phases = state.get("phase_status") if isinstance(state.get("phase_status"), dict) else {}
+    merged: dict[str, dict[str, Any]] = {
+        phase: dict(payload)
+        for phase, payload in phases.items()
+        if isinstance(payload, dict)
+    }
+    if "gather" not in merged:
+        merged["gather"] = {
+            "status": "passed" if state.get("issue") else "not-run",
+            "source": "workspace_task_context",
+        }
+    for stage in PIPELINE_STAGES:
+        stage_payload = state.get("stage_status", {}).get(stage, {})
+        if not isinstance(stage_payload, dict):
+            continue
+        phase = phase_for_stage(stage)
+        merged.setdefault(
+            phase,
+            {
+                "status": stage_payload.get("status", "not-run"),
+                "stage": stage,
+                "agent": stage,
+                **({"error": stage_payload["error"]} if stage_payload.get("error") else {}),
+            },
+        )
+    for phase in PIPELINE_PHASES:
+        merged.setdefault(phase, {"status": "not-run"})
+    return merged
 
 
 def pipeline_log_path(workspace: Path) -> Path:
@@ -269,6 +346,7 @@ def create_remediation_plan(
         root_cause_stage = "builder"
     if root_cause_stage not in REMEDIABLE_STAGES or root_cause_stage == "eval":
         return None
+    root_cause_phase = phase_for_stage(root_cause_stage)
     generated_at = utc_now()
     rerun_command = f"uv run hooky -C {workspace.as_posix()} run remediation --auto-approve"
     payload = {
@@ -276,7 +354,9 @@ def create_remediation_plan(
         "task_id": state.get("task_id"),
         "generated_at": generated_at,
         "root_cause_stage": root_cause_stage,
+        "root_cause_phase": root_cause_phase,
         "resume_from_stage": root_cause_stage,
+        "resume_from_phase": root_cause_phase,
         "source": source,
         "eval_contract": display_workspace_path(eval_contract_path, workspace),
         "status": eval_contract.get("status"),
@@ -305,6 +385,7 @@ def create_remediation_plan(
         task=state.get("task_id"),
         status="created",
         root_cause_stage=root_cause_stage,
+        root_cause_phase=root_cause_phase,
         source=source,
         plan=plan_path.relative_to(workspace).as_posix(),
     )
@@ -1234,7 +1315,14 @@ def run_remediation(
         raise typer.BadParameter(f"remediation plan has invalid resume stage: {start_stage or 'missing'}")
     recover_artifacts_for_resume(workspace, state, start_stage, auto_approve=auto_approve)
     state = load_task_state(workspace, task)
-    set_pipeline_status(workspace, state, "running", remediation_plan=plan_path.relative_to(workspace).as_posix(), resume_from=start_stage)
+    set_pipeline_status(
+        workspace,
+        state,
+        "running",
+        remediation_plan=plan_path.relative_to(workspace).as_posix(),
+        resume_from=start_stage,
+        resume_from_phase=phase_for_stage(start_stage),
+    )
     failures = run_stage_sequence(ctx, start_stage=start_stage, auto_approve=auto_approve, task=task)
     if failures:
         message = "; ".join(failures)
@@ -1358,6 +1446,7 @@ def run_pipeline_with_remediation_loop(
             remediation_attempts=attempts,
             remediation_plan=plan_path.relative_to(workspace).as_posix(),
             resume_from=start_stage,
+            resume_from_phase=phase_for_stage(start_stage),
         )
         result = run_remediation_subprocess(workspace=workspace, task=task, auto_approve=auto_approve)
         state = load_task_state(workspace, task)
@@ -1517,6 +1606,20 @@ def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Ta
     if last_event:
         typer.echo(f"last_event: {last_event}")
     typer.echo(f"next: {next_action_for_state(state)}")
+    typer.echo("phases:")
+    phase_statuses = phase_statuses_from_state(state)
+    for phase in PIPELINE_PHASES:
+        phase_state = phase_statuses.get(phase, {})
+        status_text = phase_state.get("status", "not-run")
+        suffix_parts = []
+        if phase_state.get("stage"):
+            suffix_parts.append(f"stage={phase_state['stage']}")
+        if phase_state.get("agent") and phase_state.get("agent") != phase_state.get("stage"):
+            suffix_parts.append(f"agent={phase_state['agent']}")
+        suffix = " " + " ".join(suffix_parts) if suffix_parts else ""
+        typer.echo(f"  {phase}: {status_text}{suffix}")
+        if phase_state.get("error"):
+            typer.echo(f"    error: {phase_state['error']}")
     for stage in PIPELINE_STAGES:
         stage_state = state.get("stage_status", {}).get(stage, {})
         artifact = state.get("artifacts", {}).get(stage, {})

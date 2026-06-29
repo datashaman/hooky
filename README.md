@@ -92,7 +92,15 @@ There is no non-AI generation path. If OpenRouter is unavailable or the key is m
 
 Hooky provides a Typer CLI for local workspaces. Commands default to the current directory; use `-C` to run against another workspace.
 
-The standard pipeline is:
+The standard loop phases are:
+
+1. Gather
+2. Reason
+3. Act
+4. Verify
+5. Repeat
+
+The current default agent mapping is:
 
 1. Spec Agent
 2. Human approval, or `--auto-approve` for local full runs
@@ -100,6 +108,8 @@ The standard pipeline is:
 4. Verifier Agent
 5. Eval Agent
 6. System-owned change proposal
+
+`docs/loop-model.md` defines the phase model. Existing stage names remain compatibility handles: `spec -> reason`, `builder -> act`, `verifier -> verify`, and `eval -> repeat`.
 
 For the simple local loop, start the pipeline and watch the latest started workspace with stable commands:
 
