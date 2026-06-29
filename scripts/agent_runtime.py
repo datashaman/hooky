@@ -225,7 +225,20 @@ class ToolRuntime:
     def run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if time.monotonic() - self.started_at > self.max_seconds:
             raise TimeoutError(f"agent runtime exceeded {self.max_seconds}s")
-        handlers: dict[str, ToolHandler] = {
+        handlers = self.tool_handlers()
+        name = canonical_tool_name(name, handlers.keys())
+        if name not in handlers:
+            return {"ok": False, "error": f"unknown tool: {name}"}
+        try:
+            return handlers[name](args)
+        except Exception as exc:  # noqa: BLE001 - tool errors should feed back to the model.
+            return {"ok": False, "error": str(exc)}
+
+    def canonical_tool_name(self, name: str) -> str:
+        return canonical_tool_name(name, self.tool_handlers().keys())
+
+    def tool_handlers(self) -> dict[str, ToolHandler]:
+        return {
             "read_file": self.read_file,
             "read_file_excerpt": self.read_file_excerpt,
             "read_many_files": self.read_many_files,
@@ -250,12 +263,6 @@ class ToolRuntime:
             "todo_write": self.todo_write,
             "final_report": self.finish,
         }
-        if name not in handlers:
-            return {"ok": False, "error": f"unknown tool: {name}"}
-        try:
-            return handlers[name](args)
-        except Exception as exc:  # noqa: BLE001 - tool errors should feed back to the model.
-            return {"ok": False, "error": str(exc)}
 
     def resolve_path(self, value: str) -> Path:
         path = (self.working_folder / value).resolve()
@@ -1106,7 +1113,8 @@ def run_tool_agent(
                     continue
 
                 for tool_call in tool_calls:
-                    name = tool_call.function.name
+                    raw_name = tool_call.function.name
+                    name = runtime.canonical_tool_name(raw_name)
                     tool_started_at = utc_timestamp()
                     tool_start = time.monotonic()
                     try:
@@ -1125,6 +1133,8 @@ def run_tool_agent(
                         "ended_at": utc_timestamp(),
                         "duration_ms": round((time.monotonic() - tool_start) * 1000, 2),
                     }
+                    if raw_name != name:
+                        event["raw_name"] = raw_name
                     tool_events.append(event)
                     runtime.tool_events.append(event)
                     transcript.append({"role": "tool", **event})
@@ -1510,6 +1520,18 @@ def format_duration(value: Any) -> str:
 
 def quote_value(value: str, max_chars: int) -> str:
     return '"' + single_line(value, max_chars).replace('"', '\\"') + '"'
+
+
+def canonical_tool_name(name: str, valid_names: Any) -> str:
+    valid = set(str(item) for item in valid_names)
+    if name in valid:
+        return name
+    for separator in ("<|channel|>", "."):
+        if separator in name:
+            candidate = name.split(separator, 1)[0]
+            if candidate in valid:
+                return candidate
+    return name
 
 
 def active_todo_label(items: list[Any]) -> str | None:

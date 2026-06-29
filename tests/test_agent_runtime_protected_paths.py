@@ -229,6 +229,24 @@ class ProtectedPathTests(unittest.TestCase):
             "Analyze existing implementation",
         )
 
+    def test_malformed_tool_names_are_canonicalized(self) -> None:
+        valid = {"read_file", "write_file", "final_report"}
+
+        self.assertEqual(agent_runtime.canonical_tool_name("write_file<|channel|>commentary", valid), "write_file")
+        self.assertEqual(agent_runtime.canonical_tool_name("read_file.json", valid), "read_file")
+        self.assertEqual(agent_runtime.canonical_tool_name("missing_tool.json", valid), "missing_tool.json")
+
+    def test_runtime_dispatch_accepts_canonicalized_tool_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text("{}\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.run_tool("read_file.json", {"path": "package.json"})
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["content"], "{}\n")
+
     def test_detect_project_environment_finds_package_manager_and_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
