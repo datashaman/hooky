@@ -208,3 +208,24 @@ actions. In particular:
 - The `evaluator` can recommend `restart-attempt` or `restart-contract`.
 - The `loop-runner` applies the recommendation, enforces attempt limits, and logs
   the decision.
+
+## Harness Restraint
+
+The harness exists only to enforce behavior the model cannot reliably provide on
+its own. It should not grow monotonically.
+
+Every loop rule, tool, file, or policy should have a clear reason to exist: the
+failure it prevents, the evidence it preserves, or the decision it makes
+auditable. If that reason disappears as models improve, delete the rule.
+
+Prefer the smallest loop that works:
+
+- three model roles
+- four durable state files
+- raw traces as supporting evidence
+- optional OpenTelemetry as supporting observability
+- a small `loop-runner` that owns control flow
+
+Re-read the harness after model changes, not only after failed runs. A mechanism
+that was load-bearing for one model may become friction for the next. The loop
+should be allowed to get smaller.
