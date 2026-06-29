@@ -145,6 +145,43 @@ class HookyProgressTests(unittest.TestCase):
         }
         self.assertTrue(hooky_cli.pipeline_complete(state))
 
+    def test_status_shows_workspace_last_event_and_next_action(self) -> None:
+        hooky_cli.append_pipeline_event(self.workspace, "pipeline", status="running", task=self.state["task_id"])
+
+        result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "status"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn(f"workspace: {self.workspace.resolve()}", result.output)
+        self.assertIn("last_event:", result.output)
+        self.assertIn("next:", result.output)
+
+    def test_start_records_last_run_path_before_running_pipeline(self) -> None:
+        last_run_path = self.workspace / "last-run-path"
+
+        def stop_after_recording(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("stop")
+
+        with mock.patch.object(hooky_cli, "run_pipeline", side_effect=stop_after_recording):
+            result = CliRunner().invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "start", "--last-run-path", str(last_run_path)],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(last_run_path.read_text(encoding="utf-8").strip(), self.workspace.resolve().as_posix())
+
+    def test_watch_uses_last_run_workspace(self) -> None:
+        last_run_path = self.workspace / "last-run-path"
+        hooky_cli.write_last_run_workspace(last_run_path, self.workspace)
+
+        result = CliRunner().invoke(
+            hooky_cli.app,
+            ["watch", "--last-run-path", str(last_run_path), "--tail-path"],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn(str(hooky_cli.pipeline_log_path(self.workspace)), result.output)
+
     def test_eval_failure_creates_remediation_plan(self) -> None:
         state = hooky_cli.load_task_state(self.workspace)
         eval_contract_path = self.workspace / ".workflow/artifacts/eval-agent/contract.json"

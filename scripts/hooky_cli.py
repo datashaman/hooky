@@ -44,6 +44,7 @@ app.add_typer(approve_app, name="approve")
 
 PIPELINE_STAGES = ["spec", "builder", "verifier", "eval"]
 REMEDIABLE_STAGES = {"spec", "builder", "verifier", "eval"}
+DEFAULT_LAST_RUN_PATH = Path("/tmp/hooky-last-run-path")
 
 
 def utc_now() -> str:
@@ -203,6 +204,32 @@ def set_pipeline_status(workspace: Path, state: dict[str, Any], status: str, **e
 
 def pipeline_log_path(workspace: Path) -> Path:
     return workflow_dir(workspace) / "runtime_events.log"
+
+
+def write_last_run_workspace(path: Path, workspace: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(workspace.resolve().as_posix() + "\n", encoding="utf-8")
+
+
+def workspace_from_last_run(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def last_nonempty_line(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    last: str | None = None
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.rstrip("\n")
+            if stripped:
+                last = stripped
+    return last
 
 
 def remediation_dir(workspace: Path, state: dict[str, Any]) -> Path:
@@ -1205,6 +1232,40 @@ def run_pipeline(
     run_pipeline_with_remediation_loop(ctx, workspace=workspace, task=task, auto_approve=auto_approve, max_remediations=max_remediations)
 
 
+@app.command()
+def start(
+    ctx: typer.Context,
+    auto_approve: Annotated[bool, typer.Option(help="Automatically approve spec gate.")] = True,
+    max_remediations: Annotated[int, typer.Option(help="Maximum automatic remediation attempts after Eval creates a remediation plan.")] = 2,
+    task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
+    last_run_path: Annotated[Path, typer.Option(help="Path used by `hooky watch` to find the latest workspace.")] = DEFAULT_LAST_RUN_PATH,
+) -> None:
+    """Start the standard pipeline and register this workspace for `hooky watch`."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_initialized(workspace)
+    write_last_run_workspace(last_run_path, workspace)
+    typer.echo(f"workspace: {workspace}")
+    typer.echo(f"watch: uv run hooky watch")
+    run_pipeline(ctx, auto_approve=auto_approve, max_remediations=max_remediations, task=task)
+
+
+@app.command()
+def watch(
+    ctx: typer.Context,
+    stage: Annotated[str, typer.Argument(help="Stage to follow: pipeline, spec, builder, verifier, or eval.")] = "pipeline",
+    task: Annotated[str | None, typer.Option(help="Task id. Defaults to current task.")] = None,
+    last_run_path: Annotated[Path, typer.Option(help="Path written by `hooky start`.")] = DEFAULT_LAST_RUN_PATH,
+    tail_path: Annotated[bool, typer.Option("--tail-path", help="Only print the append-only runtime log path.")] = False,
+    follow: Annotated[bool, typer.Option("--follow/--no-follow", "-f", help="Follow the append-only runtime log.")] = True,
+) -> None:
+    """Follow the latest started workspace's runtime log."""
+    workspace = workspace_from_last_run(last_run_path) or workspace_from_ctx(ctx)
+    ctx.obj["workspace"] = workspace
+    if not tail_path:
+        typer.echo(f"workspace: {workspace}")
+    trace(ctx, stage=stage, task=task, tail_path=tail_path, follow=follow)
+
+
 def run_pipeline_with_remediation_loop(
     ctx: typer.Context,
     *,
@@ -1312,6 +1373,23 @@ def fail_incomplete_pipeline(workspace: Path, state: dict[str, Any], attempts: i
     raise RuntimeError(message)
 
 
+def next_action_for_state(state: dict[str, Any]) -> str:
+    pipeline_state = state.get("pipeline_status") if isinstance(state.get("pipeline_status"), dict) else {}
+    pipeline_status = pipeline_state.get("status") if isinstance(pipeline_state, dict) else None
+    if pipeline_status == "running":
+        return "uv run hooky watch"
+    if pipeline_status == "passed":
+        return "uv run hooky report"
+    if pipeline_status in {"failed", "interrupted"}:
+        return "uv run hooky status; inspect the trace shown above"
+    statuses = state.get("stage_status") if isinstance(state.get("stage_status"), dict) else {}
+    if not isinstance(statuses.get("spec"), dict) or statuses["spec"].get("status") != "passed":
+        return "uv run hooky start"
+    if "spec" not in state.get("approvals", {}):
+        return "uv run hooky approve spec"
+    return "uv run hooky start"
+
+
 def require_approval(state: dict[str, Any], stage: str) -> None:
     if stage not in state.get("approvals", {}):
         raise typer.BadParameter(f"{stage} is not approved. Run `hooky approve {stage}` first.")
@@ -1378,6 +1456,7 @@ def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Ta
     ensure_initialized(workspace)
     state = load_task_state(workspace, task)
     refresh_interrupted_stages(workspace, state)
+    typer.echo(f"workspace: {workspace}")
     typer.echo(f"task: {state['task_id']}")
     typer.echo(f"title: {state['title']}")
     pipeline_state = state.get("pipeline_status") if isinstance(state.get("pipeline_status"), dict) else {}
@@ -1391,6 +1470,10 @@ def status(ctx: typer.Context, task: Annotated[str | None, typer.Option(help="Ta
         typer.echo(f"  trace: {pipeline_state['trace']}")
     if isinstance(pipeline_state, dict) and pipeline_state.get("owner_pid"):
         typer.echo(f"  pid: {pipeline_state['owner_pid']}")
+    last_event = last_nonempty_line(pipeline_log_path(workspace))
+    if last_event:
+        typer.echo(f"last_event: {last_event}")
+    typer.echo(f"next: {next_action_for_state(state)}")
     for stage in PIPELINE_STAGES:
         stage_state = state.get("stage_status", {}).get(stage, {})
         artifact = state.get("artifacts", {}).get(stage, {})

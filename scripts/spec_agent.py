@@ -167,6 +167,7 @@ def generate_contract_with_openrouter(
         ),
         write_validator=lambda path, content: validate_spec_write(path, content, Path(dynamic_context["workspace"]["working_folder"])),
         write_enabled=True,
+        spec_contract_write_enabled=True,
         write_allowed_prefixes=[
             dynamic_context["workspace"]["artifact_root"],
         ],
@@ -470,7 +471,7 @@ Dynamic Context:
 ```
 
 Use the available tools to inspect project context as needed. Use todo tools to track substantive work.
-Before final_report, write the full JSON Spec Agent contract to Dynamic Context workspace.artifact_dir + "/contract.json".
+Before final_report, call write_spec_contract with the full JSON Spec Agent contract and path Dynamic Context workspace.artifact_dir + "/contract.json".
 Do not write .workflow files, production code, tests, dependency manifests, or runtime configuration.
 Finish only by calling final_report with {{"contract_path": "<relative path to contract.json>"}}.
 """

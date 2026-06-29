@@ -47,6 +47,20 @@ class BuilderAgentPolicyTests(unittest.TestCase):
     def test_builder_allows_approved_test_execution(self) -> None:
         self.assertIsNone(builder_agent.builder_bash_command_violation("npm test tests/todomvc.spec.cjs:364"))
 
+    def test_builder_blocks_backgrounded_dev_server_bash(self) -> None:
+        violation = builder_agent.builder_bash_command_violation("npm run dev -- --port 5173 & sleep 2")
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("managed process tools", violation)
+
+    def test_builder_blocks_nohup_static_server_bash(self) -> None:
+        violation = builder_agent.builder_bash_command_violation("nohup python3 -m http.server 4173 >/tmp/server.log 2>&1 &")
+
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("start_process", violation)
+
 
 def base_contract() -> dict[str, object]:
     return {

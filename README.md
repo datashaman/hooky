@@ -46,7 +46,7 @@ Static Spec Agent context:
 - `.workflow/agents/spec/static/contract_schema.md`
 - `.workflow/agents/spec/static/quality_bar.md`
 
-Static Test Agent context:
+Legacy Test Agent context:
 
 - `.workflow/agents/test/static/system.md`
 - `.workflow/agents/test/static/contract_schema.md`
@@ -92,20 +92,37 @@ There is no non-AI generation path. If OpenRouter is unavailable or the key is m
 
 Hooky provides a Typer CLI for local workspaces. Commands default to the current directory; use `-C` to run against another workspace.
 
+The standard pipeline is:
+
+1. Spec Agent
+2. Human approval, or `--auto-approve` for local full runs
+3. Builder Agent, including the task-local TDD loop
+4. Verifier Agent
+5. Eval Agent
+6. System-owned change proposal
+
+For the simple local loop, start the pipeline and watch the latest started workspace with stable commands:
+
+```bash
+uv run hooky -C /tmp/todomvc start
+uv run hooky watch
+uv run hooky status
+```
+
+`hooky start` records the workspace in `/tmp/hooky-last-run-path`. `hooky watch` reads that file and follows the pipeline event log, so the viewer command stays the same across runs.
+
 ```bash
 uv run hooky init
 uv run hooky task create --title "Implement TodoMVC" --body-file /tmp/todomvc-issue.md
 uv run hooky run spec
 uv run hooky approve spec
-uv run hooky run test
-uv run hooky approve test
 uv run hooky run builder
 uv run hooky run verifier
 uv run hooky run eval
 uv run hooky status
 uv run hooky trace pipeline --follow
-uv run hooky trace test
-uv run hooky trace test --follow
+uv run hooky trace builder
+uv run hooky trace builder --follow
 uv run hooky report
 ```
 
@@ -114,16 +131,16 @@ For a separate workspace:
 ```bash
 uv run hooky -C /tmp/todomvc init
 uv run hooky -C /tmp/todomvc task create --title "Implement TodoMVC" --body-file /tmp/todomvc-issue.md
-uv run hooky -C /tmp/todomvc run pipeline --auto-approve
+uv run hooky -C /tmp/todomvc start
 ```
 
 Task input is process input, not project context. Keep `--body-file` outside the workspace, or pass the body with `--body`; Hooky stores it under `.workflow/tasks/...` for the Spec Agent. The CLI rejects workspace-local body files so later agents cannot discover the original issue text as an ordinary project file.
 
-The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths. `hooky status` shows per-stage state, errors, report paths, and approved test file paths. `hooky trace pipeline --follow` tails the stage-level pipeline log. `hooky trace <stage>` shows the readable runtime timeline for one stage and can be run while an agent is still in progress. `hooky trace <stage> --follow` tails that stage's append-only `runtime_events.log`; `--tail-path` prints the log path for external `tail -f`.
+The CLI stores task state under `.workflow/tasks/<task-id>/state.json` and tracks the current task in `.workflow/state.json`, so normal stage commands do not need task ids or artifact paths. `hooky status` shows the workspace, task, pipeline state, last event, next action, per-stage state, errors, and report paths. `hooky watch` follows the latest started workspace's stage-level pipeline log. `hooky trace <stage>` shows the readable runtime timeline for one stage and can be run while an agent is still in progress. `hooky trace <stage> --follow` tails that stage's append-only `runtime_events.log`; `--tail-path` prints the log path for external `tail -f`.
 
-The Test Agent writes executable tests and fixtures at project-native paths chosen from the workspace context. Hooky reports, contracts, context snapshots, and runtime transcripts stay under `.workflow`.
+Hooky reports, contracts, context snapshots, and runtime transcripts stay under `.workflow`.
 
-The Builder Agent writes production files only. When the approved spec or project context requires it, Builder may also create or update the project toolchain files needed to run and verify that implementation. If approved tests are invalid or unimplementable without editing tests, Builder should stop with `tests_passing=false` and record the evidence instead of weakening tests or churning dependencies. After the Builder returns, Hooky creates the local change proposal artifact from git status and diff evidence.
+The Builder Agent owns the task-local TDD loop. It writes executable tests at project-native paths, writes production implementation, and may create or update the project toolchain files needed to run and verify that implementation. If the approved spec is invalid or unimplementable, Builder should stop with `tests_passing=false` and record the evidence instead of weakening the acceptance target or churning dependencies. After the Builder returns, Hooky creates the local change proposal artifact from git status and diff evidence.
 
 ## Local Spec Agent Eval
 

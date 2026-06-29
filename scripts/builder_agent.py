@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
@@ -394,6 +395,19 @@ Finish only by calling final_report with the Builder Agent contract.
 
 def builder_bash_command_violation(command: str) -> str | None:
     lowered = command.lower()
+    unmanaged_server_patterns = [
+        r"\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|preview)\b",
+        r"\b(npx\s+)?vite\b",
+        r"\bnext\s+dev\b",
+        r"\bpython3?\s+-m\s+http\.server\b",
+        r"\b(http-server|serve)\b",
+    ]
+    uses_backgrounding = any(fragment in lowered for fragment in [" &", "& ", "nohup ", "setsid ", "disown", "jobs", "fg %", "bg %"])
+    if uses_backgrounding and any(re.search(pattern, lowered) for pattern in unmanaged_server_patterns):
+        return (
+            "Builder must use managed process tools for long-running local servers; "
+            "call start_process/list_processes/read_process/stop_process instead of starting servers through bash"
+        )
     blocked_fragments = [
         "node_modules",
         "playwright-core/lib",

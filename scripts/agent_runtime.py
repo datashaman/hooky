@@ -80,6 +80,7 @@ class ToolRuntime:
     write_allowed_prefixes: list[str] = field(default_factory=list)
     write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
     write_blocked_names: list[str] = field(default_factory=list)
+    spec_contract_write_enabled: bool = False
     bash_blocked_substrings: list[str] = field(default_factory=list)
     bash_command_validator: Callable[[str], str | None] | None = None
     bash_protected_prefixes: list[str] = field(default_factory=list)
@@ -119,7 +120,7 @@ class ToolRuntime:
             self.max_post_success_grace_seconds = int(os.environ["AGENT_POST_SUCCESS_GRACE_SECONDS"])
 
     def tools(self) -> list[dict[str, Any]]:
-        return [
+        tools = [
             tool_schema("read_file", "Read a UTF-8 text file from the working folder.", {"path": string_schema()}, ["path"]),
             tool_schema(
                 "read_file_excerpt",
@@ -254,6 +255,20 @@ class ToolRuntime:
                 },
             },
         ]
+        if self.spec_contract_write_enabled:
+            tools.insert(
+                4,
+                tool_schema(
+                    "write_spec_contract",
+                    "Validate and write the Spec Agent JSON contract to docs/specs/<task-id>/contract.json.",
+                    {
+                        "path": string_schema(),
+                        "contract": {"type": "object", "additionalProperties": True},
+                    },
+                    ["path", "contract"],
+                ),
+            )
+        return tools
 
     def run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         handlers = self.tool_handlers()
@@ -276,6 +291,7 @@ class ToolRuntime:
             "read_file_excerpt": self.read_file_excerpt,
             "read_many_files": self.read_many_files,
             "write_file": self.write_file,
+            "write_spec_contract": self.write_spec_contract,
             "list_files": self.list_files,
             "find_files": self.find_files,
             "grep_files": self.grep_files,
@@ -446,6 +462,23 @@ class ToolRuntime:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return {"ok": True, "path": relative_to(path, self.working_folder), "bytes": path.stat().st_size}
+
+    def write_spec_contract(self, args: dict[str, Any]) -> dict[str, Any]:
+        if not self.spec_contract_write_enabled:
+            raise ValueError("write_spec_contract is disabled for this agent")
+        path = self.resolve_path(str(args["path"]))
+        contract = args.get("contract")
+        if not isinstance(contract, dict):
+            raise ValueError("write_spec_contract requires a contract object")
+        relative = relative_to(path, self.working_folder)
+        if not relative.startswith("docs/specs/") or not relative.endswith("/contract.json"):
+            raise ValueError("write_spec_contract path must be docs/specs/<task-id>/contract.json")
+        spec_agent.validate_contract(contract)
+        self.validate_write_path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = json.dumps(contract, indent=2, sort_keys=True) + "\n"
+        path.write_text(content, encoding="utf-8")
+        return {"ok": True, "path": relative, "bytes": path.stat().st_size}
 
     def validate_write_path(self, path: Path) -> None:
         if not self.write_enabled:

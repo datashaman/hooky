@@ -4,12 +4,12 @@ Hooky is an agentic SDLC pipeline. Work flows through explicit stages:
 
 1. Spec Agent
 2. Human approval
-3. Test Agent
-4. Human approval
-5. Builder Agent
-6. Verifier Agent
-7. Eval Agent
-8. System-owned change proposal, then optional hosted pull request or merge
+3. Builder Agent
+4. Verifier Agent
+5. Eval Agent
+6. System-owned change proposal, then optional hosted pull request or merge
+
+The legacy Test Agent still exists for compatibility and eval work, but it is not part of the default pipeline. Builder owns the task-local TDD loop: it creates or updates executable tests from the approved spec, then implements production code until the suite passes.
 
 ## Architecture Rules
 
@@ -33,8 +33,7 @@ Hooky is an agentic SDLC pipeline. Work flows through explicit stages:
 ## Stage Boundaries
 
 - The Spec Agent writes specification artifacts only.
-- The Test Agent writes executable tests only.
-- The Builder Agent writes production implementation only after approved tests exist.
+- The Builder Agent writes task-local executable tests and production implementation from an approved spec.
 - Hooky, not the Builder Agent, derives the git change proposal from the resulting workspace.
 - Verifier and Eval agents do not edit code or tests.
 
