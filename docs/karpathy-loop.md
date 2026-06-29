@@ -209,6 +209,35 @@ actions. In particular:
 - The `loop-runner` applies the recommendation, enforces attempt limits, and logs
   the decision.
 
+## Bottleneck Review
+
+The loop is not finished when one attempt passes. Each completed attempt should
+make the current bottleneck visible.
+
+The `evaluator` owns bottleneck identification. It absorbs deterministic
+verification, qualitative grading, trace reading, and diagnosis of where the
+loop is now weakest. The `loop-runner` uses that report to decide what happens
+next, but does not invent the evaluation itself.
+
+Common bottlenecks include:
+
+- unclear problem boundary
+- weak contract
+- bad generator trajectory
+- evaluator blindness
+- missing taste rubric
+- tooling friction
+- cost or runtime pressure
+- harness complexity
+
+The `evaluator` should report the bottleneck with evidence. The `loop-runner`
+records the current bottleneck in `progress.md` and appends the decision to
+`log.md`.
+
+If no bottleneck is visible, the loop should not treat that as proof the harness
+is done. It should treat it as a prompt to inspect traces, artifacts, and the
+rubric more carefully.
+
 ## Harness Restraint
 
 The harness exists only to enforce behavior the model cannot reliably provide on
