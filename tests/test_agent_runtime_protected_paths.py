@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 import sys
@@ -353,6 +354,63 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_available_tools_include_visual_snapshot(self) -> None:
         self.assertIn("capture_visual_snapshot", agent_runtime.available_tool_names())
+
+    def test_available_tools_include_time_extension_request(self) -> None:
+        self.assertIn("request_time_extension", agent_runtime.available_tool_names())
+
+    def test_time_extension_is_granted_only_near_deadline_with_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                max_extension_seconds=120,
+                max_extension_requests=1,
+            )
+            runtime.started_at = time.monotonic() - 26
+            runtime.tool_events.append({"name": "write_file", "result": {"ok": True}})
+            runtime.tool_events.append({"name": "run_tests", "result": {"ok": False}})
+
+            result = runtime.request_time_extension(
+                {
+                    "requested_seconds": 90,
+                    "reason": "Focused TDD loop is still reducing failures.",
+                    "current_status": "One failing Playwright test remains.",
+                    "next_step": "Patch the toggle-all handler and rerun that test.",
+                }
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["granted"])
+            self.assertEqual(result["added_seconds"], 90)
+            self.assertEqual(runtime.max_seconds, 120)
+
+    def test_time_extension_requires_recent_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                max_extension_seconds=120,
+                max_extension_requests=1,
+            )
+            runtime.started_at = time.monotonic() - 26
+
+            result = runtime.request_time_extension(
+                {
+                    "requested_seconds": 90,
+                    "reason": "Need more time.",
+                    "current_status": "Still investigating.",
+                    "next_step": "Think more.",
+                }
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["granted"])
+            self.assertIn("progress", result["error"])
 
     def test_git_status_and_diff_are_read_only_structured_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -89,6 +89,10 @@ class ToolRuntime:
     next_process_id: int = 1
     initial_image_paths: list[Path] = field(default_factory=list)
     pending_image_inputs: list[dict[str, str]] = field(default_factory=list)
+    extension_seconds_used: int = 0
+    extension_requests_used: int = 0
+    max_extension_seconds: int = 0
+    max_extension_requests: int = 0
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -105,6 +109,10 @@ class ToolRuntime:
         self.anchored_summary = ""
         if os.environ.get("AGENT_HEARTBEAT_SECONDS"):
             self.heartbeat_seconds = int(os.environ["AGENT_HEARTBEAT_SECONDS"])
+        if os.environ.get("AGENT_MAX_EXTENSION_SECONDS"):
+            self.max_extension_seconds = int(os.environ["AGENT_MAX_EXTENSION_SECONDS"])
+        if os.environ.get("AGENT_MAX_EXTENSION_REQUESTS"):
+            self.max_extension_requests = int(os.environ["AGENT_MAX_EXTENSION_REQUESTS"])
 
     def tools(self) -> list[dict[str, Any]]:
         return [
@@ -210,6 +218,17 @@ class ToolRuntime:
                 ["query"],
             ),
             tool_schema("fetch_url", "Fetch UTF-8 text content from an http or https URL.", {"url": string_schema()}, ["url"]),
+            tool_schema(
+                "request_time_extension",
+                "Request a bounded runtime extension when recent tool evidence shows useful progress and a concrete next step remains.",
+                {
+                    "requested_seconds": integer_schema(default=180, minimum=30, maximum=600),
+                    "reason": string_schema(),
+                    "current_status": string_schema(),
+                    "next_step": string_schema(),
+                },
+                ["reason", "current_status", "next_step"],
+            ),
             tool_schema("todo_read", "Read the current todo list.", {}, []),
             tool_schema("todo_write", "Replace the current todo list.", {"items": {"type": "array", "items": {"type": "object", "additionalProperties": True}}}, ["items"]),
             {
@@ -223,10 +242,10 @@ class ToolRuntime:
         ]
 
     def run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
-        if time.monotonic() - self.started_at > self.max_seconds:
-            raise TimeoutError(f"agent runtime exceeded {self.max_seconds}s")
         handlers = self.tool_handlers()
         name = canonical_tool_name(name, handlers.keys())
+        if name != "request_time_extension" and time.monotonic() - self.started_at > self.max_seconds:
+            raise TimeoutError(f"agent runtime exceeded {self.max_seconds}s")
         if name not in handlers:
             return {"ok": False, "error": f"unknown tool: {name}"}
         try:
@@ -259,10 +278,60 @@ class ToolRuntime:
             "list_processes": self.list_processes,
             "web_search": self.web_search,
             "fetch_url": self.fetch_url,
+            "request_time_extension": self.request_time_extension,
             "todo_read": self.todo_read,
             "todo_write": self.todo_write,
             "final_report": self.finish,
         }
+
+    def request_time_extension(self, args: dict[str, Any]) -> dict[str, Any]:
+        if self.max_extension_seconds <= 0 or self.max_extension_requests <= 0:
+            return {"ok": False, "granted": False, "error": "time extensions are disabled for this agent"}
+        if self.extension_requests_used >= self.max_extension_requests:
+            return {"ok": False, "granted": False, "error": "time extension request limit reached"}
+        if self.extension_seconds_used >= self.max_extension_seconds:
+            return {"ok": False, "granted": False, "error": "time extension budget exhausted"}
+        reason = str(args.get("reason") or "").strip()
+        current_status = str(args.get("current_status") or "").strip()
+        next_step = str(args.get("next_step") or "").strip()
+        if not reason or not current_status or not next_step:
+            return {"ok": False, "granted": False, "error": "reason, current_status, and next_step are required"}
+        elapsed = time.monotonic() - self.started_at
+        if elapsed < self.max_seconds * 0.75:
+            return {"ok": False, "granted": False, "error": "extension requests are only available near the runtime deadline"}
+        if not self.recent_progress_evidence():
+            return {"ok": False, "granted": False, "error": "no recent progress evidence from tool results"}
+        requested = int(args.get("requested_seconds") or 180)
+        remaining_budget = self.max_extension_seconds - self.extension_seconds_used
+        granted = max(0, min(requested, remaining_budget))
+        if granted <= 0:
+            return {"ok": False, "granted": False, "error": "time extension budget exhausted"}
+        self.max_seconds += granted
+        self.extension_seconds_used += granted
+        self.extension_requests_used += 1
+        return {
+            "ok": True,
+            "granted": True,
+            "added_seconds": granted,
+            "max_seconds": self.max_seconds,
+            "extension_requests_used": self.extension_requests_used,
+            "extension_seconds_used": self.extension_seconds_used,
+        }
+
+    def recent_progress_evidence(self) -> bool:
+        recent_events = self.tool_events[-12:]
+        saw_write = False
+        saw_test = False
+        saw_successful_tool = False
+        for event in recent_events:
+            result = event.get("result") or {}
+            if result.get("ok"):
+                saw_successful_tool = True
+            if event.get("name") == "write_file" and result.get("ok"):
+                saw_write = True
+            if event.get("name") == "run_tests":
+                saw_test = True
+        return saw_successful_tool and (saw_write or saw_test)
 
     def resolve_path(self, value: str) -> Path:
         path = (self.working_folder / value).resolve()
@@ -1039,8 +1108,10 @@ def run_tool_agent(
                     soft_deadline_sent = True
                     warning = (
                         f"Runtime soft deadline: about {remaining_seconds}s remain before the hard timeout. "
-                        "If the task is not complete, call final_report now with current status, concrete failures, "
-                        "and next steps instead of starting another long debugging cycle."
+                        "If recent tool results show useful progress and one concrete next step remains, you may call "
+                        "request_time_extension with the failing tests, current status, and next command. Otherwise, "
+                        "call final_report now with current status, concrete failures, and next steps instead of "
+                        "starting another long debugging cycle."
                     )
                     messages.append({"role": "user", "content": warning})
                     transcript.append(
@@ -1909,6 +1980,7 @@ def available_tool_names() -> list[str]:
         "list_processes",
         "web_search",
         "fetch_url",
+        "request_time_extension",
         "todo_read",
         "todo_write",
     ]
