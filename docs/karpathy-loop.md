@@ -71,6 +71,32 @@ accepted contract. `progress.md` records the current loop state and next action.
 ## [YYYY-MM-DD] op | title
 ```
 
+## Subjective Scoring
+
+Subjective quality is gradable only when the taste rubric is written into
+`contract.md` before grading starts. The `evaluator` scores against that rubric;
+the `generator` does not invent or approve the taste criteria.
+
+For UI or product work, the default subjective axes are:
+
+- `design`
+- `originality`
+- `craft`
+- `functionality`
+
+The contract should assign weights to those axes when subjective quality matters.
+The weights must sum to `1.0`. The `evaluator` returns a score between `0.0` and
+`1.0`, plus a short explanation of the gap between the attempt and the rubric.
+
+Calibration examples belong in `contract.md`, not in conversation context. A
+useful rubric names three positive references and three negative references, with
+short notes about what each reference demonstrates.
+
+If subjective quality matters but `contract.md` does not include a rubric, the
+`evaluator` should not invent taste after the fact. It should either grade only
+objective functionality or recommend `restart-contract` so the rubric can be
+written explicitly.
+
 ## Resume And Restart
 
 - `resume` handles accidental interruption: process disconnect, context loss,
