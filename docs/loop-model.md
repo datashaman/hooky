@@ -24,21 +24,27 @@ Roles are planner, generator, and evaluator. Phases describe what the loop is do
 
 ## Roles
 
-- `planner`: writes the initial proposal/contract boundary and never touches implementation code.
+- `planner`: writes initial proposal/contract material and never touches implementation code.
 - `generator`: proposes done criteria during negotiation, then writes implementation/tests during attempts.
 - `evaluator`: rejects weak contracts, grades attempts, reads traces and screenshots, and never edits code.
+
+See [`agent-tools.md`](agent-tools.md) for the role tool surface and filesystem
+guardrails.
 
 ## State
 
 Loop state is deliberately small and lives on disk:
 
-- `.hooky/proposal.md`
-- `.hooky/contract.md`
-- `.hooky/feature_list.json`
-- `.hooky/progress.md`
-- `.hooky/log.md`
-- `.hooky/state.json`
-- `.hooky/attempts/<id>/`
+- `.hooky/runs/<key>/proposal.md`
+- `.hooky/runs/<key>/contract.md`
+- `.hooky/runs/<key>/feature_list.json`
+- `.hooky/runs/<key>/progress.md`
+- `.hooky/runs/<key>/log.md`
+- `.hooky/runs/<key>/state.json`
+- `.hooky/runs/<key>/attempts/<id>/`
+
+The default local key is `local`. Event-driven automation should use stable keys
+derived from the work item, such as `issue-12` or `pr-7`.
 
 Example:
 
@@ -48,12 +54,14 @@ Example:
   "contract_accepted": true,
   "current_attempt": "001",
   "attempts": [
-    {"id": "001", "status": "running", "path": ".hooky/attempts/001"}
+    {"id": "001", "status": "running", "path": ".hooky/runs/issue-12/attempts/001"}
   ]
 }
 ```
 
 Runtime logs, transcripts, tool events, OpenTelemetry-style spans, evaluator reports, and visual evidence live under the active attempt directory. Debug commands read those files directly instead of reconstructing what might have happened from model summaries.
+Human-readable proof artifacts live in `evidence.md`; command output and
+screenshots referenced by that report are captured by Hooky evidence tools.
 
 For typical run sequences, including auto-approve, human-in-the-loop, and GitHub
 event-triggered flows, see [`usage-sequences.md`](usage-sequences.md).

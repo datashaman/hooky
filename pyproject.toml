@@ -22,3 +22,8 @@ packages = ["scripts"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "scripts"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<9",
+]

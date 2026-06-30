@@ -16,7 +16,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_generator_contract_write_rejects_truncated_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = root / ".hooky/contract.md"
+            path = root / ".hooky/runs/local/contract.md"
 
             with self.assertRaisesRegex(ValueError, "Done Criteria"):
                 loop_agent.validate_generator_contract_write(root, path, "nope")
@@ -30,7 +30,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_generator_contract_write_rejects_invalid_feature_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            path = root / ".hooky/feature_list.json"
+            path = root / ".hooky/runs/local/feature_list.json"
 
             with self.assertRaises(ValueError):
                 loop_agent.validate_generator_contract_write(root, path, '{"items":[]}')
@@ -55,7 +55,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_generator_contract_report_requires_feature_coverage_for_proposal_checklist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            loop_dir = root / ".hooky"
+            loop_dir = root / ".hooky/runs/local"
             loop_dir.mkdir(parents=True)
             (loop_dir / "proposal.md").write_text(
                 "- Add todos\n- Complete todos\n- Filter todos\n",
@@ -82,8 +82,8 @@ class LoopAgentPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cover every proposal checklist item"):
                 loop_agent.validate_generator_contract_report(
                     {
-                        "contract_path": ".hooky/contract.md",
-                        "feature_list_path": ".hooky/feature_list.json",
+                        "contract_path": ".hooky/runs/local/contract.md",
+                        "feature_list_path": ".hooky/runs/local/feature_list.json",
                     },
                     root,
                 )
@@ -104,8 +104,8 @@ class LoopAgentPolicyTests(unittest.TestCase):
 
             loop_agent.validate_generator_contract_report(
                 {
-                    "contract_path": ".hooky/contract.md",
-                    "feature_list_path": ".hooky/feature_list.json",
+                    "contract_path": ".hooky/runs/local/contract.md",
+                    "feature_list_path": ".hooky/runs/local/feature_list.json",
                 },
                 root,
             )
@@ -179,7 +179,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_evaluator_requires_rubric_scores_when_taste_rubric_is_substantive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            loop_dir = root / ".hooky"
+            loop_dir = root / ".hooky/runs/local"
             loop_dir.mkdir(parents=True)
             (loop_dir / "contract.md").write_text(
                 "# Loop Contract\n\n"
@@ -219,8 +219,8 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_evaluator_attempt_requires_non_empty_bottleneck(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / ".hooky").mkdir(parents=True)
-            (root / ".hooky/contract.md").write_text("# Loop Contract\n\n## Done Criteria\n\n- Build it.\n", encoding="utf-8")
+            (root / ".hooky/runs/local").mkdir(parents=True)
+            (root / ".hooky/runs/local/contract.md").write_text("# Loop Contract\n\n## Done Criteria\n\n- Build it.\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "non-empty bottleneck"):
                 loop_agent.validate_evaluator_attempt_report(
@@ -250,7 +250,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_generator_contract_requires_taste_rubric_for_reference_visual_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            loop_dir = root / ".hooky"
+            loop_dir = root / ".hooky/runs/local"
             loop_dir.mkdir(parents=True)
             (loop_dir / "proposal.md").write_text(
                 "Build a TodoMVC app that visually matches the canonical template using todomvc-app-css.\n",
@@ -279,8 +279,8 @@ class LoopAgentPolicyTests(unittest.TestCase):
                 loop_agent.validate_generator_contract_report(
                     {
                         "status": "done",
-                        "contract_path": ".hooky/contract.md",
-                        "feature_list_path": ".hooky/feature_list.json",
+                        "contract_path": ".hooky/runs/local/contract.md",
+                        "feature_list_path": ".hooky/runs/local/feature_list.json",
                         "summary": "done",
                     },
                     root,
@@ -301,8 +301,8 @@ class LoopAgentPolicyTests(unittest.TestCase):
             loop_agent.validate_generator_contract_report(
                 {
                     "status": "done",
-                    "contract_path": ".hooky/contract.md",
-                    "feature_list_path": ".hooky/feature_list.json",
+                    "contract_path": ".hooky/runs/local/contract.md",
+                    "feature_list_path": ".hooky/runs/local/feature_list.json",
                     "summary": "done",
                 },
                 root,

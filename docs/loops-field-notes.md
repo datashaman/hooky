@@ -5,6 +5,10 @@
 Andrej Karpathy  
 Independent Researcher
 
+This is source material for Hooky's loop design, not the live command or file
+format reference. Current behavior is documented in `README.md`,
+`docs/loop-model.md`, `docs/usage-sequences.md`, and `docs/agent-tools.md`.
+
 ## Abstract
 
 This file exists because most agent systems die not from a weak model but from a weak harness. The model can write code; the model can review code; the model can verify its own output against a rubric it agreed to ten minutes ago. What it cannot do, on its own, is decide when to stop, when to restart, and where to write the result. That is the work of the loop. The pattern in this note treats the loop as a first-class object: roles are separated, state lives on disk, contracts are negotiated between agents before the first line of code is written, and the harness is read like a stack trace whenever something goes wrong. Short loops, simple state, clean contracts. Everything else is decoration.

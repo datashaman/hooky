@@ -1,0 +1,197 @@
+name: Hooky
+
+on:
+  workflow_dispatch:
+    inputs:
+      proposal:
+        description: Proposal text. If empty, the event payload is used.
+        required: false
+        type: string
+      dry_run:
+        description: Run deterministic local plumbing instead of model roles.
+        required: false
+        type: boolean
+        default: false
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: hooky-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run Hooky loop
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'hooky:run') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'hooky:run') ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/hooky'))
+    runs-on: ubuntu-latest
+
+    env:
+      HOOKY_LAST_RUN_PATH: /tmp/hooky-last-run-path
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.3.0
+        with:
+          python-version: '3.13'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install Hooky CLI
+        run: |
+          uv tool install --editable .
+
+      - name: Build proposal from event
+        id: proposal
+        env:
+          WORKFLOW_PROPOSAL: ${{ inputs.proposal }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          proposal = (os.environ.get("WORKFLOW_PROPOSAL") or "").strip()
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          run_key = f"manual-{os.environ['GITHUB_RUN_ID']}"
+
+          if not proposal and event_name == "issue_comment":
+              issue = event.get("issue") or {}
+              run_key = f"pr-{issue.get('number')}" if issue.get("pull_request") else f"issue-{issue.get('number')}"
+              comment = event.get("comment") or {}
+              body = str(comment.get("body") or "")
+              if body.startswith("/hooky"):
+                  body = body[len("/hooky"):].strip()
+              proposal = "\n\n".join(
+                  part
+                  for part in [
+                      f"Respond to GitHub issue #{issue.get('number')}: {issue.get('title', '')}".strip(),
+                      body or str(issue.get("body") or "").strip(),
+                  ]
+                  if part
+              )
+
+          if not proposal and event_name == "pull_request":
+              pr = event.get("pull_request") or {}
+              run_key = f"pr-{pr.get('number')}"
+              proposal = "\n\n".join(
+                  part
+                  for part in [
+                      f"Review and improve pull request #{pr.get('number')}: {pr.get('title', '')}".strip(),
+                      str(pr.get("body") or "").strip(),
+                  ]
+                  if part
+              )
+
+          if not proposal:
+              issue = event.get("issue") or {}
+              if issue.get("number"):
+                  run_key = f"issue-{issue.get('number')}"
+              proposal = "\n\n".join(
+                  part
+                  for part in [
+                      f"Address GitHub issue #{issue.get('number')}: {issue.get('title', '')}".strip(),
+                      str(issue.get("body") or "").strip(),
+                  ]
+                  if part
+              )
+
+          if not proposal:
+              proposal = f"Run Hooky for {event_name} event {os.environ['GITHUB_RUN_ID']}."
+
+          Path("event-proposal.md").write_text(proposal + "\n", encoding="utf-8")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"run_key={run_key}\n")
+          PY
+
+      - name: Run Hooky
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          args=(run --run-key "${{ steps.proposal.outputs.run_key }}" --proposal-file event-proposal.md --last-run-path "$HOOKY_LAST_RUN_PATH")
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          hooky "${args[@]}"
+
+      - name: Write harness report
+        if: always()
+        run: |
+          hooky --run-key "${{ steps.proposal.outputs.run_key }}" report || true
+
+      - name: Upload Hooky artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hooky-${{ github.run_id }}
+          path: |
+            .hooky/runs/${{ steps.proposal.outputs.run_key }}/
+            event-proposal.md
+          if-no-files-found: ignore
+
+      - name: Commit Hooky changes to branch
+        id: commit
+        if: success() && github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="hooky/run-${{ github.run_id }}"
+          git switch -c "$branch"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "hooky: run loop for ${{ github.run_id }}"
+          git push --set-upstream origin "$branch"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        id: pr
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_url="$(gh pr create \
+            --title "Hooky run ${{ github.run_id }}" \
+            --body "Hooky completed a loop run from GitHub event ${{ github.event_name }}. Artifacts are attached to the workflow run." \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "${{ steps.commit.outputs.branch }}")"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on issue
+        if: >-
+          always() &&
+          (github.event_name == 'issues' || github.event_name == 'issue_comment') &&
+          github.event.issue.number
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          status="${{ job.status }}"
+          body="Hooky run finished with status: ${status}."
+          if [ -n "$PR_URL" ]; then
+            body="${body}\n\nPull request: ${PR_URL}"
+          fi
+          body="${body}\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment "${{ github.event.issue.number }}" --body "$body"
