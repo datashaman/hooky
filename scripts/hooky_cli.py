@@ -391,6 +391,36 @@ def format_evaluator_feedback(report: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def fallback_evaluator_report_from_error(
+    *,
+    attempt_id: str,
+    error: Exception,
+    generator_report: dict[str, Any],
+) -> dict[str, Any]:
+    findings = [
+        f"Evaluator did not produce a valid final_report: {error}",
+    ]
+    summary = str(generator_report.get("summary") or "").strip()
+    if summary:
+        findings.append(f"Generator summary: {summary}")
+    changed_files = generator_report.get("changed_files")
+    if isinstance(changed_files, list):
+        findings.append("Generator changed files: " + ", ".join(str(item) for item in changed_files))
+    failures = generator_report.get("failures")
+    if isinstance(failures, list) and failures:
+        findings.extend(str(item) for item in failures)
+    return {
+        "schema_version": 1,
+        "attempt": attempt_id,
+        "written_at": utc_now(),
+        "status": "fail",
+        "recommendation": "restart-attempt",
+        "bottleneck": "evaluator failed to submit a typed report; retrying with generator evidence",
+        "findings": findings,
+        "score": 0,
+    }
+
+
 def reset_loop_attempt_workspace(workspace: Path) -> str:
     if not (workspace / ".git").exists():
         return "no git repository; preserving workspace for next attempt"
@@ -1744,16 +1774,24 @@ def run_model_loop_once(
         write_loop_progress(workspace, state, note=str(generator_report.get("summary") or "Generator completed implementation pass."))
         append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(generator_report.get("summary") or ""))
 
-        evaluator_report, evaluator_usage = loop_agent.generate_evaluator_attempt_artifacts(
-            working_folder=workspace,
-            attempt_id=attempt_id,
-        )
-        evaluator_report = {
-            "schema_version": 1,
-            "attempt": attempt_id,
-            "written_at": utc_now(),
-            **evaluator_report,
-        }
+        try:
+            evaluator_report, evaluator_usage = loop_agent.generate_evaluator_attempt_artifacts(
+                working_folder=workspace,
+                attempt_id=attempt_id,
+            )
+            evaluator_report = {
+                "schema_version": 1,
+                "attempt": attempt_id,
+                "written_at": utc_now(),
+                **evaluator_report,
+            }
+        except agent_runtime.AgentRunError as exc:
+            evaluator_usage = exc.result.usage
+            evaluator_report = fallback_evaluator_report_from_error(
+                attempt_id=attempt_id,
+                error=exc,
+                generator_report=generator_report,
+            )
         report_path = attempt_dir / "evaluator_report.json"
         final_report_path = report_path
         write_json(report_path, evaluator_report)

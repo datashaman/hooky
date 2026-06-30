@@ -924,6 +924,80 @@ class HookyProgressTests(unittest.TestCase):
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertIn("attempt 001 reset", log)
 
+    def test_loop_run_retries_when_evaluator_errors_without_report(self) -> None:
+        runner = CliRunner()
+        attempts: list[tuple[str, str]] = []
+
+        def fake_planner(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            (working_folder / ".workflow/loop/contract.md").write_text("# Loop Contract\n\n## Proposal\n\nBuild todos.\n", encoding="utf-8")
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Proposal ready."}, {"cost": 0.01}
+
+        def fake_contract(*, working_folder: Path, attempt_id: str | None = None, review_feedback: str = "") -> tuple[dict[str, object], dict[str, object]]:
+            (working_folder / ".workflow/loop/contract.md").write_text("# Loop Contract\n\n## Done Criteria\n\n- Add todos\n", encoding="utf-8")
+            (working_folder / ".workflow/loop/feature_list.json").write_text(json.dumps({"features": [{"id": "F001", "text": "Add todos"}]}) + "\n", encoding="utf-8")
+            return {
+                "status": "done",
+                "contract_path": ".workflow/loop/contract.md",
+                "feature_list_path": ".workflow/loop/feature_list.json",
+                "summary": "Contract ready.",
+            }, {"cost": 0.02}
+
+        def fake_contract_review(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            return {"status": "done", "accepted": True, "review": "Accepted.", "required_changes": []}, {"cost": 0.03}
+
+        def fake_implementation(*, working_folder: Path, attempt_id: str, evaluator_feedback: str = "") -> tuple[dict[str, object], dict[str, object]]:
+            attempts.append((attempt_id, evaluator_feedback))
+            summary = "TodoMVC implementation pending." if attempt_id == "001" else "Built it."
+            return {
+                "status": "done",
+                "summary": summary,
+                "changed_files": ["tests/example.test.js"] if attempt_id == "001" else ["src/App.jsx"],
+                "tests_run": ["npm test"],
+                "failures": [],
+            }, {"cost": 0.04}
+
+        def fake_attempt_review(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            if attempt_id == "001":
+                raise hooky_cli.agent_runtime.AgentRunError(
+                    "agent produced 6 consecutive assistant messages without tool calls",
+                    hooky_cli.agent_runtime.AgentRunResult(
+                        final_report=None,
+                        usage={"cost": 0.05},
+                        transcript=[],
+                        tool_events=[],
+                        compaction_events=[],
+                        pre_compaction_archives=[],
+                        started_at="2026-06-30T00:00:00+00:00",
+                        ended_at="2026-06-30T00:00:01+00:00",
+                    ),
+                )
+            return {
+                "status": "pass",
+                "recommendation": "continue",
+                "bottleneck": "",
+                "findings": [],
+                "score": 1.0,
+            }, {"cost": 0.05}
+
+        patches = [
+            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+            mock.patch.dict(os.environ, {"LOOP_ATTEMPT_MAX_ROUNDS": "2"}),
+        ]
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "run", "--proposal", "Build todos"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("attempt: 002", result.output)
+        self.assertIn("status: passed", result.output)
+        self.assertIn("TodoMVC implementation pending", attempts[1][1])
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["recommendation"], "restart-attempt")
+        self.assertIn("Evaluator did not produce", report["findings"][0])
+
     def test_loop_restart_attempt_preserves_durable_files(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
