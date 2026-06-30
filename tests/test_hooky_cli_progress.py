@@ -491,6 +491,9 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("Build a todo app", contract)
         feature_list = hooky_cli.read_json(self.workspace / ".workflow/loop/feature_list.json")
         self.assertEqual(feature_list["features"], [])
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertRegex(log, r"(?m)^## \d{4}-\d{2}-\d{2}$")
+        self.assertRegex(log, r"(?m)^- \d{2}:\d{2}:\d{2}Z init \| loop initialized$")
 
     def test_loop_init_reads_proposal_from_stdin_and_derives_title(self) -> None:
         result = CliRunner().invoke(

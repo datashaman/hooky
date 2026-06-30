@@ -183,10 +183,18 @@ def ensure_loop_initialized(workspace: Path) -> None:
 def append_loop_log(workspace: Path, op: str, title: str, body: str = "") -> None:
     path = loop_log_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
-    date = datetime.now(timezone.utc).date().isoformat()
-    entry = f"## [{date}] {op} | {title}\n\n"
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    date = now.date().isoformat()
+    time_label = now.time().isoformat().replace("+00:00", "") + "Z"
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    day_header = f"## {date}"
+    entry = ""
+    if day_header not in existing.splitlines():
+        entry += ("" if not existing.strip() else "\n") + f"{day_header}\n\n"
+    entry += f"- {time_label} {op} | {title}\n"
     if body.strip():
-        entry += body.strip() + "\n\n"
+        entry += "\n" + body.strip() + "\n"
+    entry += "\n"
     with path.open("a", encoding="utf-8") as handle:
         handle.write(entry)
 
