@@ -61,12 +61,42 @@ def planner_schema() -> dict[str, Any]:
     }
 
 
+def generator_contract_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "contract_path", "feature_list_path", "summary"],
+        "properties": {
+            "status": {"type": "string", "enum": ["done", "blocked"]},
+            "contract_path": {"type": "string", "enum": [".workflow/loop/contract.md"]},
+            "feature_list_path": {"type": "string", "enum": [".workflow/loop/feature_list.json"]},
+            "summary": {"type": "string"},
+        },
+    }
+
+
 def validate_planner_report(report: dict[str, Any], working_folder: Path) -> None:
     if report.get("contract_path") != ".workflow/loop/contract.md":
         raise ValueError("planner must report contract_path=.workflow/loop/contract.md")
     contract = working_folder / ".workflow/loop/contract.md"
     if not contract.exists() or not contract.read_text(encoding="utf-8").strip():
         raise ValueError("planner must write non-empty .workflow/loop/contract.md")
+
+
+def validate_generator_contract_report(report: dict[str, Any], working_folder: Path) -> None:
+    if report.get("contract_path") != ".workflow/loop/contract.md":
+        raise ValueError("generator must report contract_path=.workflow/loop/contract.md")
+    if report.get("feature_list_path") != ".workflow/loop/feature_list.json":
+        raise ValueError("generator must report feature_list_path=.workflow/loop/feature_list.json")
+    contract = working_folder / ".workflow/loop/contract.md"
+    feature_list = working_folder / ".workflow/loop/feature_list.json"
+    if not contract.exists() or "## Done Criteria" not in contract.read_text(encoding="utf-8"):
+        raise ValueError("generator must write done criteria into .workflow/loop/contract.md")
+    if not feature_list.exists():
+        raise ValueError("generator must write .workflow/loop/feature_list.json")
+    payload = json.loads(feature_list.read_text(encoding="utf-8"))
+    if not isinstance(payload.get("features"), list):
+        raise ValueError("feature_list.json must include features array")
 
 
 def generate_planner_artifacts(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -126,6 +156,66 @@ def generate_planner_artifacts(*, working_folder: Path, boundary: str, attempt_i
     return result.final_report, result.usage
 
 
+def generate_generator_contract_artifacts(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise RuntimeError("OPENROUTER_API_KEY is required; loop generator has no non-AI path")
+    working_folder = working_folder.resolve()
+    model = selected_model()
+    model_metadata = selected_model_metadata()
+    live_root = working_folder / ".workflow/loop"
+    if attempt_id:
+        live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+    runtime = ToolRuntime(
+        working_folder=working_folder,
+        final_report_schema=generator_contract_schema(),
+        max_cost_usd=float(os.environ.get("LOOP_GENERATOR_MAX_COST_USD", "0.20")),
+        max_seconds=int(os.environ.get("LOOP_GENERATOR_MAX_SECONDS", "240")),
+        context_window_tokens=model_metadata.get("context_length"),
+        final_validator=lambda report: validate_generator_contract_report(report, working_folder),
+        skills=agent_skills.discover_skills(working_folder),
+        write_enabled=True,
+        write_allowed_prefixes=[".workflow/loop/contract.md", ".workflow/loop/feature_list.json"],
+        write_blocked_prefixes=[],
+        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
+        read_blocked_prefixes=[".workflow"],
+        live_log_root=live_root,
+        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_prefix="role=generator ",
+    )
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=generator_contract_system_prompt(),
+            user=generator_contract_user_prompt(
+                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
+                model_metadata,
+            ),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            live_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("loop-generator-contract", model, model_metadata, result, status="error", error=str(exc)),
+        )
+        raise
+    write_runtime_log(
+        live_root,
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+        metadata=build_runtime_metadata("loop-generator-contract", model, model_metadata, result),
+    )
+    if result.final_report is None:
+        raise RuntimeError("Loop generator finished without final_report")
+    return result.final_report, result.usage
+
+
 def planner_system_prompt() -> str:
     return """You are the planner in a three-role Karpathy-style loop.
 
@@ -157,4 +247,49 @@ Write .workflow/loop/contract.md with:
 - placeholder Taste Rubric section stating that it is optional and must be explicit when subjective quality matters
 
 Then call final_report with status, contract_path, and summary.
+"""
+
+
+def generator_contract_system_prompt() -> str:
+    return """You are the generator in a three-role Karpathy-style loop.
+
+This is contract negotiation only. You must not edit production code, tests, package files, or attempt artifacts.
+
+Your job is to propose concrete, testable done criteria in .workflow/loop/contract.md and project them into .workflow/loop/feature_list.json.
+The evaluator will accept or reject the contract. You cannot approve your own criteria.
+
+Use write_file only for .workflow/loop/contract.md and .workflow/loop/feature_list.json.
+Finish only with final_report.
+"""
+
+
+def generator_contract_user_prompt(contract: str, model_metadata: dict[str, Any]) -> str:
+    return f"""Current contract.md:
+
+```markdown
+{contract}
+```
+
+Selected model:
+```json
+{json.dumps(model_metadata, indent=2, sort_keys=True)}
+```
+
+Revise .workflow/loop/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
+
+Write .workflow/loop/feature_list.json with this shape:
+```json
+{{
+  "schema_version": 1,
+  "features": [
+    {{
+      "id": "F001",
+      "text": "testable assertion",
+      "status": "pending"
+    }}
+  ]
+}}
+```
+
+Then call final_report with status, contract_path, feature_list_path, and summary.
 """

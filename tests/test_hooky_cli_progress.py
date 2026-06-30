@@ -567,6 +567,38 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(state["role_usage"]["planner"]["cost"], 0.01)
         self.assertIn("Build a calendar", contract_path.read_text(encoding="utf-8"))
 
+    def test_loop_generator_contract_command_runs_role_and_updates_state(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        contract_path = self.workspace / ".workflow/loop/contract.md"
+        feature_path = self.workspace / ".workflow/loop/feature_list.json"
+
+        def fake_generator(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(working_folder.resolve(), self.workspace.resolve())
+            contract_path.write_text("# Loop Contract\n\n## Done Criteria\n\n- Add events\n", encoding="utf-8")
+            feature_path.write_text(
+                json.dumps({"schema_version": 1, "features": [{"id": "F001", "text": "Add events", "status": "pending"}]}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "status": "done",
+                "contract_path": ".workflow/loop/contract.md",
+                "feature_list_path": ".workflow/loop/feature_list.json",
+                "summary": "Criteria proposed.",
+            }, {"cost": 0.02}
+
+        with mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_generator):
+            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "generator-contract"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Criteria proposed.", result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "contract-proposed")
+        self.assertFalse(state["contract_accepted"])
+        self.assertEqual(state["role_usage"]["generator_contract"]["cost"], 0.02)
+        features = hooky_cli.read_json(feature_path)
+        self.assertEqual(features["features"][0]["id"], "F001")
+
     def test_loop_attempt_lifecycle_creates_trace_and_otel_artifacts(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])

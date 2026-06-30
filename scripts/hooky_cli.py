@@ -1548,6 +1548,28 @@ def loop_propose_contract(
     typer.echo(f"contract: {path}")
 
 
+@loop_app.command("generator-contract")
+def loop_generator_contract(ctx: typer.Context) -> None:
+    """Run the real generator model role to propose done criteria."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    report, usage = loop_agent.generate_generator_contract_artifacts(
+        working_folder=workspace,
+        attempt_id=state.get("current_attempt"),
+    )
+    state["status"] = "contract-proposed"
+    state["contract_accepted"] = False
+    state["last_action"] = "generator-contract"
+    state.setdefault("role_usage", {})["generator_contract"] = usage
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=str(report.get("summary") or "Generator proposed contract criteria."))
+    append_loop_log(workspace, "generator", "generator proposed contract", str(report.get("summary") or ""))
+    typer.echo(f"contract: {loop_contract_path(workspace)}")
+    typer.echo(f"feature_list: {loop_feature_list_path(workspace)}")
+    typer.echo(f"summary: {report.get('summary')}")
+
+
 @loop_app.command("review-contract")
 def loop_review_contract(
     ctx: typer.Context,
