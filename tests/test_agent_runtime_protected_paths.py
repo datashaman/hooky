@@ -271,6 +271,57 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(recovered, {"status": "done"})
             self.assertEqual(runtime.final_report, {"status": "done"})
 
+    def test_recovers_markdown_evaluator_final_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                final_validator=lambda report: None if report.get("status") == "done" else (_ for _ in ()).throw(ValueError("bad status")),
+            )
+
+            recovered = agent_runtime.recover_text_final_report(
+                runtime,
+                """**final_report**
+Accepted: **false**
+
+**required_changes**
+1. Add concrete test names.
+2. Remove vague "etc." language.
+
+**review**
+The contract is close but still underspecified.
+""",
+            )
+
+            self.assertEqual(recovered["status"], "done")
+            self.assertFalse(recovered["accepted"])
+            self.assertEqual(
+                recovered["required_changes"],
+                ["Add concrete test names.", 'Remove vague "etc." language.'],
+            )
+            self.assertEqual(recovered["review"], "The contract is close but still underspecified.")
+
+    def test_enabled_tools_rejects_hidden_tool_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                enabled_tools=["final_report"],
+            )
+
+            self.assertEqual(
+                [tool["function"]["name"] for tool in runtime.tools()],
+                ["final_report"],
+            )
+            result = runtime.run_tool("read_file", {"path": "README.md"})
+
+            self.assertFalse(result["ok"])
+            self.assertIn("tool is disabled", result["error"])
+
     def test_read_file_excerpt_and_many_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

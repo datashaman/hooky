@@ -101,6 +101,7 @@ class ToolRuntime:
     skills: list[agent_skills.AgentSkill] = field(default_factory=list)
     activated_skill_names: set[str] = field(default_factory=set)
     preselected_skill_names: list[str] = field(default_factory=list)
+    enabled_tools: list[str] | None = None
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -304,11 +305,20 @@ class ToolRuntime:
                     ["path", "contract"],
                 ),
             )
+        if self.enabled_tools is not None:
+            enabled = set(self.enabled_tools)
+            tools = [
+                tool
+                for tool in tools
+                if tool.get("function", {}).get("name") in enabled
+            ]
         return tools
 
     def run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         handlers = self.tool_handlers()
         name = canonical_tool_name(name, handlers.keys())
+        if self.enabled_tools is not None and name not in set(self.enabled_tools):
+            return {"ok": False, "error": f"tool is disabled for this agent: {name}"}
         if name != "request_time_extension" and time.monotonic() - self.started_at > self.max_seconds:
             raise TimeoutError(f"agent runtime exceeded {self.max_seconds}s")
         if name not in handlers:
@@ -1662,6 +1672,8 @@ def extract_json_object_from_text(text: str) -> dict[str, Any] | None:
 def recover_text_final_report(runtime: ToolRuntime, text: str) -> dict[str, Any] | None:
     payload = extract_json_object_from_text(text)
     if payload is None:
+        payload = extract_markdown_final_report(text)
+    if payload is None:
         return None
     actions = text_tool_actions_from_payload(payload)
     for action in actions:
@@ -1673,6 +1685,74 @@ def recover_text_final_report(runtime: ToolRuntime, text: str) -> dict[str, Any]
     except Exception:
         return None
     return payload
+
+
+def extract_markdown_final_report(text: str) -> dict[str, Any] | None:
+    if "final_report" not in text:
+        return None
+    payload: dict[str, Any] = {}
+    accepted_match = re.search(r"\bAccepted\s*:\s*\**(true|false)\**", text, re.IGNORECASE)
+    if accepted_match:
+        payload["accepted"] = accepted_match.group(1).lower() == "true"
+        payload["status"] = "done"
+
+    review = extract_markdown_section(text, "review")
+    if review:
+        payload["review"] = review
+
+    required_changes = extract_markdown_required_changes(text)
+    if required_changes:
+        payload["required_changes"] = required_changes
+    elif "accepted" in payload:
+        payload["required_changes"] = []
+
+    return payload if payload else None
+
+
+def extract_markdown_section(text: str, heading: str) -> str:
+    return cleanup_markdown_text(extract_markdown_section_raw(text, heading))
+
+
+def extract_markdown_section_raw(text: str, heading: str) -> str:
+    pattern = re.compile(
+        rf"(?:^|\n)\s*(?:#+\s*)?(?:\*\*)?{re.escape(heading)}(?:\*\*)?\s*:?\s*(.*?)(?=\n\s*(?:#+\s*)?(?:\*\*)?[A-Za-z_ ]+(?:\*\*)?\s*:?\s*(?:\n|\Z)|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(text)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def extract_markdown_required_changes(text: str) -> list[str]:
+    section = extract_markdown_section_raw(text, "required_changes") or extract_markdown_section_raw(text, "required changes")
+    if not section:
+        return []
+    changes: list[str] = []
+    current: list[str] = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        numbered = re.match(r"^(?:[-*]\s*)?\d+[.)]\s+(.*)$", stripped)
+        bullet = re.match(r"^[-*]\s+(.*)$", stripped)
+        if numbered:
+            if current:
+                changes.append(cleanup_markdown_text(" ".join(current)))
+            current = [numbered.group(1)]
+        elif bullet and current:
+            current.append(bullet.group(1))
+        elif stripped and current:
+            current.append(stripped)
+    if current:
+        changes.append(cleanup_markdown_text(" ".join(current)))
+    if changes:
+        return [change for change in changes if change]
+    return [cleanup_markdown_text(section)] if section.strip() else []
+
+
+def cleanup_markdown_text(text: str) -> str:
+    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    text = text.replace("**", "").replace("__", "").strip()
+    return re.sub(r"\s+", " ", text)
 
 
 def text_tool_actions_from_payload(payload: Any) -> list[dict[str, Any]]:

@@ -324,6 +324,7 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
         final_validator=lambda report: validate_evaluator_contract_report(report, working_folder),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=False,
+        enabled_tools=["final_report"],
         read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
         read_blocked_prefixes=[".workflow"],
         live_log_root=live_root,
@@ -577,10 +578,11 @@ def evaluator_contract_system_prompt() -> str:
     return """You are the evaluator in a three-role Karpathy-style loop.
 
 This is contract negotiation only. You must not edit files.
+The proposed contract and feature list are provided inline by the user message.
 
 Your job is to reject weak, vague, untestable, self-serving, or under-specified done criteria before implementation starts.
 Assume the contract is broken until the checklist is concrete enough for an independent evaluator to grade.
-You cannot write code, tests, or contract changes. You can only return final_report.
+You cannot write code, tests, contract changes, or inspect the workspace. You can only call final_report.
 """
 
 
@@ -604,7 +606,7 @@ Selected model:
 
 Accept only if the Done Criteria are concrete, testable, within the planner proposal, and sufficient for a small working product.
 If rejecting, list required_changes as specific edits the generator should make to the contract.
-Finish only with final_report.
+Finish only by calling final_report. Do not describe final_report in markdown; call the tool with JSON arguments matching the schema.
 """
 
 
