@@ -15,6 +15,7 @@ from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, ru
 
 
 SELECTED_MODEL_PATH = Path(".workflow/agents/spec/selected_model.json")
+EVALUATOR_SELECTED_MODEL_PATH = Path(".workflow/agents/eval/selected_model.json")
 COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
 
 
@@ -37,6 +38,32 @@ def selected_model_metadata() -> dict[str, Any]:
     if SELECTED_MODEL_PATH.exists():
         return eval_runtime.read_selected_model(SELECTED_MODEL_PATH)
     return {"model": "openai/gpt-4.1-mini", "source": "fallback"}
+
+
+def selected_evaluator_attempt_model() -> str:
+    env_model = os.environ.get("LOOP_EVALUATOR_MODEL")
+    if env_model:
+        return env_model
+    if EVALUATOR_SELECTED_MODEL_PATH.exists():
+        data = eval_runtime.read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
+        model = data.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return "openai/gpt-4.1-mini"
+
+
+def selected_evaluator_attempt_model_metadata() -> dict[str, Any]:
+    env_model = os.environ.get("LOOP_EVALUATOR_MODEL")
+    if env_model:
+        return {"model": env_model, "variant_id": env_model, "source": "LOOP_EVALUATOR_MODEL", "reasoning_request": None}
+    if EVALUATOR_SELECTED_MODEL_PATH.exists():
+        return eval_runtime.read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
+    return {
+        "model": "openai/gpt-4.1-mini",
+        "variant_id": "openai/gpt-4.1-mini",
+        "source": "fallback-multimodal-required",
+        "reasoning_request": None,
+    }
 
 
 def common_static_files() -> dict[str, str]:
@@ -450,8 +477,8 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required; loop evaluator has no non-AI path")
     working_folder = working_folder.resolve()
-    model = selected_model()
-    model_metadata = selected_model_metadata()
+    model = selected_evaluator_attempt_model()
+    model_metadata = selected_evaluator_attempt_model_metadata()
     live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
     runtime = ToolRuntime(
         working_folder=working_folder,
