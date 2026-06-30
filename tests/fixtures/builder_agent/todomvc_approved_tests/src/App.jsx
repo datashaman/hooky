@@ -1,8 +1,14 @@
 export default function App() {
   return (
-    <main className="app-shell" aria-label="TodoMVC fixture starter">
+    <header className="header">
       <h1>todos</h1>
-      <p>This fixture starts as a working React/Vite shell. The Builder Agent implements TodoMVC behavior here.</p>
-    </main>
+      <input
+        className="new-todo"
+        placeholder="What needs to be done?"
+        aria-label="New todo"
+        autoFocus
+        readOnly
+      />
+    </header>
   );
 }

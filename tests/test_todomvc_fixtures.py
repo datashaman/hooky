@@ -32,10 +32,19 @@ class TodoMvcFixtureTests(unittest.TestCase):
                 self.assertTrue((fixture / "src/styles.css").exists())
                 index = (fixture / "index.html").read_text(encoding="utf-8")
                 main = (fixture / "src/main.jsx").read_text(encoding="utf-8")
+                app = (fixture / "src/App.jsx").read_text(encoding="utf-8")
+                styles = (fixture / "src/styles.css").read_text(encoding="utf-8")
                 self.assertIn('id="root"', index)
+                self.assertIn('class="todoapp"', index)
+                self.assertIn('class="info"', index)
                 self.assertIn('/src/main.jsx', index)
                 self.assertIn("todomvc-common/base.css", main)
                 self.assertIn("todomvc-app-css/index.css", main)
+                self.assertIn('className="header"', app)
+                self.assertIn('className="new-todo"', app)
+                self.assertNotIn("app-shell", app)
+                self.assertNotIn(".app-shell", styles)
+                self.assertNotIn("body {", styles)
 
 
 if __name__ == "__main__":

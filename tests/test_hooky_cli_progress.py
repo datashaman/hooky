@@ -1292,6 +1292,107 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(report["status"], "fail")
         self.assertIn("capture_visual_snapshot", " ".join(report["findings"]))
 
+    def test_loop_evaluator_pass_is_downgraded_for_reported_clipped_primary_ui(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        (self.workspace / ".workflow/loop/contract.md").write_text(
+            "# Loop Contract\n\n## Done Criteria\n\n- Browser UI layout is visually correct.\n",
+            encoding="utf-8",
+        )
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        traces = self.workspace / ".workflow/loop/attempts/001/traces"
+        traces.mkdir(parents=True, exist_ok=True)
+        (traces / "tool_events.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                            "metrics": {},
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--finding",
+                "Visual snapshot shows the app UI but with clipped 'todos' heading at the top.",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "0.88",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertIn("clipped/off-screen/overflowing primary UI", " ".join(report["findings"]))
+        self.assertLessEqual(report["score"], 0.5)
+
+    def test_loop_evaluator_pass_is_downgraded_for_blocking_visual_snapshot_metrics(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        (self.workspace / ".workflow/loop/contract.md").write_text(
+            "# Loop Contract\n\n## Done Criteria\n\n- Browser UI layout is visually correct.\n",
+            encoding="utf-8",
+        )
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        traces = self.workspace / ".workflow/loop/attempts/001/traces"
+        traces.mkdir(parents=True, exist_ok=True)
+        (traces / "tool_events.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                            "metrics": {
+                                "sampleClippedElements": [{"tag": "h1", "text": "todos"}],
+                            },
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "1",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertIn("clipped visible text or controls", " ".join(report["findings"]))
+
     def test_loop_evaluator_report_restart_contract_reopens_contract(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])

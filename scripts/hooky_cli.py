@@ -399,6 +399,8 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
         evidence_failures.append(
             "Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app."
         )
+    visual_failures = loop_attempt_blocking_visual_failures(workspace, attempt_id, report)
+    evidence_failures.extend(visual_failures)
     if not evidence_failures:
         return report
     amended = dict(report)
@@ -410,6 +412,123 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
     current_score = amended.get("score")
     amended["score"] = min(float(current_score), 0.5) if isinstance(current_score, int | float) else 0.5
     return amended
+
+
+def loop_attempt_blocking_visual_failures(workspace: Path, attempt_id: str, report: dict[str, Any]) -> list[str]:
+    if not loop_attempt_requires_visual_evidence(workspace):
+        return []
+    failures: list[str] = []
+    failures.extend(blocking_visual_failures_from_snapshot_events(loop_attempt_tool_events(workspace, attempt_id)))
+    findings_text = " ".join(str(item) for item in report.get("findings", []) if isinstance(item, str)).lower()
+    bottleneck_text = str(report.get("bottleneck") or "").lower()
+    report_text = f"{findings_text} {bottleneck_text}"
+    if report_mentions_blocking_visual_defect(report_text):
+        failures.append(
+            "Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content."
+        )
+    return unique_lines(failures)
+
+
+def loop_attempt_tool_events(workspace: Path, attempt_id: str) -> list[dict[str, Any]]:
+    tool_events = loop_attempt_dir(workspace, attempt_id) / "traces" / "tool_events.json"
+    if not tool_events.exists():
+        return []
+    try:
+        events = json.loads(tool_events.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(events, list):
+        return []
+    return [event for event in events if isinstance(event, dict)]
+
+
+def blocking_visual_failures_from_snapshot_events(events: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    for event in events:
+        if event.get("name") != "capture_visual_snapshot":
+            continue
+        result = event.get("result")
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            continue
+        metrics = result.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        content_bounds = metrics.get("contentBounds")
+        if isinstance(content_bounds, dict) and numeric_less_than(content_bounds.get("y"), 0):
+            failures.append("Evaluator cannot pass this attempt: visual snapshot primary content starts above the viewport.")
+        if metrics.get("horizontalOverflow") is True:
+            failures.append("Evaluator cannot pass this attempt: visual snapshot has horizontal overflow.")
+        overlaps = metrics.get("sampleHeadingInteractiveOverlaps")
+        if isinstance(overlaps, list) and overlaps:
+            failures.append("Evaluator cannot pass this attempt: visual snapshot has heading/control overlap.")
+        clipped = metrics.get("sampleClippedElements")
+        if isinstance(clipped, list):
+            for item in clipped:
+                if clipped_item_is_blocking(item):
+                    failures.append("Evaluator cannot pass this attempt: visual snapshot has clipped visible text or controls.")
+                    break
+    return unique_lines(failures)
+
+
+def numeric_less_than(value: object, limit: float) -> bool:
+    return isinstance(value, int | float) and float(value) < limit
+
+
+def clipped_item_is_blocking(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    tag = str(item.get("tag") or "").lower()
+    role = str(item.get("role") or "").lower()
+    text = str(item.get("text") or item.get("label") or "").strip()
+    blocking_tags = {"h1", "h2", "h3", "button", "input", "textarea", "select", "a", "label"}
+    blocking_roles = {"button", "link", "textbox", "checkbox", "radio", "combobox", "heading"}
+    return bool(text) or tag in blocking_tags or role in blocking_roles
+
+
+def report_mentions_blocking_visual_defect(text: str) -> bool:
+    if not text:
+        return False
+    visual_terms = (
+        "clipped",
+        "cut off",
+        "cut-off",
+        "off-screen",
+        "offscreen",
+        "above the viewport",
+        "outside the viewport",
+        "overflow",
+        "overlap",
+        "hidden primary",
+    )
+    primary_terms = (
+        "heading",
+        "title",
+        "text",
+        "content",
+        "control",
+        "button",
+        "input",
+        "link",
+        "todos",
+        "primary",
+        "ui",
+        "layout",
+    )
+    decorative_terms = ("decorative", "background", "ornament", "purely decorative")
+    if any(term in text for term in decorative_terms) and not any(term in text for term in primary_terms):
+        return False
+    return any(term in text for term in visual_terms) and any(term in text for term in primary_terms)
+
+
+def unique_lines(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for line in lines:
+        if line in seen:
+            continue
+        seen.add(line)
+        unique.append(line)
+    return unique
 
 
 def has_placeholder_only_tests(workspace: Path) -> bool:
@@ -470,17 +589,8 @@ def loop_attempt_requires_visual_evidence(workspace: Path) -> bool:
 
 
 def loop_attempt_captured_visual_snapshot(workspace: Path, attempt_id: str) -> bool:
-    tool_events = loop_attempt_dir(workspace, attempt_id) / "traces" / "tool_events.json"
-    if not tool_events.exists():
-        return False
-    try:
-        events = json.loads(tool_events.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(events, list):
-        return False
-    for event in events:
-        if not isinstance(event, dict) or event.get("name") != "capture_visual_snapshot":
+    for event in loop_attempt_tool_events(workspace, attempt_id):
+        if event.get("name") != "capture_visual_snapshot":
             continue
         result = event.get("result")
         if isinstance(result, dict) and result.get("ok") is True and result.get("screenshot_path"):
