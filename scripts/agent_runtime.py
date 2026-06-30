@@ -1467,6 +1467,20 @@ def run_tool_agent(
 
                 tool_calls = getattr(message, "tool_calls", None) or []
                 if not tool_calls:
+                    recovered_report = recover_text_final_report(runtime, assistant_message_text(message_payload))
+                    if recovered_report is not None:
+                        transcript.append(
+                            {
+                                "role": "runtime_notice",
+                                "kind": "recovered_text_final_report",
+                                "message": "Recovered final_report from assistant text because no tool call was emitted.",
+                                "started_at": utc_timestamp(),
+                                "ended_at": utc_timestamp(),
+                            }
+                        )
+                        append_live_event(runtime, format_runtime_event_line(transcript[-1]))
+                        flush_live_log()
+                        break
                     consecutive_no_tool_responses += 1
                     if runtime.no_tool_response_limit > 0 and consecutive_no_tool_responses > runtime.no_tool_response_limit:
                         raise AgentRunError(
@@ -1564,6 +1578,46 @@ def run_tool_agent(
     append_live_event(runtime, f"{utc_timestamp()} run success tool_calls={len(tool_events)} cost=${float(total_usage.get('cost') or 0):.8f}")
     flush_live_log(status="success")
     return current_result()
+
+
+def assistant_message_text(message_payload: dict[str, Any]) -> str:
+    content = message_payload.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or ""))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return ""
+
+
+def extract_json_object_from_text(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def recover_text_final_report(runtime: ToolRuntime, text: str) -> dict[str, Any] | None:
+    payload = extract_json_object_from_text(text)
+    if payload is None:
+        return None
+    try:
+        runtime.finish(payload)
+    except Exception:
+        return None
+    return payload
 
 
 def start_heartbeat_thread(

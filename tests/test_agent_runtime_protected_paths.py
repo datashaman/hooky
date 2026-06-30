@@ -214,6 +214,39 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("user kind=no_tool_calls", rendered)
         self.assertIn("Continue by using the available tools", rendered)
 
+    def test_recovers_text_final_report_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                final_validator=lambda report: None if report.get("status") == "done" else (_ for _ in ()).throw(ValueError("bad status")),
+            )
+
+            recovered = agent_runtime.recover_text_final_report(
+                runtime,
+                'Here is the report: {"status":"done","summary":"ok"}',
+            )
+
+            self.assertEqual(recovered, {"status": "done", "summary": "ok"})
+            self.assertEqual(runtime.final_report, {"status": "done", "summary": "ok"})
+
+    def test_rejects_invalid_text_final_report_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                final_validator=lambda report: (_ for _ in ()).throw(ValueError("bad report")),
+            )
+
+            recovered = agent_runtime.recover_text_final_report(runtime, '{"status":"done"}')
+
+            self.assertIsNone(recovered)
+            self.assertIsNone(runtime.final_report)
+
     def test_read_file_excerpt_and_many_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
