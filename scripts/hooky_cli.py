@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,9 @@ skills_app = typer.Typer(help="Inspect available agent skills.", no_args_is_help
 app.add_typer(skills_app, name="skills")
 
 DEFAULT_LAST_RUN_PATH = Path("/tmp/hooky-last-run-path")
+DEFAULT_RUN_KEY = "local"
+RUN_KEY_ENV = "HOOKY_RUN_KEY"
+RUN_DIR_ENV = "HOOKY_RUN_DIR"
 
 
 def utc_now() -> str:
@@ -43,12 +47,66 @@ def utc_now() -> str:
 def main(
     ctx: typer.Context,
     workspace: Annotated[Path, typer.Option("--workspace", "-C", help="Workspace directory. Defaults to current directory.")] = Path("."),
+    run_key: Annotated[str | None, typer.Option("--run-key", help="Durable loop run key under .hooky/runs/<key>.")] = None,
 ) -> None:
-    ctx.obj = {"workspace": workspace.resolve()}
+    resolved = workspace.resolve()
+    if run_key:
+        run_key = normalize_run_key(run_key)
+        os.environ[RUN_KEY_ENV] = run_key
+    ctx.obj = {"workspace": resolved, "run_key": run_key}
 
 
 def workspace_from_ctx(ctx: typer.Context) -> Path:
     return ctx.obj["workspace"]
+
+
+def normalize_run_key(value: str) -> str:
+    key = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip(".-")
+    if not key:
+        raise typer.BadParameter("run key must contain at least one letter or number")
+    return key[:120]
+
+
+def hooky_root(workspace: Path) -> Path:
+    return workspace / ".hooky"
+
+
+def run_dir_rel(run_key: str) -> str:
+    return f".hooky/runs/{normalize_run_key(run_key)}"
+
+
+def current_run_key_path(workspace: Path) -> Path:
+    return hooky_root(workspace) / "current.json"
+
+
+def read_current_run_key(workspace: Path) -> str | None:
+    path = current_run_key_path(workspace)
+    if not path.exists():
+        return None
+    try:
+        payload = read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
+    key = payload.get("run_key")
+    return normalize_run_key(key) if isinstance(key, str) and key.strip() else None
+
+
+def selected_run_key(workspace: Path) -> str:
+    env_key = os.environ.get(RUN_KEY_ENV)
+    if env_key:
+        key = normalize_run_key(env_key)
+    else:
+        key = read_current_run_key(workspace) or DEFAULT_RUN_KEY
+    os.environ[RUN_KEY_ENV] = key
+    os.environ[RUN_DIR_ENV] = run_dir_rel(key)
+    return key
+
+
+def set_current_run_key(workspace: Path, run_key: str) -> None:
+    run_key = normalize_run_key(run_key)
+    os.environ[RUN_KEY_ENV] = run_key
+    os.environ[RUN_DIR_ENV] = run_dir_rel(run_key)
+    write_json(current_run_key_path(workspace), {"schema_version": 1, "run_key": run_key, "updated_at": utc_now()})
 
 
 @contextmanager
@@ -62,7 +120,7 @@ def in_workspace(workspace: Path):
 
 
 def loop_dir(workspace: Path) -> Path:
-    return workspace / ".hooky"
+    return workspace / run_dir_rel(selected_run_key(workspace))
 
 
 def loop_attempts_dir(workspace: Path) -> Path:
@@ -109,6 +167,7 @@ def default_loop_feature_list() -> dict[str, Any]:
 def default_loop_state() -> dict[str, Any]:
     return {
         "schema_version": 1,
+        "run_key": None,
         "status": "initialized",
         "current_attempt": None,
         "attempts": [],
@@ -220,6 +279,8 @@ def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:
 
 
 def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str = "", force: bool = False) -> Path:
+    run_key = selected_run_key(workspace)
+    set_current_run_key(workspace, run_key)
     loop_root = loop_dir(workspace)
     if loop_state_path(workspace).exists() and not force:
         raise typer.BadParameter("loop already initialized. Use --force to overwrite.")
@@ -231,6 +292,7 @@ def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str =
         encoding="utf-8",
     )
     state = default_loop_state()
+    state["run_key"] = run_key
     state["created_at"] = utc_now()
     write_loop_state(workspace, state)
     contract_lines = ["# Loop Contract", ""]
@@ -764,26 +826,46 @@ def title_from_body(body: str) -> str | None:
     return first_line or None
 
 
-def write_last_run_workspace(path: Path, workspace: Path) -> None:
+def write_last_run_workspace(path: Path, workspace: Path, run_key: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(workspace.resolve().as_posix() + "\n", encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "workspace": workspace.resolve().as_posix(),
+        "run_key": normalize_run_key(run_key or selected_run_key(workspace)),
+    }
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def workspace_from_last_run(path: Path) -> Path | None:
+def last_run_from_path(path: Path) -> tuple[Path, str | None] | None:
     if not path.exists():
         return None
     raw = path.read_text(encoding="utf-8").strip()
     if not raw:
         return None
-    return Path(raw).expanduser().resolve()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return Path(raw).expanduser().resolve(), None
+    if not isinstance(payload, dict):
+        return None
+    workspace = payload.get("workspace")
+    if not isinstance(workspace, str) or not workspace.strip():
+        return None
+    run_key = payload.get("run_key")
+    normalized_key = normalize_run_key(run_key) if isinstance(run_key, str) and run_key.strip() else None
+    return Path(workspace).expanduser().resolve(), normalized_key
 
 
 def workspace_for_loop(ctx: typer.Context, last_run_path: Path = DEFAULT_LAST_RUN_PATH) -> Path:
     workspace = workspace_from_ctx(ctx)
     if loop_state_path(workspace).exists():
         return workspace
-    last_workspace = workspace_from_last_run(last_run_path)
-    if last_workspace and loop_state_path(last_workspace).exists():
+    last_run = last_run_from_path(last_run_path)
+    if last_run:
+        last_workspace, last_run_key = last_run
+        if last_run_key:
+            os.environ[RUN_KEY_ENV] = last_run_key
+    if last_run and loop_state_path(last_workspace).exists():
         return last_workspace
     return workspace
 
@@ -857,10 +939,13 @@ def init(
     git: Annotated[bool, typer.Option("--git/--no-git", help="Initialize a local git repository when the workspace is not already a worktree.")] = True,
     title: Annotated[str | None, typer.Option(help="Problem title for loop contract.md.")] = None,
     proposal_file: Annotated[Path | None, typer.Option(help="Optional problem proposal Markdown file.")] = None,
+    run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Initialize a workspace with loop runtime context."""
     workspace = workspace_from_ctx(ctx)
+    if run_key:
+        set_current_run_key(workspace, run_key)
     ensure_workspace_ready(workspace, git=git)
     proposal = read_optional_proposal_file_or_stdin(proposal_file)
     title = title or title_from_body(proposal)
@@ -932,6 +1017,7 @@ def loop_status(
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
     typer.echo(f"loop: {loop_dir(workspace)}")
+    typer.echo(f"run_key: {selected_run_key(workspace)}")
     typer.echo(f"status: {state.get('status')}")
     typer.echo(f"current_attempt: {state.get('current_attempt') or 'none'}")
     typer.echo(f"contract_accepted: {str(bool(state.get('contract_accepted'))).lower()}")
@@ -954,7 +1040,7 @@ def loop_watch(
     follow: Annotated[bool, typer.Option("--follow/--no-follow", "-f", help="Follow the loop log.")] = True,
     last_run_path: Annotated[Path, typer.Option(help="Path written by loop init/run; used when the current directory has no loop.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
-    """Show or follow .hooky/log.md."""
+    """Show or follow the selected run's log.md."""
     workspace = workspace_for_loop(ctx, last_run_path)
     ctx.obj["workspace"] = workspace
     ensure_loop_initialized(workspace)
@@ -1144,6 +1230,7 @@ def loop_inspect(
     root = loop_debug_root(workspace, state, attempt)
     attempt_id = attempt or latest_loop_attempt_id(state) or "contract"
     typer.echo(f"loop: {loop_dir(workspace)}")
+    typer.echo(f"run_key: {selected_run_key(workspace)}")
     typer.echo(f"status: {state.get('status')}")
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"runtime_log: {root / 'runtime_events.log'}")
@@ -1514,10 +1601,13 @@ def loop_run(
     bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.", hidden=True)] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
+    run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Run the Karpathy-style loop suite through one attempt."""
     workspace = workspace_from_ctx(ctx)
+    if run_key:
+        set_current_run_key(workspace, run_key)
     ensure_workspace_ready(workspace)
     if proposal_file is not None:
         proposal = resolve_workspace_path(workspace, proposal_file).read_text(encoding="utf-8")
@@ -1649,6 +1739,7 @@ def run_default(
     bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.", hidden=True)] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
+    run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Run the loop pipeline."""
@@ -1664,6 +1755,7 @@ def run_default(
         bottleneck=bottleneck,
         dry_run=dry_run,
         force=force,
+        run_key=run_key,
         last_run_path=last_run_path,
     )
 
@@ -1675,7 +1767,7 @@ def loop_log(
     title: Annotated[str, typer.Option(help="Short log title.")] = "manual note",
     body: Annotated[str, typer.Option(help="Optional log body.")] = "",
 ) -> None:
-    """Append an entry to .hooky/log.md."""
+    """Append an entry to the selected run's log.md."""
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     append_loop_log(workspace, op, title, body)
@@ -2113,10 +2205,13 @@ def start(
     proposal_file: Annotated[Path | None, typer.Option(help="Problem proposal Markdown file.")] = None,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
     skill: Annotated[list[str] | None, typer.Option("--skill", help="Preselect an agent skill by name for this run. Repeat for multiple skills.")] = None,
+    run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by `hooky watch` to find the latest workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Start the loop pipeline and register this workspace for `hooky watch`."""
     workspace = workspace_from_ctx(ctx)
+    if run_key:
+        set_current_run_key(workspace, run_key)
     if skill:
         os.environ["HOOKY_ACTIVE_SKILLS"] = ",".join(skill)
     proposal_text = proposal
@@ -2126,7 +2221,7 @@ def start(
     typer.echo(f"workspace: {workspace}")
     if skill:
         typer.echo(f"skills: {', '.join(skill)}")
-    typer.echo(f"watch: uv run hooky watch")
+    typer.echo("watch: hooky watch")
     run_model_loop_once(workspace, title=title, proposal=proposal_text, force=force, last_run_path=last_run_path)
 
 

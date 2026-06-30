@@ -16,7 +16,25 @@ from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, ru
 
 SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")
-LOOP_PROPOSAL_PATH = Path(".hooky/proposal.md")
+DEFAULT_RUNTIME_DIR = ".hooky/runs/local"
+RUNTIME_DIR_ENV = "HOOKY_RUN_DIR"
+
+
+def runtime_dir() -> str:
+    raw = os.environ.get(RUNTIME_DIR_ENV, DEFAULT_RUNTIME_DIR).strip().strip("/")
+    return raw or DEFAULT_RUNTIME_DIR
+
+
+def runtime_rel(*parts: str) -> str:
+    return "/".join([runtime_dir(), *[part.strip("/") for part in parts if part]])
+
+
+def runtime_path(working_folder: Path, *parts: str) -> Path:
+    return working_folder / runtime_rel(*parts)
+
+
+def tool_results_rel() -> str:
+    return runtime_rel("tool-results")
 
 
 def read_selected_model(path: Path) -> dict[str, Any]:
@@ -75,7 +93,7 @@ def selected_evaluator_attempt_model_metadata() -> dict[str, Any]:
 
 
 def read_loop_proposal(working_folder: Path) -> str:
-    path = working_folder / LOOP_PROPOSAL_PATH
+    path = runtime_path(working_folder, "proposal.md")
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
@@ -105,7 +123,7 @@ def planner_schema() -> dict[str, Any]:
         "required": ["status", "contract_path", "summary"],
         "properties": {
             "status": {"type": "string", "enum": ["done", "blocked"]},
-            "contract_path": {"type": "string", "enum": [".hooky/contract.md"]},
+            "contract_path": {"type": "string", "enum": [runtime_rel("contract.md")]},
             "summary": {"type": "string"},
         },
     }
@@ -118,8 +136,8 @@ def generator_contract_schema() -> dict[str, Any]:
         "required": ["status", "contract_path", "feature_list_path", "summary"],
         "properties": {
             "status": {"type": "string", "enum": ["done", "blocked"]},
-            "contract_path": {"type": "string", "enum": [".hooky/contract.md"]},
-            "feature_list_path": {"type": "string", "enum": [".hooky/feature_list.json"]},
+            "contract_path": {"type": "string", "enum": [runtime_rel("contract.md")]},
+            "feature_list_path": {"type": "string", "enum": [runtime_rel("feature_list.json")]},
             "summary": {"type": "string"},
         },
     }
@@ -175,27 +193,30 @@ def evaluator_attempt_schema() -> dict[str, Any]:
 
 
 def validate_planner_report(report: dict[str, Any], working_folder: Path) -> None:
-    if report.get("contract_path") != ".hooky/contract.md":
-        raise ValueError("planner must report contract_path=.hooky/contract.md")
-    contract = working_folder / ".hooky/contract.md"
+    contract_rel = runtime_rel("contract.md")
+    if report.get("contract_path") != contract_rel:
+        raise ValueError(f"planner must report contract_path={contract_rel}")
+    contract = runtime_path(working_folder, "contract.md")
     if not contract.exists() or not contract.read_text(encoding="utf-8").strip():
-        raise ValueError("planner must write non-empty .hooky/contract.md")
+        raise ValueError(f"planner must write non-empty {contract_rel}")
 
 
 def validate_generator_contract_report(report: dict[str, Any], working_folder: Path) -> None:
-    if report.get("contract_path") != ".hooky/contract.md":
-        raise ValueError("generator must report contract_path=.hooky/contract.md")
-    if report.get("feature_list_path") != ".hooky/feature_list.json":
-        raise ValueError("generator must report feature_list_path=.hooky/feature_list.json")
-    contract = working_folder / ".hooky/contract.md"
-    feature_list = working_folder / ".hooky/feature_list.json"
+    contract_rel = runtime_rel("contract.md")
+    feature_list_rel = runtime_rel("feature_list.json")
+    if report.get("contract_path") != contract_rel:
+        raise ValueError(f"generator must report contract_path={contract_rel}")
+    if report.get("feature_list_path") != feature_list_rel:
+        raise ValueError(f"generator must report feature_list_path={feature_list_rel}")
+    contract = runtime_path(working_folder, "contract.md")
+    feature_list = runtime_path(working_folder, "feature_list.json")
     contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
     if not contract.exists() or "## Done Criteria" not in contract_text:
-        raise ValueError("generator must write done criteria into .hooky/contract.md")
+        raise ValueError(f"generator must write done criteria into {contract_rel}")
     if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(contract_text):
         raise ValueError("generator must define a substantive Taste Rubric for reference visual requirements")
     if not feature_list.exists():
-        raise ValueError("generator must write .hooky/feature_list.json")
+        raise ValueError(f"generator must write {feature_list_rel}")
     payload = json.loads(feature_list.read_text(encoding="utf-8"))
     if not isinstance(payload.get("features"), list):
         raise ValueError("feature_list.json must include features array")
@@ -209,13 +230,13 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
 
 def validate_generator_contract_write(working_folder: Path, path: Path, content: str) -> None:
     relative = path.resolve().relative_to(working_folder.resolve()).as_posix()
-    if relative == ".hooky/contract.md":
+    if relative == runtime_rel("contract.md"):
         if "## Done Criteria" not in content or len(content.strip()) < 100:
             raise ValueError("contract.md writes must preserve a substantive ## Done Criteria section")
         if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(content):
             raise ValueError("contract.md must include a substantive Taste Rubric for reference visual requirements")
         return
-    if relative == ".hooky/feature_list.json":
+    if relative == runtime_rel("feature_list.json"):
         payload = json.loads(content)
         if not isinstance(payload.get("features"), list):
             raise ValueError("feature_list.json writes must include a features array")
@@ -234,7 +255,7 @@ def validate_evaluator_contract_report(report: dict[str, Any], working_folder: P
     if not report["accepted"] and not [item for item in changes if item.strip()]:
         raise ValueError("rejected contract must include required_changes")
     if report["accepted"]:
-        contract = working_folder / ".hooky/contract.md"
+        contract = runtime_path(working_folder, "contract.md")
         contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
         if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(contract_text):
             raise ValueError("accepted contract must include a substantive Taste Rubric for reference visual requirements")
@@ -268,7 +289,7 @@ def validate_evaluator_attempt_report(report: dict[str, Any], working_folder: Pa
         raise ValueError("evaluator findings must be strings")
     if report.get("status") == "fail" and not [item for item in findings if item.strip()]:
         raise ValueError("failed evaluator report must include findings")
-    contract = working_folder / ".hooky/contract.md"
+    contract = runtime_path(working_folder, "contract.md")
     contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
     if taste_rubric_is_substantive(contract_text):
         rubric_scores = report.get("rubric_scores")
@@ -379,9 +400,9 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".hooky"
+    live_root = runtime_path(working_folder)
     if attempt_id:
-        live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
+        live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=planner_schema(),
@@ -391,12 +412,12 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
         final_validator=lambda report: validate_planner_report(report, working_folder),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
-        write_allowed_prefixes=[".hooky"],
+        write_allowed_prefixes=[runtime_dir()],
         write_blocked_prefixes=[],
-        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_allowed_prefixes=[runtime_dir(), tool_results_rel()],
         read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
+        live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=planner ",
     )
     try:
@@ -441,9 +462,9 @@ def generate_generator_contract_artifacts(
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".hooky"
+    live_root = runtime_path(working_folder)
     if attempt_id:
-        live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
+        live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=generator_contract_schema(),
@@ -454,12 +475,12 @@ def generate_generator_contract_artifacts(
         write_validator=lambda path, content: validate_generator_contract_write(working_folder, path, content),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
-        write_allowed_prefixes=[".hooky/contract.md", ".hooky/feature_list.json"],
+        write_allowed_prefixes=[runtime_rel("contract.md"), runtime_rel("feature_list.json")],
         write_blocked_prefixes=[],
-        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_allowed_prefixes=[runtime_dir(), tool_results_rel()],
         read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
+        live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=generator ",
     )
     try:
@@ -467,7 +488,7 @@ def generate_generator_contract_artifacts(
             model=model,
             system=generator_contract_system_prompt(),
             user=generator_contract_user_prompt(
-                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
                 read_loop_proposal(working_folder),
                 model_metadata,
                 review_feedback=review_feedback,
@@ -504,9 +525,9 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".hooky"
+    live_root = runtime_path(working_folder)
     if attempt_id:
-        live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
+        live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=evaluator_contract_schema(),
@@ -517,10 +538,10 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=False,
         enabled_tools=["final_report"],
-        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_allowed_prefixes=[runtime_dir(), tool_results_rel()],
         read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
+        live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=evaluator ",
     )
     try:
@@ -528,8 +549,8 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
             model=model,
             system=evaluator_contract_system_prompt(),
             user=evaluator_contract_user_prompt(
-                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
-                (working_folder / ".hooky/feature_list.json").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
                 read_loop_proposal(working_folder),
                 model_metadata,
             ),
@@ -570,7 +591,7 @@ def generate_generator_implementation_artifacts(
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
+    live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=generator_implementation_schema(),
@@ -581,10 +602,10 @@ def generate_generator_implementation_artifacts(
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
         write_blocked_prefixes=[".hooky"],
-        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_allowed_prefixes=[runtime_dir(), tool_results_rel()],
         read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
+        live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=generator ",
     )
     try:
@@ -592,8 +613,8 @@ def generate_generator_implementation_artifacts(
             model=model,
             system=generator_implementation_system_prompt(),
             user=generator_implementation_user_prompt(
-                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
-                (working_folder / ".hooky/feature_list.json").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
                 attempt_id,
                 model_metadata,
                 evaluator_feedback=evaluator_feedback,
@@ -630,7 +651,7 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
     working_folder = working_folder.resolve()
     model = selected_evaluator_attempt_model()
     model_metadata = selected_evaluator_attempt_model_metadata()
-    live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
+    live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=evaluator_attempt_schema(),
@@ -640,10 +661,10 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
         final_validator=lambda report: validate_evaluator_attempt_report(report, working_folder),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=False,
-        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_allowed_prefixes=[runtime_dir(), tool_results_rel()],
         read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
+        live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=evaluator ",
     )
     try:
@@ -651,8 +672,8 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
             model=model,
             system=evaluator_attempt_system_prompt(),
             user=evaluator_attempt_user_prompt(
-                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
-                (working_folder / ".hooky/feature_list.json").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+                runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
                 attempt_id,
                 model_metadata,
             ),
@@ -683,19 +704,21 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
 
 
 def planner_system_prompt() -> str:
-    return """You are the planner in a three-role Karpathy-style loop.
+    contract_path = runtime_rel("contract.md")
+    return f"""You are the planner in a three-role Karpathy-style loop.
 
-You have one responsibility: turn vague user input into the problem proposal in .hooky/contract.md.
+You have one responsibility: turn vague user input into the problem proposal in {contract_path}.
 
 You must never edit production code, tests, attempt artifacts, or evaluator reports.
 You must not write the final grading contract. The generator proposes done criteria later and the evaluator reviews them.
 
-Use write_file only for .hooky/contract.md. Preserve the loop vocabulary: planner, generator, evaluator, loop-runner, attempt.
+Use write_file only for {contract_path}. Preserve the loop vocabulary: planner, generator, evaluator, loop-runner, attempt.
 Finish only with final_report.
 """
 
 
 def planner_user_prompt(proposal: str, model_metadata: dict[str, Any]) -> str:
+    contract_path = runtime_rel("contract.md")
     return f"""Problem proposal input:
 
 {proposal.strip() or "(no proposal provided)"}
@@ -705,7 +728,7 @@ Selected model:
 {json.dumps(model_metadata, indent=2, sort_keys=True)}
 ```
 
-Write .hooky/contract.md with:
+Write {contract_path} with:
 - title
 - problem proposal
 - non-goals or unknowns if any
@@ -717,14 +740,16 @@ Then call final_report with status, contract_path, and summary.
 
 
 def generator_contract_system_prompt() -> str:
-    return """You are the generator in a three-role Karpathy-style loop.
+    contract_path = runtime_rel("contract.md")
+    feature_list_path = runtime_rel("feature_list.json")
+    return f"""You are the generator in a three-role Karpathy-style loop.
 
 This is contract negotiation only. You must not edit production code, tests, package files, or attempt artifacts.
 
-Your job is to propose concrete, testable done criteria in .hooky/contract.md and project them into .hooky/feature_list.json.
+Your job is to propose concrete, testable done criteria in {contract_path} and project them into {feature_list_path}.
 The evaluator will accept or reject the contract. You cannot approve your own criteria.
 
-Use write_file only for .hooky/contract.md and .hooky/feature_list.json.
+Use write_file only for {contract_path} and {feature_list_path}.
 Finish only with final_report.
 """
 
@@ -736,6 +761,8 @@ def generator_contract_user_prompt(
     *,
     review_feedback: str = "",
 ) -> str:
+    contract_path = runtime_rel("contract.md")
+    feature_list_path = runtime_rel("feature_list.json")
     feedback_section = ""
     if review_feedback.strip():
         feedback_section = f"""
@@ -765,7 +792,7 @@ Selected model:
 ```
 {feedback_section}
 
-Revise .hooky/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
+Revise {contract_path} so the Done Criteria section contains a checklist of concrete, testable assertions.
 If the original proposal contains bullet, checkbox, or numbered checklist items, preserve every item as an acceptance requirement or split it into more specific requirements. Do not drop checklist items just because they seem obvious.
 If the original proposal cites a visual reference, canonical template, official CSS, or reference implementation, convert that into a substantive Taste Rubric instead of leaving taste optional. The rubric must include design, originality, craft, and functionality axes. For canonical/template work, originality should score restraint and fidelity rather than novelty.
 For TodoMVC-style reference work, explicitly require:
@@ -774,7 +801,7 @@ For TodoMVC-style reference work, explicitly require:
 - visual checks cover empty, populated, completed/filter, and editing states;
 - browser-default controls, overlapping footer/filter controls, collapsed footer/main regions, or missing canonical affordances fail the attempt.
 
-Write .hooky/feature_list.json with this shape:
+Write {feature_list_path} with this shape:
 ```json
 {{
   "schema_version": 1,
