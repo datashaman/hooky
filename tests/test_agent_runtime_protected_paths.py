@@ -115,6 +115,86 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertIn("background process", background["error"])
             self.assertTrue(help_command["ok"])
 
+    def test_write_file_requires_current_uncompacted_read_of_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/App.jsx"
+            source.parent.mkdir()
+            source.write_text("before", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            with self.assertRaisesRegex(ValueError, "was not read in the current uncompacted context"):
+                runtime.write_file({"path": "src/App.jsx", "content": "after"})
+
+            runtime.read_file({"path": "src/App.jsx"})
+            result = runtime.write_file({"path": "src/App.jsx", "content": "after"})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(source.read_text(encoding="utf-8"), "after")
+
+    def test_write_file_requires_reread_when_existing_file_changed_after_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/App.jsx"
+            source.parent.mkdir()
+            source.write_text("before", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            runtime.read_file({"path": "src/App.jsx"})
+            source.write_text("changed elsewhere", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "changed since it was read"):
+                runtime.write_file({"path": "src/App.jsx", "content": "after"})
+
+    def test_compaction_invalidates_read_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/App.jsx"
+            source.parent.mkdir()
+            source.write_text("before", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            runtime.read_file({"path": "src/App.jsx"})
+            runtime.advance_read_generation()
+
+            with self.assertRaisesRegex(ValueError, "current uncompacted context"):
+                runtime.write_file({"path": "src/App.jsx", "content": "after"})
+
+    def test_write_allowed_prefixes_remain_available_for_system_artifact_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / ".workflow/loop/contract.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("before", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                write_allowed_prefixes=[".workflow/loop/contract.md"],
+                write_blocked_prefixes=[],
+            )
+
+            result = runtime.write_file({"path": ".workflow/loop/contract.md", "content": "after"})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(artifact.read_text(encoding="utf-8"), "after")
+
     def test_timed_out_shell_command_terminates_process_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

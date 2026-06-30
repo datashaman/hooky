@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fnmatch
 import base64
+import hashlib
 import json
 import mimetypes
 import os
@@ -102,6 +103,8 @@ class ToolRuntime:
     activated_skill_names: set[str] = field(default_factory=set)
     preselected_skill_names: list[str] = field(default_factory=list)
     enabled_tools: list[str] | None = None
+    read_generation: int = 0
+    read_observations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.working_folder = Path(self.working_folder).resolve()
@@ -488,7 +491,9 @@ class ToolRuntime:
     def read_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
         self.validate_read_path(path)
-        return {"ok": True, "path": relative_to(path, self.working_folder), "content": path.read_text(encoding="utf-8")}
+        content = path.read_text(encoding="utf-8")
+        self.record_read_observation(path, content)
+        return {"ok": True, "path": relative_to(path, self.working_folder), "content": content}
 
     def read_file_excerpt(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
@@ -548,12 +553,36 @@ class ToolRuntime:
     def write_file(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
         self.validate_write_path(path)
+        self.validate_write_has_current_read(path)
         content = str(args["content"])
         if self.write_validator:
             self.write_validator(path, content)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return {"ok": True, "path": relative_to(path, self.working_folder), "bytes": path.stat().st_size}
+
+    def record_read_observation(self, path: Path, content: str) -> None:
+        relative = relative_to(path.resolve(), self.working_folder)
+        self.read_observations[relative] = {
+            "generation": self.read_generation,
+            "sha256": content_sha256(content),
+            "size": len(content.encode("utf-8")),
+        }
+
+    def advance_read_generation(self) -> None:
+        self.read_generation += 1
+        self.read_observations.clear()
+
+    def validate_write_has_current_read(self, path: Path) -> None:
+        if not path.exists() or self.is_write_allowed_prefix_path(path):
+            return
+        relative = relative_to(path.resolve(), self.working_folder)
+        observation = self.read_observations.get(relative)
+        if not observation or observation.get("generation") != self.read_generation:
+            raise ValueError(f"write_file blocked: {relative} was not read in the current uncompacted context. Call read_file first.")
+        current_hash = file_sha256(path)
+        if current_hash != observation.get("sha256"):
+            raise ValueError(f"write_file blocked: {relative} changed since it was read. Call read_file again before writing.")
 
     def write_spec_contract(self, args: dict[str, Any]) -> dict[str, Any]:
         if not self.spec_contract_write_enabled:
@@ -592,6 +621,17 @@ class ToolRuntime:
                 raise FileNotFoundError(f"path not found: {relative}")
         if path.name in set(self.write_blocked_names):
             raise ValueError(f"agent is not allowed to write system-managed file: {relative}")
+
+    def is_write_allowed_prefix_path(self, path: Path) -> bool:
+        if not self.write_allowed_prefixes:
+            return False
+        relative = relative_to(path.resolve(), self.working_folder)
+        parts = Path(relative).parts
+        for prefix in self.write_allowed_prefixes:
+            prefix_parts = Path(prefix).parts
+            if parts[: len(prefix_parts)] == prefix_parts:
+                return True
+        return False
 
     def list_files(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args.get("path") or "."))
@@ -1403,6 +1443,7 @@ def run_tool_agent(
                     transcript.append({"role": "pre_compaction", **pre_compaction_archive})
                     flush_live_log()
                 if compaction_event:
+                    runtime.advance_read_generation()
                     usage = compaction_event.get("usage") or {}
                     accumulate_usage(total_usage, usage)
                     compaction_events.append(compaction_event)
@@ -2918,6 +2959,18 @@ def shell_backgrounds_process(command: str) -> bool:
             continue
         return True
     return False
+
+
+def content_sha256(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def write_tool_result_artifact(root: Path, category: str, content: str) -> str:
