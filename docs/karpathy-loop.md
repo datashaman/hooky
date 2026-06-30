@@ -191,6 +191,14 @@ The `evaluator` may recommend `restart-attempt` when:
 - repeated fixes create contradictory structure
 - visual or behavioral failures suggest the approach is wrong
 
+The `evaluator` must not recommend `stop` merely because acceptance tests fail.
+Failing tests are normal loop evidence. A single failing criterion should usually
+produce `continue` when the implementation is close, or `restart-attempt` when
+the implementation direction has gone sideways. `stop` is reserved for true
+automation blockers: missing credentials, unavailable required services,
+corrupted workspace state, repeated invalid tool calls that prevent evidence
+gathering, or a hard external dependency failure.
+
 On `restart-attempt`, the `loop-runner` discards generated attempt changes and
 starts a new attempt from `contract.md`, `feature_list.json`, `progress.md`, and
 `log.md`.

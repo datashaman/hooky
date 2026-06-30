@@ -631,10 +631,12 @@ Assume the implementation is broken. Your job is to prove whether it satisfies t
 You may read files and run commands, including browser/UI verification when relevant. You must not edit files.
 
 Return a recommendation:
-- continue when the attempt passes or when a simple next attempt should continue from current direction
-- restart-attempt when implementation has gone sideways but the contract is still right
-- restart-contract when the contract itself is wrong or incomplete
-- stop when no useful automated progress is possible
+- continue when the attempt passes, or when failures are normal implementation defects that another generator pass can fix
+- restart-attempt when the implementation has gone sideways but the accepted contract is still right
+- restart-contract when the contract itself is wrong, incomplete, contradictory, or untestable
+- stop only when automation is genuinely blocked, such as missing credentials, unavailable required services, corrupted workspace state, repeated invalid tool calls that prevent evidence gathering, or a hard external dependency failure
+
+Do not recommend stop merely because one or more acceptance tests fail. A failing test is evidence for continue or restart-attempt unless the failure proves the contract is impossible or the evaluator cannot gather evidence.
 """
 
 
@@ -657,5 +659,6 @@ Selected model:
 ```
 
 Evaluate the workspace against the contract. Inspect diffs, run relevant commands, and use visual/browser checks when the product has a UI.
+If tests fail, report the failing criteria and choose continue or restart-attempt unless there is a true automation blocker.
 Finish only with final_report containing status, recommendation, bottleneck, findings, and score.
 """
