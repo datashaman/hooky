@@ -509,7 +509,7 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("pipeline remediation limit reached (1)", saved["pipeline_status"]["error"])
         self.assertEqual(saved["pipeline_status"]["remediation_attempts"], 1)
 
-    def test_loop_init_creates_four_durable_state_files(self) -> None:
+    def test_loop_init_creates_durable_state_files(self) -> None:
         result = CliRunner().invoke(
             hooky_cli.app,
             ["-C", str(self.workspace), "loop", "init", "--title", "Build a todo app"],
@@ -520,8 +520,11 @@ class HookyProgressTests(unittest.TestCase):
         self.assertTrue((self.workspace / ".workflow/loop/progress.md").exists())
         self.assertTrue((self.workspace / ".workflow/loop/contract.md").exists())
         self.assertTrue((self.workspace / ".workflow/loop/log.md").exists())
+        self.assertTrue((self.workspace / ".workflow/loop/proposal.md").exists())
         contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
         self.assertIn("Build a todo app", contract)
+        proposal = (self.workspace / ".workflow/loop/proposal.md").read_text(encoding="utf-8")
+        self.assertIn("Build a todo app", proposal)
         feature_list = hooky_cli.read_json(self.workspace / ".workflow/loop/feature_list.json")
         self.assertEqual(feature_list["features"], [])
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
@@ -584,7 +587,9 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(contract.exit_code, 0, contract.output)
         self.assertEqual(review.exit_code, 0, review.output)
         contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
+        proposal_artifact = (self.workspace / ".workflow/loop/proposal.md").read_text(encoding="utf-8")
         self.assertIn("Build a browser todo app.", contract)
+        self.assertIn("Build a browser todo app.", proposal_artifact)
         self.assertIn("- Add todos", contract)
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertIn("Missing route criteria.", log)
@@ -869,6 +874,69 @@ class HookyProgressTests(unittest.TestCase):
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertIn("contract rejected round 1", log)
         self.assertIn("contract accepted round 2", log)
+
+    def test_loop_run_allows_five_contract_rounds_by_default(self) -> None:
+        runner = CliRunner()
+        contract_calls = 0
+        review_calls = 0
+
+        def fake_planner(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            (working_folder / ".workflow/loop/contract.md").write_text(
+                "# Loop Contract\n\n## Proposal\n\nBuild something.\n",
+                encoding="utf-8",
+            )
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Proposal ready."}, {"cost": 0.01}
+
+        def fake_contract(
+            *,
+            working_folder: Path,
+            attempt_id: str | None = None,
+            review_feedback: str = "",
+        ) -> tuple[dict[str, object], dict[str, object]]:
+            nonlocal contract_calls
+            contract_calls += 1
+            (working_folder / ".workflow/loop/contract.md").write_text(
+                "# Loop Contract\n\n## Done Criteria\n\n- A concrete assertion that is still incomplete.\n",
+                encoding="utf-8",
+            )
+            (working_folder / ".workflow/loop/feature_list.json").write_text(
+                json.dumps({"schema_version": 1, "features": [{"id": "F001", "text": "Incomplete", "status": "pending"}]}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "status": "done",
+                "contract_path": ".workflow/loop/contract.md",
+                "feature_list_path": ".workflow/loop/feature_list.json",
+                "summary": "Contract proposed.",
+            }, {"cost": 0.02}
+
+        def fake_contract_review(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            nonlocal review_calls
+            review_calls += 1
+            return {
+                "status": "done",
+                "accepted": False,
+                "review": "Still weak.",
+                "required_changes": ["Add missing acceptance criteria."],
+            }, {"cost": 0.03}
+
+        patches = [
+            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+        ]
+        with patches[0], patches[1], patches[2]:
+            result = runner.invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "loop", "run", "--proposal", "Build something"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("status: contract-rejected", result.output)
+        self.assertEqual(contract_calls, 5)
+        self.assertEqual(review_calls, 5)
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertIn("contract rejected round 5", log)
 
     def test_loop_run_retries_attempts_with_evaluator_feedback(self) -> None:
         runner = CliRunner()

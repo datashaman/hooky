@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, ru
 SELECTED_MODEL_PATH = Path(".workflow/agents/spec/selected_model.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".workflow/agents/eval/selected_model.json")
 COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
+LOOP_PROPOSAL_PATH = Path(".workflow/loop/proposal.md")
 
 
 def selected_model() -> str:
@@ -73,6 +75,30 @@ def common_static_files() -> dict[str, str]:
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(COMMON_STATIC_CONTEXT_ROOT.glob("*.md"))
     }
+
+
+def read_loop_proposal(working_folder: Path) -> str:
+    path = working_folder / LOOP_PROPOSAL_PATH
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def proposal_checklist_items(proposal: str) -> list[str]:
+    items: list[str] = []
+    for raw_line in proposal.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("- [ ] ", "- [x] ", "- [X] ")):
+            items.append(line[6:].strip())
+        elif line.startswith(("- ", "* ")):
+            items.append(line[2:].strip())
+        else:
+            numbered = re.match(r"^\d+\.\s+(.+)$", line)
+            if numbered:
+                items.append(numbered.group(1).strip())
+    return [item for item in items if item]
 
 
 def planner_schema() -> dict[str, Any]:
@@ -168,6 +194,12 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
     payload = json.loads(feature_list.read_text(encoding="utf-8"))
     if not isinstance(payload.get("features"), list):
         raise ValueError("feature_list.json must include features array")
+    proposal_items = proposal_checklist_items(read_loop_proposal(working_folder))
+    if proposal_items and len(payload["features"]) < len(proposal_items):
+        raise ValueError(
+            f"feature_list.json must cover every proposal checklist item: "
+            f"{len(payload['features'])} features for {len(proposal_items)} proposal items"
+        )
 
 
 def validate_generator_contract_write(working_folder: Path, path: Path, content: str) -> None:
@@ -319,6 +351,7 @@ def generate_generator_contract_artifacts(
             system=generator_contract_system_prompt(),
             user=generator_contract_user_prompt(
                 (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
+                read_loop_proposal(working_folder),
                 model_metadata,
                 review_feedback=review_feedback,
             ),
@@ -380,6 +413,7 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
             user=evaluator_contract_user_prompt(
                 (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
                 (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                read_loop_proposal(working_folder),
                 model_metadata,
             ),
             runtime=runtime,
@@ -578,7 +612,13 @@ Finish only with final_report.
 """
 
 
-def generator_contract_user_prompt(contract: str, model_metadata: dict[str, Any], *, review_feedback: str = "") -> str:
+def generator_contract_user_prompt(
+    contract: str,
+    proposal: str,
+    model_metadata: dict[str, Any],
+    *,
+    review_feedback: str = "",
+) -> str:
     feedback_section = ""
     if review_feedback.strip():
         feedback_section = f"""
@@ -590,7 +630,13 @@ Evaluator rejected the previous contract. Required revision feedback:
 
 Address every required change before calling final_report.
 """
-    return f"""Current contract.md:
+    return f"""Original proposal artifact:
+
+```markdown
+{proposal.strip() or "(no durable proposal artifact was provided)"}
+```
+
+Current contract.md:
 
 ```markdown
 {contract}
@@ -603,6 +649,7 @@ Selected model:
 {feedback_section}
 
 Revise .workflow/loop/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
+If the original proposal contains bullet, checkbox, or numbered checklist items, preserve every item as an acceptance requirement or split it into more specific requirements. Do not drop checklist items just because they seem obvious.
 
 Write .workflow/loop/feature_list.json with this shape:
 ```json
@@ -612,12 +659,14 @@ Write .workflow/loop/feature_list.json with this shape:
     {{
       "id": "F001",
       "text": "testable assertion",
+      "proposal_refs": ["short quote or identifier from the proposal item covered by this feature"],
       "status": "pending"
     }}
   ]
 }}
 ```
 
+Every proposal checklist item must be represented by at least one feature. Use proposal_refs to make coverage auditable.
 Then call final_report with status, contract_path, feature_list_path, and summary.
 """
 
@@ -634,8 +683,18 @@ You cannot write code, tests, contract changes, or inspect the workspace. You ca
 """
 
 
-def evaluator_contract_user_prompt(contract: str, feature_list: str, model_metadata: dict[str, Any]) -> str:
+def evaluator_contract_user_prompt(
+    contract: str,
+    feature_list: str,
+    proposal: str,
+    model_metadata: dict[str, Any],
+) -> str:
     return f"""Review this proposed contract and feature list.
+
+Original proposal artifact:
+```markdown
+{proposal.strip() or "(no durable proposal artifact was provided)"}
+```
 
 contract.md:
 ```markdown
@@ -653,6 +712,7 @@ Selected model:
 ```
 
 Accept only if the Done Criteria are concrete, testable, within the planner proposal, and sufficient for a small working product.
+If the original proposal contains bullet, checkbox, or numbered checklist items, reject unless every item is covered by Done Criteria and feature_list entries. Use proposal_refs when available, but inspect the text yourself.
 If rejecting, list required_changes as specific edits the generator should make to the contract.
 Finish only by calling final_report. Do not describe final_report in markdown; call the tool with JSON arguments matching the schema.
 """

@@ -116,6 +116,10 @@ def loop_contract_path(workspace: Path) -> Path:
     return loop_dir(workspace) / "contract.md"
 
 
+def loop_proposal_path(workspace: Path) -> Path:
+    return loop_dir(workspace) / "proposal.md"
+
+
 def loop_log_path(workspace: Path) -> Path:
     return loop_dir(workspace) / "log.md"
 
@@ -258,6 +262,11 @@ def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str =
         raise typer.BadParameter("loop already initialized. Use --force to overwrite.")
     loop_root.mkdir(parents=True, exist_ok=True)
     write_json(loop_feature_list_path(workspace), default_loop_feature_list())
+    proposal_artifact = proposal.strip() or (title or "").strip()
+    loop_proposal_path(workspace).write_text(
+        proposal_artifact + ("\n" if proposal_artifact else ""),
+        encoding="utf-8",
+    )
     state = default_loop_state()
     state["created_at"] = utc_now()
     write_loop_state(workspace, state)
@@ -1826,7 +1835,7 @@ def run_model_loop_once(
     write_loop_progress(workspace, state, note=str(planner_report.get("summary") or "Planner wrote contract proposal."))
     append_loop_log(workspace, "planner", "planner wrote contract", str(planner_report.get("summary") or ""))
 
-    max_contract_rounds = int(os.environ.get("LOOP_CONTRACT_MAX_ROUNDS", "3"))
+    max_contract_rounds = int(os.environ.get("LOOP_CONTRACT_MAX_ROUNDS", "5"))
     review_feedback = ""
     accepted = False
     review = ""
@@ -2128,6 +2137,7 @@ def loop_proposal(
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     proposal_text = read_body_arg_or_file(proposal, proposal_file)
+    loop_proposal_path(workspace).write_text(proposal_text.strip() + ("\n" if proposal_text.strip() else ""), encoding="utf-8")
     path = loop_contract_path(workspace)
     path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal_text), encoding="utf-8")
     state = read_loop_state(workspace)

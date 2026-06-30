@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import os
+import json
 from unittest import mock
 from pathlib import Path
 
@@ -35,6 +36,98 @@ class LoopAgentPolicyTests(unittest.TestCase):
                 loop_agent.validate_generator_contract_write(root, path, '{"items":[]}')
 
             loop_agent.validate_generator_contract_write(root, path, '{"features":[]}')
+
+    def test_proposal_checklist_items_extracts_common_markdown_lists(self) -> None:
+        proposal = """
+# Build something
+
+- [ ] Add items
+- [x] Complete items
+1. Filter active items
+* Persist items
+"""
+
+        self.assertEqual(
+            loop_agent.proposal_checklist_items(proposal),
+            ["Add items", "Complete items", "Filter active items", "Persist items"],
+        )
+
+    def test_generator_contract_report_requires_feature_coverage_for_proposal_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loop_dir = root / ".workflow/loop"
+            loop_dir.mkdir(parents=True)
+            (loop_dir / "proposal.md").write_text(
+                "- Add todos\n- Complete todos\n- Filter todos\n",
+                encoding="utf-8",
+            )
+            (loop_dir / "contract.md").write_text(
+                "# Loop Contract\n\n## Done Criteria\n\n- Add todos\n- Complete todos\n- Filter todos\n",
+                encoding="utf-8",
+            )
+            feature_list = loop_dir / "feature_list.json"
+            feature_list.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "features": [
+                            {"id": "F001", "text": "Add todos", "status": "pending"},
+                            {"id": "F002", "text": "Complete todos", "status": "pending"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "cover every proposal checklist item"):
+                loop_agent.validate_generator_contract_report(
+                    {
+                        "contract_path": ".workflow/loop/contract.md",
+                        "feature_list_path": ".workflow/loop/feature_list.json",
+                    },
+                    root,
+                )
+
+            feature_list.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "features": [
+                            {"id": "F001", "text": "Add todos", "status": "pending"},
+                            {"id": "F002", "text": "Complete todos", "status": "pending"},
+                            {"id": "F003", "text": "Filter todos", "status": "pending"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loop_agent.validate_generator_contract_report(
+                {
+                    "contract_path": ".workflow/loop/contract.md",
+                    "feature_list_path": ".workflow/loop/feature_list.json",
+                },
+                root,
+            )
+
+    def test_contract_prompts_expose_original_proposal_and_coverage_rule(self) -> None:
+        generator_prompt = loop_agent.generator_contract_user_prompt(
+            "contract",
+            "- Add todos\n- Complete todos",
+            {"model": "test"},
+        )
+        evaluator_prompt = loop_agent.evaluator_contract_user_prompt(
+            "contract",
+            '{"features":[]}',
+            "- Add todos\n- Complete todos",
+            {"model": "test"},
+        )
+
+        self.assertIn("Original proposal artifact", generator_prompt)
+        self.assertIn("Every proposal checklist item", generator_prompt)
+        self.assertIn("proposal_refs", generator_prompt)
+        self.assertIn("Original proposal artifact", evaluator_prompt)
+        self.assertIn("reject unless every item is covered", evaluator_prompt)
 
     def test_evaluator_stop_is_reserved_for_automation_blockers(self) -> None:
         system = loop_agent.evaluator_attempt_system_prompt()
