@@ -44,6 +44,39 @@ class HookyProgressTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_model_role_retry_logs_and_retries_agent_run_error(self) -> None:
+        calls = 0
+
+        def flaky_call() -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise hooky_cli.agent_runtime.AgentRunError(
+                    "agent model request exceeded 120s",
+                    hooky_cli.agent_runtime.AgentRunResult(
+                        final_report=None,
+                        usage={},
+                        transcript=[],
+                        tool_events=[],
+                        compaction_events=[],
+                        pre_compaction_archives=[],
+                        started_at="2026-06-30T00:00:00+00:00",
+                        ended_at="2026-06-30T00:00:01+00:00",
+                    ),
+                )
+            return "ok"
+
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+
+        with mock.patch.dict(os.environ, {"LOOP_MODEL_ROLE_RETRIES": "1"}):
+            result = hooky_cli.run_model_role_with_retries(self.workspace, "test-role", flaky_call)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls, 2)
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertIn("retry test-role", log)
+
     def test_running_stage_records_owner_and_trace(self) -> None:
         state = hooky_cli.load_task_state(self.workspace)
 

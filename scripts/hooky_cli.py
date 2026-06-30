@@ -15,7 +15,7 @@ import difflib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable, TypeVar
 
 import typer
 
@@ -38,6 +38,7 @@ import verifier_agent
 
 app = typer.Typer(help="Run the Hooky agentic SDLC pipeline.", no_args_is_help=True)
 task_app = typer.Typer(help="Create, inspect, and switch tasks.", no_args_is_help=True)
+T = TypeVar("T")
 run_app = typer.Typer(help="Run pipeline stages for the current task.", no_args_is_help=True)
 approve_app = typer.Typer(help="Record human approval gates.", no_args_is_help=True)
 skills_app = typer.Typer(help="Inspect available agent skills.", no_args_is_help=True)
@@ -1672,6 +1673,24 @@ def loop_stall(
             typer.echo("- " + (agent_runtime.single_line(text, 500) if text else "[empty]"))
 
 
+def run_model_role_with_retries(workspace: Path, label: str, call: Callable[[], T]) -> T:
+    max_retries = int(os.environ.get("LOOP_MODEL_ROLE_RETRIES", "1"))
+    attempt = 0
+    while True:
+        try:
+            return call()
+        except agent_runtime.AgentRunError as exc:
+            if attempt >= max_retries:
+                raise
+            attempt += 1
+            append_loop_log(
+                workspace,
+                "loop-runner",
+                f"retry {label}",
+                f"Retry {attempt}/{max_retries} after model role error: {exc}",
+            )
+
+
 def run_model_loop_once(
     workspace: Path,
     *,
@@ -1687,10 +1706,14 @@ def run_model_loop_once(
         path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal), encoding="utf-8")
 
     state = read_loop_state(workspace)
-    planner_report, planner_usage = loop_agent.generate_planner_artifacts(
-        working_folder=workspace,
-        proposal=proposal or loop_contract_path(workspace).read_text(encoding="utf-8"),
-        attempt_id=state.get("current_attempt"),
+    planner_report, planner_usage = run_model_role_with_retries(
+        workspace,
+        "planner",
+        lambda: loop_agent.generate_planner_artifacts(
+            working_folder=workspace,
+            proposal=proposal or loop_contract_path(workspace).read_text(encoding="utf-8"),
+            attempt_id=state.get("current_attempt"),
+        ),
     )
     state["status"] = "proposal-written"
     state["contract_accepted"] = False
@@ -1705,10 +1728,14 @@ def run_model_loop_once(
     accepted = False
     review = ""
     for round_number in range(1, max_contract_rounds + 1):
-        generator_contract_report, generator_contract_usage = loop_agent.generate_generator_contract_artifacts(
-            working_folder=workspace,
-            attempt_id=state.get("current_attempt"),
-            review_feedback=review_feedback,
+        generator_contract_report, generator_contract_usage = run_model_role_with_retries(
+            workspace,
+            f"generator-contract round {round_number}",
+            lambda: loop_agent.generate_generator_contract_artifacts(
+                working_folder=workspace,
+                attempt_id=state.get("current_attempt"),
+                review_feedback=review_feedback,
+            ),
         )
         state = read_loop_state(workspace)
         state["status"] = "contract-proposed"
@@ -1719,9 +1746,13 @@ def run_model_loop_once(
         write_loop_progress(workspace, state, note=str(generator_contract_report.get("summary") or "Generator proposed contract."))
         append_loop_log(workspace, "generator", f"generator proposed contract round {round_number}", str(generator_contract_report.get("summary") or ""))
 
-        evaluator_contract_report, evaluator_contract_usage = loop_agent.generate_evaluator_contract_artifacts(
-            working_folder=workspace,
-            attempt_id=state.get("current_attempt"),
+        evaluator_contract_report, evaluator_contract_usage = run_model_role_with_retries(
+            workspace,
+            f"evaluator-contract round {round_number}",
+            lambda: loop_agent.generate_evaluator_contract_artifacts(
+                working_folder=workspace,
+                attempt_id=state.get("current_attempt"),
+            ),
         )
         state = read_loop_state(workspace)
         accepted = bool(evaluator_contract_report.get("accepted"))
@@ -1760,10 +1791,14 @@ def run_model_loop_once(
         write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
         append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
 
-        generator_report, generator_usage = loop_agent.generate_generator_implementation_artifacts(
-            working_folder=workspace,
-            attempt_id=attempt_id,
-            evaluator_feedback=evaluator_feedback,
+        generator_report, generator_usage = run_model_role_with_retries(
+            workspace,
+            f"generator-implementation attempt {attempt_id}",
+            lambda: loop_agent.generate_generator_implementation_artifacts(
+                working_folder=workspace,
+                attempt_id=attempt_id,
+                evaluator_feedback=evaluator_feedback,
+            ),
         )
         write_json(attempt_dir / "generator_report.json", generator_report)
         state = read_loop_state(workspace)
@@ -1775,9 +1810,13 @@ def run_model_loop_once(
         append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(generator_report.get("summary") or ""))
 
         try:
-            evaluator_report, evaluator_usage = loop_agent.generate_evaluator_attempt_artifacts(
-                working_folder=workspace,
-                attempt_id=attempt_id,
+            evaluator_report, evaluator_usage = run_model_role_with_retries(
+                workspace,
+                f"evaluator-attempt {attempt_id}",
+                lambda: loop_agent.generate_evaluator_attempt_artifacts(
+                    working_folder=workspace,
+                    attempt_id=attempt_id,
+                ),
             )
             evaluator_report = {
                 "schema_version": 1,
