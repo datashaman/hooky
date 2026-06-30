@@ -375,6 +375,40 @@ def apply_loop_evaluator_report(
     return state
 
 
+def format_evaluator_feedback(report: dict[str, Any]) -> str:
+    findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    lines = [
+        f"Status: {report.get('status')}",
+        f"Recommendation: {report.get('recommendation')}",
+    ]
+    if report.get("bottleneck"):
+        lines.extend(["", f"Bottleneck: {report['bottleneck']}"])
+    if findings:
+        lines.extend(["", "Findings:"])
+        lines.extend(f"- {item}" for item in findings)
+    if report.get("score") is not None:
+        lines.extend(["", f"Score: {report['score']}"])
+    return "\n".join(lines).strip()
+
+
+def reset_loop_attempt_workspace(workspace: Path) -> str:
+    if not (workspace / ".git").exists():
+        return "no git repository; preserving workspace for next attempt"
+    commands = [
+        ["git", "-C", str(workspace), "reset", "--hard", "HEAD"],
+        ["git", "-C", str(workspace), "clean", "-fd", "-e", ".workflow", "-e", "node_modules"],
+    ]
+    outputs: list[str] = []
+    for command in commands:
+        completed = subprocess.run(command, text=True, capture_output=True, check=False)
+        if completed.returncode != 0:
+            raise typer.BadParameter((completed.stderr or completed.stdout or "git cleanup failed").strip())
+        output = (completed.stdout or completed.stderr or "").strip()
+        if output:
+            outputs.append(output)
+    return "\n".join(outputs) if outputs else "workspace reset to git baseline"
+
+
 def replace_markdown_section(text: str, heading: str, body: str) -> str:
     marker = f"## {heading}"
     lines = text.splitlines()
@@ -1683,50 +1717,79 @@ def run_model_loop_once(
         typer.echo(f"review: {review}")
         return
 
-    attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
-    state["last_action"] = "run:start-attempt"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
-    append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
+    max_attempt_rounds = int(os.environ.get("LOOP_ATTEMPT_MAX_ROUNDS", "3"))
+    evaluator_feedback = ""
+    final_attempt_id = ""
+    final_report_path: Path | None = None
+    for attempt_round in range(1, max_attempt_rounds + 1):
+        state = read_loop_state(workspace)
+        attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
+        final_attempt_id = attempt_id
+        state["last_action"] = "run:start-attempt"
+        write_loop_state(workspace, state)
+        write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
+        append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
 
-    generator_report, generator_usage = loop_agent.generate_generator_implementation_artifacts(
-        working_folder=workspace,
-        attempt_id=attempt_id,
-    )
-    write_json(attempt_dir / "generator_report.json", generator_report)
-    state = read_loop_state(workspace)
-    state.setdefault("role_usage", {})["generator_implementation"] = generator_usage
-    state["last_action"] = "run:generator-implement"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(generator_report.get("summary") or "Generator completed implementation pass."))
-    append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(generator_report.get("summary") or ""))
+        generator_report, generator_usage = loop_agent.generate_generator_implementation_artifacts(
+            working_folder=workspace,
+            attempt_id=attempt_id,
+            evaluator_feedback=evaluator_feedback,
+        )
+        write_json(attempt_dir / "generator_report.json", generator_report)
+        state = read_loop_state(workspace)
+        state.setdefault("role_usage", {})["generator_implementation"] = generator_usage
+        state.setdefault("role_usage", {})[f"generator_implementation_{attempt_id}"] = generator_usage
+        state["last_action"] = "run:generator-implement"
+        write_loop_state(workspace, state)
+        write_loop_progress(workspace, state, note=str(generator_report.get("summary") or "Generator completed implementation pass."))
+        append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(generator_report.get("summary") or ""))
 
-    evaluator_report, evaluator_usage = loop_agent.generate_evaluator_attempt_artifacts(
-        working_folder=workspace,
-        attempt_id=attempt_id,
-    )
-    evaluator_report = {
-        "schema_version": 1,
-        "attempt": attempt_id,
-        "written_at": utc_now(),
-        **evaluator_report,
-    }
-    report_path = attempt_dir / "evaluator_report.json"
-    write_json(report_path, evaluator_report)
+        evaluator_report, evaluator_usage = loop_agent.generate_evaluator_attempt_artifacts(
+            working_folder=workspace,
+            attempt_id=attempt_id,
+        )
+        evaluator_report = {
+            "schema_version": 1,
+            "attempt": attempt_id,
+            "written_at": utc_now(),
+            **evaluator_report,
+        }
+        report_path = attempt_dir / "evaluator_report.json"
+        final_report_path = report_path
+        write_json(report_path, evaluator_report)
+        state = read_loop_state(workspace)
+        state.setdefault("role_usage", {})["evaluator_attempt"] = evaluator_usage
+        state.setdefault("role_usage", {})[f"evaluator_attempt_{attempt_id}"] = evaluator_usage
+        state = apply_loop_evaluator_report(
+            workspace,
+            state,
+            attempt_id=attempt_id,
+            report=evaluator_report,
+            report_path=report_path,
+            action="run:evaluator-attempt",
+        )
+        evaluator_feedback = format_evaluator_feedback(evaluator_report)
+        recommendation = str(evaluator_report.get("recommendation"))
+        status = str(evaluator_report.get("status"))
+        if status == "pass" or recommendation in {"restart-contract", "stop"}:
+            break
+        if recommendation == "restart-attempt":
+            if attempt_round >= max_attempt_rounds:
+                break
+            reset_note = reset_loop_attempt_workspace(workspace)
+            append_loop_log(workspace, "loop-runner", f"attempt {attempt_id} reset", reset_note)
+            continue
+        if recommendation == "continue" and attempt_round < max_attempt_rounds:
+            append_loop_log(workspace, "loop-runner", f"attempt {attempt_id} continuing", "Starting another generator/evaluator attempt with evaluator feedback.")
+            continue
+        break
+
     state = read_loop_state(workspace)
-    state.setdefault("role_usage", {})["evaluator_attempt"] = evaluator_usage
-    state = apply_loop_evaluator_report(
-        workspace,
-        state,
-        attempt_id=attempt_id,
-        report=evaluator_report,
-        report_path=report_path,
-        action="run:evaluator-attempt",
-    )
     write_last_run_workspace(last_run_path, workspace)
-    typer.echo(f"attempt: {attempt_id}")
+    typer.echo(f"attempt: {final_attempt_id}")
     typer.echo(f"status: {state['status']}")
-    typer.echo(f"report: {report_path}")
+    if final_report_path is not None:
+        typer.echo(f"report: {final_report_path}")
 
 
 @loop_app.command("run")

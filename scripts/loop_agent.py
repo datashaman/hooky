@@ -366,7 +366,12 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
     return result.final_report, result.usage
 
 
-def generate_generator_implementation_artifacts(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def generate_generator_implementation_artifacts(
+    *,
+    working_folder: Path,
+    attempt_id: str,
+    evaluator_feedback: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required; loop generator has no non-AI path")
     working_folder = working_folder.resolve()
@@ -398,6 +403,7 @@ def generate_generator_implementation_artifacts(*, working_folder: Path, attempt
                 (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
                 attempt_id,
                 model_metadata,
+                evaluator_feedback=evaluator_feedback,
             ),
             runtime=runtime,
         )
@@ -621,7 +627,22 @@ Use todo_write for substantive work and run relevant commands before final_repor
 """
 
 
-def generator_implementation_user_prompt(contract: str, feature_list: str, attempt_id: str, model_metadata: dict[str, Any]) -> str:
+def generator_implementation_user_prompt(
+    contract: str,
+    feature_list: str,
+    attempt_id: str,
+    model_metadata: dict[str, Any],
+    *,
+    evaluator_feedback: str = "",
+) -> str:
+    feedback_section = ""
+    if evaluator_feedback.strip():
+        feedback_section = f"""
+Previous evaluator feedback to address:
+```markdown
+{evaluator_feedback.strip()}
+```
+"""
     return f"""Attempt: {attempt_id}
 
 Accepted contract.md:
@@ -638,8 +659,10 @@ Selected model:
 ```json
 {json.dumps(model_metadata, indent=2, sort_keys=True)}
 ```
+{feedback_section}
 
 Implement the contract in this workspace. Do not edit .workflow. Do not declare the attempt passed.
+Use only the provided tools. To edit files, use write_file; do not call apply_patch or search_files.
 Finish only with final_report describing changed_files, tests_run, and any failures.
 """
 

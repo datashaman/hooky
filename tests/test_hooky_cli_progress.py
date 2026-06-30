@@ -791,7 +791,7 @@ class HookyProgressTests(unittest.TestCase):
                 }, {"cost": 0.03}
             return {"status": "done", "accepted": True, "review": "Good enough.", "required_changes": []}, {"cost": 0.03}
 
-        def fake_implementation(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+        def fake_implementation(*, working_folder: Path, attempt_id: str, evaluator_feedback: str = "") -> tuple[dict[str, object], dict[str, object]]:
             self.assertEqual(attempt_id, "001")
             return {
                 "status": "done",
@@ -836,6 +836,93 @@ class HookyProgressTests(unittest.TestCase):
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertIn("contract rejected round 1", log)
         self.assertIn("contract accepted round 2", log)
+
+    def test_loop_run_retries_attempts_with_evaluator_feedback(self) -> None:
+        runner = CliRunner()
+        attempts: list[tuple[str, str]] = []
+
+        def fake_planner(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            (working_folder / ".workflow/loop/contract.md").write_text(
+                "# Loop Contract\n\n## Proposal\n\nBuild todos.\n",
+                encoding="utf-8",
+            )
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Proposal ready."}, {"cost": 0.01}
+
+        def fake_contract(
+            *,
+            working_folder: Path,
+            attempt_id: str | None = None,
+            review_feedback: str = "",
+        ) -> tuple[dict[str, object], dict[str, object]]:
+            (working_folder / ".workflow/loop/contract.md").write_text(
+                "# Loop Contract\n\n## Done Criteria\n\n- Add todos\n",
+                encoding="utf-8",
+            )
+            (working_folder / ".workflow/loop/feature_list.json").write_text(
+                json.dumps({"schema_version": 1, "features": [{"id": "F001", "text": "Add todos", "status": "pending"}]}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "status": "done",
+                "contract_path": ".workflow/loop/contract.md",
+                "feature_list_path": ".workflow/loop/feature_list.json",
+                "summary": "Contract ready.",
+            }, {"cost": 0.02}
+
+        def fake_contract_review(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            return {"status": "done", "accepted": True, "review": "Accepted.", "required_changes": []}, {"cost": 0.03}
+
+        def fake_implementation(*, working_folder: Path, attempt_id: str, evaluator_feedback: str = "") -> tuple[dict[str, object], dict[str, object]]:
+            attempts.append((attempt_id, evaluator_feedback))
+            return {
+                "status": "done",
+                "summary": f"Built {attempt_id}.",
+                "changed_files": ["src/app.py"],
+                "tests_run": ["pytest"],
+                "failures": [],
+            }, {"cost": 0.04}
+
+        def fake_attempt_review(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            if attempt_id == "001":
+                return {
+                    "status": "fail",
+                    "recommendation": "restart-attempt",
+                    "bottleneck": "edit flow is broken",
+                    "findings": ["T007 fails"],
+                    "score": 0.4,
+                }, {"cost": 0.05}
+            return {
+                "status": "pass",
+                "recommendation": "continue",
+                "bottleneck": "",
+                "findings": [],
+                "score": 1.0,
+            }, {"cost": 0.05}
+
+        patches = [
+            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+            mock.patch.dict(os.environ, {"LOOP_ATTEMPT_MAX_ROUNDS": "2"}),
+        ]
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            result = runner.invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "loop", "run", "--proposal", "Build todos"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("attempt: 002", result.output)
+        self.assertIn("status: passed", result.output)
+        self.assertEqual(attempts[0], ("001", ""))
+        self.assertEqual(attempts[1][0], "002")
+        self.assertIn("T007 fails", attempts[1][1])
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual([attempt["status"] for attempt in state["attempts"]], ["restarted", "passed"])
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertIn("attempt 001 reset", log)
 
     def test_loop_restart_attempt_preserves_durable_files(self) -> None:
         runner = CliRunner()
