@@ -1,8 +1,0 @@
-{
-  "name": "simple-verifier-fixture",
-  "private": true,
-  "scripts": {
-    "test": "node --test tests/generated/approved-simple/calculator.test.js"
-  }
-}
-

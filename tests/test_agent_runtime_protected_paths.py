@@ -43,54 +43,6 @@ class ProtectedPathTests(unittest.TestCase):
 
             self.assertEqual(agent_runtime.protected_path_changes(root, ["tests"], before), ["tests/example.spec"])
 
-    def test_remediation_context_is_stage_scoped(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            path = root / ".workflow/artifacts/remediation/current.json"
-            path.parent.mkdir(parents=True)
-            path.write_text('{"root_cause_stage": "builder", "findings": ["fix builder output"]}', encoding="utf-8")
-
-            self.assertEqual(
-                agent_runtime.read_remediation_context(root, "builder"),
-                {"root_cause_stage": "builder", "findings": ["fix builder output"]},
-            )
-            self.assertIsNone(agent_runtime.read_remediation_context(root, "test"))
-
-    def test_upstream_evidence_context_exposes_artifacts_and_runtime_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            task_state = {
-                "task_id": "issue-1",
-                "artifacts": {
-                    "builder": {
-                        "report_dir": ".workflow/artifacts/builder-agent",
-                        "contract": ".workflow/artifacts/builder-agent/contract.json",
-                    }
-                },
-            }
-            (root / ".workflow/tasks/issue-1").mkdir(parents=True)
-            (root / ".workflow/state.json").write_text('{"current_task": "issue-1"}', encoding="utf-8")
-            (root / ".workflow/tasks/issue-1/state.json").write_text(json_dumps(task_state), encoding="utf-8")
-            runtime = root / ".workflow/artifacts/builder-agent"
-            runtime.mkdir(parents=True)
-            (runtime / "runtime_events.log").write_text("event\n", encoding="utf-8")
-            (runtime / "tool_events.json").write_text("[]\n", encoding="utf-8")
-
-            context = agent_runtime.upstream_evidence_context(root)
-
-            self.assertEqual(
-                context["stages"]["builder"]["artifacts"]["contract"],
-                ".workflow/artifacts/builder-agent/contract.json",
-            )
-            self.assertEqual(
-                context["stages"]["builder"]["runtime"]["events"],
-                ".workflow/artifacts/builder-agent/runtime_events.log",
-            )
-            self.assertEqual(
-                context["stages"]["builder"]["runtime"]["tool_events"],
-                ".workflow/artifacts/builder-agent/tool_events.json",
-            )
-
     def test_requested_ports_are_parsed_from_common_explicit_forms(self) -> None:
         self.assertEqual(agent_runtime.requested_ports_from_command("npm run dev -- --port 5173"), [5173])
         self.assertEqual(agent_runtime.requested_ports_from_command("PORT=4173 npm start"), [4173])
@@ -178,7 +130,7 @@ class ProtectedPathTests(unittest.TestCase):
     def test_write_allowed_prefixes_remain_available_for_system_artifact_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            artifact = root / ".workflow/loop/contract.md"
+            artifact = root / ".hooky/contract.md"
             artifact.parent.mkdir(parents=True)
             artifact.write_text("before", encoding="utf-8")
             runtime = agent_runtime.ToolRuntime(
@@ -186,11 +138,11 @@ class ProtectedPathTests(unittest.TestCase):
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
                 max_seconds=30,
-                write_allowed_prefixes=[".workflow/loop/contract.md"],
+                write_allowed_prefixes=[".hooky/contract.md"],
                 write_blocked_prefixes=[],
             )
 
-            result = runtime.write_file({"path": ".workflow/loop/contract.md", "content": "after"})
+            result = runtime.write_file({"path": ".hooky/contract.md", "content": "after"})
 
             self.assertTrue(result["ok"])
             self.assertEqual(artifact.read_text(encoding="utf-8"), "after")
@@ -483,24 +435,24 @@ The contract is close but still underspecified.
     def test_tool_result_artifacts_are_readable_without_exposing_workflow_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            result_path = root / ".workflow/tool-results/test-runs/result.log"
+            result_path = root / ".hooky/tool-results/test-runs/result.log"
             result_path.parent.mkdir(parents=True)
             result_path.write_text("line one\nline two\n", encoding="utf-8")
-            (root / ".workflow/artifacts/state.json").parent.mkdir(parents=True)
-            (root / ".workflow/artifacts/state.json").write_text("{}", encoding="utf-8")
+            (root / ".hooky/artifacts/state.json").parent.mkdir(parents=True)
+            (root / ".hooky/artifacts/state.json").write_text("{}", encoding="utf-8")
             runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             excerpt = runtime.read_file_excerpt(
-                {"path": ".workflow/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
+                {"path": ".hooky/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
             )
             root_listing = runtime.list_files({"path": "."})
 
             self.assertEqual(excerpt["content"], "line two")
-            self.assertNotIn(".workflow", [item["path"] for item in root_listing["entries"]])
+            self.assertNotIn(".hooky", [item["path"] for item in root_listing["entries"]])
             with self.assertRaises(FileNotFoundError):
-                runtime.read_file({"path": ".workflow/artifacts/state.json"})
+                runtime.read_file({"path": ".hooky/artifacts/state.json"})
             with self.assertRaises(FileNotFoundError):
-                runtime.write_file({"path": ".workflow/tool-results/test-runs/new.log", "content": "nope"})
+                runtime.write_file({"path": ".hooky/tool-results/test-runs/new.log", "content": "nope"})
 
     def test_todo_text_is_used_for_active_log_label(self) -> None:
         self.assertEqual(
@@ -732,7 +684,7 @@ The contract is close but still underspecified.
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
                 max_seconds=30,
-                read_blocked_prefixes=[".workflow", "node_modules"],
+                read_blocked_prefixes=[".hooky", "node_modules"],
             )
 
             result = runtime.list_files({"path": "."})
@@ -752,7 +704,7 @@ The contract is close but still underspecified.
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
                 max_seconds=30,
-                read_blocked_prefixes=[".workflow", "node_modules"],
+                read_blocked_prefixes=[".hooky", "node_modules"],
             )
 
             result = runtime.run_tool("read_file", {"path": "node_modules/framework.js"})

@@ -1,6 +1,0 @@
-{
-  "expected_status": "pass",
-  "expected_topics": ["npm test", "test integrity"],
-  "name": "passing"
-}
-

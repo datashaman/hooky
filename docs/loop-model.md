@@ -32,13 +32,13 @@ Roles are planner, generator, and evaluator. Phases describe what the loop is do
 
 Loop state is deliberately small and lives on disk:
 
-- `.workflow/loop/proposal.md`
-- `.workflow/loop/contract.md`
-- `.workflow/loop/feature_list.json`
-- `.workflow/loop/progress.md`
-- `.workflow/loop/log.md`
-- `.workflow/loop/state.json`
-- `.workflow/loop/attempts/<id>/`
+- `.hooky/proposal.md`
+- `.hooky/contract.md`
+- `.hooky/feature_list.json`
+- `.hooky/progress.md`
+- `.hooky/log.md`
+- `.hooky/state.json`
+- `.hooky/attempts/<id>/`
 
 Example:
 
@@ -48,7 +48,7 @@ Example:
   "contract_accepted": true,
   "current_attempt": "001",
   "attempts": [
-    {"id": "001", "status": "running", "path": ".workflow/loop/attempts/001"}
+    {"id": "001", "status": "running", "path": ".hooky/attempts/001"}
   ]
 }
 ```

@@ -10,15 +10,21 @@ from pathlib import Path
 from typing import Any
 
 import agent_runtime
-import eval_runtime
 import agent_skills
 from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
 
 
-SELECTED_MODEL_PATH = Path(".workflow/agents/spec/selected_model.json")
-EVALUATOR_SELECTED_MODEL_PATH = Path(".workflow/agents/eval/selected_model.json")
-COMMON_STATIC_CONTEXT_ROOT = Path(".workflow/agents/common/static")
-LOOP_PROPOSAL_PATH = Path(".workflow/loop/proposal.md")
+SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
+EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")
+LOOP_PROPOSAL_PATH = Path(".hooky/proposal.md")
+
+
+def read_selected_model(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ValueError(f"selected model file must contain a non-empty model string: {path}")
+    return payload
 
 
 def selected_model() -> str:
@@ -26,7 +32,7 @@ def selected_model() -> str:
     if env_model:
         return env_model
     if SELECTED_MODEL_PATH.exists():
-        data = eval_runtime.read_selected_model(SELECTED_MODEL_PATH)
+        data = read_selected_model(SELECTED_MODEL_PATH)
         model = data.get("model")
         if isinstance(model, str) and model:
             return model
@@ -38,7 +44,7 @@ def selected_model_metadata() -> dict[str, Any]:
     if env_model:
         return {"model": env_model, "source": "OPENROUTER_MODEL"}
     if SELECTED_MODEL_PATH.exists():
-        return eval_runtime.read_selected_model(SELECTED_MODEL_PATH)
+        return read_selected_model(SELECTED_MODEL_PATH)
     return {"model": "openai/gpt-4.1-mini", "source": "fallback"}
 
 
@@ -47,7 +53,7 @@ def selected_evaluator_attempt_model() -> str:
     if env_model:
         return env_model
     if EVALUATOR_SELECTED_MODEL_PATH.exists():
-        data = eval_runtime.read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
+        data = read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
         model = data.get("model")
         if isinstance(model, str) and model:
             return model
@@ -59,21 +65,12 @@ def selected_evaluator_attempt_model_metadata() -> dict[str, Any]:
     if env_model:
         return {"model": env_model, "variant_id": env_model, "source": "LOOP_EVALUATOR_MODEL", "reasoning_request": None}
     if EVALUATOR_SELECTED_MODEL_PATH.exists():
-        return eval_runtime.read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
+        return read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
     return {
         "model": "openai/gpt-4.1-mini",
         "variant_id": "openai/gpt-4.1-mini",
         "source": "fallback-multimodal-required",
         "reasoning_request": None,
-    }
-
-
-def common_static_files() -> dict[str, str]:
-    if not COMMON_STATIC_CONTEXT_ROOT.exists():
-        return {}
-    return {
-        path.name: path.read_text(encoding="utf-8")
-        for path in sorted(COMMON_STATIC_CONTEXT_ROOT.glob("*.md"))
     }
 
 
@@ -108,7 +105,7 @@ def planner_schema() -> dict[str, Any]:
         "required": ["status", "contract_path", "summary"],
         "properties": {
             "status": {"type": "string", "enum": ["done", "blocked"]},
-            "contract_path": {"type": "string", "enum": [".workflow/loop/contract.md"]},
+            "contract_path": {"type": "string", "enum": [".hooky/contract.md"]},
             "summary": {"type": "string"},
         },
     }
@@ -121,8 +118,8 @@ def generator_contract_schema() -> dict[str, Any]:
         "required": ["status", "contract_path", "feature_list_path", "summary"],
         "properties": {
             "status": {"type": "string", "enum": ["done", "blocked"]},
-            "contract_path": {"type": "string", "enum": [".workflow/loop/contract.md"]},
-            "feature_list_path": {"type": "string", "enum": [".workflow/loop/feature_list.json"]},
+            "contract_path": {"type": "string", "enum": [".hooky/contract.md"]},
+            "feature_list_path": {"type": "string", "enum": [".hooky/feature_list.json"]},
             "summary": {"type": "string"},
         },
     }
@@ -178,27 +175,27 @@ def evaluator_attempt_schema() -> dict[str, Any]:
 
 
 def validate_planner_report(report: dict[str, Any], working_folder: Path) -> None:
-    if report.get("contract_path") != ".workflow/loop/contract.md":
-        raise ValueError("planner must report contract_path=.workflow/loop/contract.md")
-    contract = working_folder / ".workflow/loop/contract.md"
+    if report.get("contract_path") != ".hooky/contract.md":
+        raise ValueError("planner must report contract_path=.hooky/contract.md")
+    contract = working_folder / ".hooky/contract.md"
     if not contract.exists() or not contract.read_text(encoding="utf-8").strip():
-        raise ValueError("planner must write non-empty .workflow/loop/contract.md")
+        raise ValueError("planner must write non-empty .hooky/contract.md")
 
 
 def validate_generator_contract_report(report: dict[str, Any], working_folder: Path) -> None:
-    if report.get("contract_path") != ".workflow/loop/contract.md":
-        raise ValueError("generator must report contract_path=.workflow/loop/contract.md")
-    if report.get("feature_list_path") != ".workflow/loop/feature_list.json":
-        raise ValueError("generator must report feature_list_path=.workflow/loop/feature_list.json")
-    contract = working_folder / ".workflow/loop/contract.md"
-    feature_list = working_folder / ".workflow/loop/feature_list.json"
+    if report.get("contract_path") != ".hooky/contract.md":
+        raise ValueError("generator must report contract_path=.hooky/contract.md")
+    if report.get("feature_list_path") != ".hooky/feature_list.json":
+        raise ValueError("generator must report feature_list_path=.hooky/feature_list.json")
+    contract = working_folder / ".hooky/contract.md"
+    feature_list = working_folder / ".hooky/feature_list.json"
     contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
     if not contract.exists() or "## Done Criteria" not in contract_text:
-        raise ValueError("generator must write done criteria into .workflow/loop/contract.md")
+        raise ValueError("generator must write done criteria into .hooky/contract.md")
     if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(contract_text):
         raise ValueError("generator must define a substantive Taste Rubric for reference visual requirements")
     if not feature_list.exists():
-        raise ValueError("generator must write .workflow/loop/feature_list.json")
+        raise ValueError("generator must write .hooky/feature_list.json")
     payload = json.loads(feature_list.read_text(encoding="utf-8"))
     if not isinstance(payload.get("features"), list):
         raise ValueError("feature_list.json must include features array")
@@ -212,13 +209,13 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
 
 def validate_generator_contract_write(working_folder: Path, path: Path, content: str) -> None:
     relative = path.resolve().relative_to(working_folder.resolve()).as_posix()
-    if relative == ".workflow/loop/contract.md":
+    if relative == ".hooky/contract.md":
         if "## Done Criteria" not in content or len(content.strip()) < 100:
             raise ValueError("contract.md writes must preserve a substantive ## Done Criteria section")
         if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(content):
             raise ValueError("contract.md must include a substantive Taste Rubric for reference visual requirements")
         return
-    if relative == ".workflow/loop/feature_list.json":
+    if relative == ".hooky/feature_list.json":
         payload = json.loads(content)
         if not isinstance(payload.get("features"), list):
             raise ValueError("feature_list.json writes must include a features array")
@@ -237,7 +234,7 @@ def validate_evaluator_contract_report(report: dict[str, Any], working_folder: P
     if not report["accepted"] and not [item for item in changes if item.strip()]:
         raise ValueError("rejected contract must include required_changes")
     if report["accepted"]:
-        contract = working_folder / ".workflow/loop/contract.md"
+        contract = working_folder / ".hooky/contract.md"
         contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
         if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(contract_text):
             raise ValueError("accepted contract must include a substantive Taste Rubric for reference visual requirements")
@@ -254,8 +251,8 @@ def validate_generator_implementation_report(report: dict[str, Any], working_fol
             relative = path.relative_to(working_folder.resolve()).as_posix()
         except ValueError as exc:
             raise ValueError(f"changed file is outside workspace: {raw_path}") from exc
-        if relative.startswith(".workflow/"):
-            raise ValueError(f"generator must not report .workflow changes: {raw_path}")
+        if relative.startswith(".hooky/"):
+            raise ValueError(f"generator must not report .hooky changes: {raw_path}")
 
 
 def validate_evaluator_attempt_report(report: dict[str, Any], working_folder: Path) -> None:
@@ -271,7 +268,7 @@ def validate_evaluator_attempt_report(report: dict[str, Any], working_folder: Pa
         raise ValueError("evaluator findings must be strings")
     if report.get("status") == "fail" and not [item for item in findings if item.strip()]:
         raise ValueError("failed evaluator report must include findings")
-    contract = working_folder / ".workflow/loop/contract.md"
+    contract = working_folder / ".hooky/contract.md"
     contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
     if taste_rubric_is_substantive(contract_text):
         rubric_scores = report.get("rubric_scores")
@@ -382,9 +379,9 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".workflow/loop"
+    live_root = working_folder / ".hooky"
     if attempt_id:
-        live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+        live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=planner_schema(),
@@ -394,12 +391,12 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
         final_validator=lambda report: validate_planner_report(report, working_folder),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
-        write_allowed_prefixes=[".workflow/loop"],
+        write_allowed_prefixes=[".hooky"],
         write_blocked_prefixes=[],
-        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
-        read_blocked_prefixes=[".workflow"],
+        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
         live_event_prefix="role=planner ",
     )
     try:
@@ -444,9 +441,9 @@ def generate_generator_contract_artifacts(
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".workflow/loop"
+    live_root = working_folder / ".hooky"
     if attempt_id:
-        live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+        live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=generator_contract_schema(),
@@ -457,12 +454,12 @@ def generate_generator_contract_artifacts(
         write_validator=lambda path, content: validate_generator_contract_write(working_folder, path, content),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
-        write_allowed_prefixes=[".workflow/loop/contract.md", ".workflow/loop/feature_list.json"],
+        write_allowed_prefixes=[".hooky/contract.md", ".hooky/feature_list.json"],
         write_blocked_prefixes=[],
-        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
-        read_blocked_prefixes=[".workflow"],
+        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
         live_event_prefix="role=generator ",
     )
     try:
@@ -470,7 +467,7 @@ def generate_generator_contract_artifacts(
             model=model,
             system=generator_contract_system_prompt(),
             user=generator_contract_user_prompt(
-                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
                 read_loop_proposal(working_folder),
                 model_metadata,
                 review_feedback=review_feedback,
@@ -507,9 +504,9 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".workflow/loop"
+    live_root = working_folder / ".hooky"
     if attempt_id:
-        live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+        live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=evaluator_contract_schema(),
@@ -520,10 +517,10 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=False,
         enabled_tools=["final_report"],
-        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
-        read_blocked_prefixes=[".workflow"],
+        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
         live_event_prefix="role=evaluator ",
     )
     try:
@@ -531,8 +528,8 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
             model=model,
             system=evaluator_contract_system_prompt(),
             user=evaluator_contract_user_prompt(
-                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
-                (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/feature_list.json").read_text(encoding="utf-8"),
                 read_loop_proposal(working_folder),
                 model_metadata,
             ),
@@ -573,7 +570,7 @@ def generate_generator_implementation_artifacts(
     working_folder = working_folder.resolve()
     model = selected_model()
     model_metadata = selected_model_metadata()
-    live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+    live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=generator_implementation_schema(),
@@ -583,11 +580,11 @@ def generate_generator_implementation_artifacts(
         final_validator=lambda report: validate_generator_implementation_report(report, working_folder),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
-        write_blocked_prefixes=[".workflow"],
-        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
-        read_blocked_prefixes=[".workflow"],
+        write_blocked_prefixes=[".hooky"],
+        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
         live_event_prefix="role=generator ",
     )
     try:
@@ -595,8 +592,8 @@ def generate_generator_implementation_artifacts(
             model=model,
             system=generator_implementation_system_prompt(),
             user=generator_implementation_user_prompt(
-                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
-                (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/feature_list.json").read_text(encoding="utf-8"),
                 attempt_id,
                 model_metadata,
                 evaluator_feedback=evaluator_feedback,
@@ -633,7 +630,7 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
     working_folder = working_folder.resolve()
     model = selected_evaluator_attempt_model()
     model_metadata = selected_evaluator_attempt_model_metadata()
-    live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+    live_root = working_folder / ".hooky/attempts" / attempt_id / "traces"
     runtime = ToolRuntime(
         working_folder=working_folder,
         final_report_schema=evaluator_attempt_schema(),
@@ -643,10 +640,10 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
         final_validator=lambda report: validate_evaluator_attempt_report(report, working_folder),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=False,
-        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
-        read_blocked_prefixes=[".workflow"],
+        read_allowed_prefixes=[".hooky", ".hooky/tool-results"],
+        read_blocked_prefixes=[".hooky"],
         live_log_root=live_root,
-        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_log_paths=[working_folder / ".hooky/log.runtime"],
         live_event_prefix="role=evaluator ",
     )
     try:
@@ -654,8 +651,8 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
             model=model,
             system=evaluator_attempt_system_prompt(),
             user=evaluator_attempt_user_prompt(
-                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
-                (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".hooky/feature_list.json").read_text(encoding="utf-8"),
                 attempt_id,
                 model_metadata,
             ),
@@ -688,12 +685,12 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
 def planner_system_prompt() -> str:
     return """You are the planner in a three-role Karpathy-style loop.
 
-You have one responsibility: turn vague user input into the problem proposal in .workflow/loop/contract.md.
+You have one responsibility: turn vague user input into the problem proposal in .hooky/contract.md.
 
 You must never edit production code, tests, attempt artifacts, or evaluator reports.
 You must not write the final grading contract. The generator proposes done criteria later and the evaluator reviews them.
 
-Use write_file only for .workflow/loop/contract.md. Preserve the loop vocabulary: planner, generator, evaluator, loop-runner, attempt.
+Use write_file only for .hooky/contract.md. Preserve the loop vocabulary: planner, generator, evaluator, loop-runner, attempt.
 Finish only with final_report.
 """
 
@@ -708,7 +705,7 @@ Selected model:
 {json.dumps(model_metadata, indent=2, sort_keys=True)}
 ```
 
-Write .workflow/loop/contract.md with:
+Write .hooky/contract.md with:
 - title
 - problem proposal
 - non-goals or unknowns if any
@@ -724,10 +721,10 @@ def generator_contract_system_prompt() -> str:
 
 This is contract negotiation only. You must not edit production code, tests, package files, or attempt artifacts.
 
-Your job is to propose concrete, testable done criteria in .workflow/loop/contract.md and project them into .workflow/loop/feature_list.json.
+Your job is to propose concrete, testable done criteria in .hooky/contract.md and project them into .hooky/feature_list.json.
 The evaluator will accept or reject the contract. You cannot approve your own criteria.
 
-Use write_file only for .workflow/loop/contract.md and .workflow/loop/feature_list.json.
+Use write_file only for .hooky/contract.md and .hooky/feature_list.json.
 Finish only with final_report.
 """
 
@@ -768,7 +765,7 @@ Selected model:
 ```
 {feedback_section}
 
-Revise .workflow/loop/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
+Revise .hooky/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
 If the original proposal contains bullet, checkbox, or numbered checklist items, preserve every item as an acceptance requirement or split it into more specific requirements. Do not drop checklist items just because they seem obvious.
 If the original proposal cites a visual reference, canonical template, official CSS, or reference implementation, convert that into a substantive Taste Rubric instead of leaving taste optional. The rubric must include design, originality, craft, and functionality axes. For canonical/template work, originality should score restraint and fidelity rather than novelty.
 For TodoMVC-style reference work, explicitly require:
@@ -777,7 +774,7 @@ For TodoMVC-style reference work, explicitly require:
 - visual checks cover empty, populated, completed/filter, and editing states;
 - browser-default controls, overlapping footer/filter controls, collapsed footer/main regions, or missing canonical affordances fail the attempt.
 
-Write .workflow/loop/feature_list.json with this shape:
+Write .hooky/feature_list.json with this shape:
 ```json
 {{
   "schema_version": 1,
@@ -850,7 +847,7 @@ def generator_implementation_system_prompt() -> str:
     return """You are the generator in a three-role Karpathy-style loop.
 
 You have one responsibility now: implement the accepted contract.
-You must not grade your own work and must not edit .workflow. The evaluator will grade independently.
+You must not grade your own work and must not edit .hooky. The evaluator will grade independently.
 
 Use files for code, tests, and project artifacts. Keep changes scoped to the contract.
 Use todo_write for substantive work and run relevant commands before final_report.
@@ -891,7 +888,7 @@ Selected model:
 ```
 {feedback_section}
 
-Implement the contract in this workspace. Do not edit .workflow. Do not declare the attempt passed.
+Implement the contract in this workspace. Do not edit .hooky. Do not declare the attempt passed.
 Use only the provided tools. To edit files, use write_file; do not call apply_patch or search_files.
 Finish only with final_report describing changed_files, tests_run, and any failures.
 """

@@ -1,6 +1,0 @@
-{
-  "expected_status": "fail",
-  "expected_topics": ["scope", "dependency"],
-  "name": "scope-drift"
-}
-

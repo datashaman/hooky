@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import agent_skills
-import spec_agent
 
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
@@ -39,6 +38,40 @@ DISPOSABLE_RUNTIME_DIR_NAMES = {
     "coverage",
     "test-results",
 }
+
+
+def openrouter_request_options() -> dict[str, Any]:
+    options: dict[str, Any] = {"provider": {"require_parameters": True}}
+    reasoning = os.environ.get("OPENROUTER_REASONING")
+    if reasoning:
+        options["reasoning"] = json.loads(reasoning)
+    return options
+
+
+def structured_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def response_usage(response: Any) -> dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump(exclude_none=True)
+    if isinstance(usage, dict):
+        return {key: value for key, value in usage.items() if value is not None}
+    return {
+        key: value
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost")
+        if (value := getattr(usage, key, None)) is not None
+    }
 
 
 @dataclass
@@ -71,19 +104,18 @@ class ToolRuntime:
     context_window_tokens: int | None = None
     compaction_threshold: float = 0.65
     compaction_keep_recent_messages: int = 16
-    compaction_prompt_path: Path = Path(".workflow/agents/common/static/compaction.md")
+    compaction_prompt_path: Path = Path(".hooky/prompts/compaction.md")
     live_log_root: Path | None = None
     live_event_log_paths: list[Path] = field(default_factory=list)
     live_event_prefix: str = ""
     heartbeat_seconds: int = 20
     no_tool_response_limit: int = 5
     write_enabled: bool = True
-    read_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
-    read_allowed_prefixes: list[str] = field(default_factory=lambda: [".workflow/tool-results"])
+    read_blocked_prefixes: list[str] = field(default_factory=lambda: [".hooky"])
+    read_allowed_prefixes: list[str] = field(default_factory=lambda: [".hooky/tool-results"])
     write_allowed_prefixes: list[str] = field(default_factory=list)
-    write_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
+    write_blocked_prefixes: list[str] = field(default_factory=lambda: [".hooky"])
     write_blocked_names: list[str] = field(default_factory=list)
-    spec_contract_write_enabled: bool = False
     bash_blocked_substrings: list[str] = field(default_factory=list)
     bash_command_validator: Callable[[str], str | None] | None = None
     bash_protected_prefixes: list[str] = field(default_factory=list)
@@ -295,19 +327,6 @@ class ToolRuntime:
                     ["name", "path"],
                 ),
             )
-        if self.spec_contract_write_enabled:
-            tools.insert(
-                4,
-                tool_schema(
-                    "write_spec_contract",
-                    "Validate and write the Spec Agent JSON contract to docs/specs/<task-id>/contract.json.",
-                    {
-                        "path": string_schema(),
-                        "contract": {"type": "object", "additionalProperties": True},
-                    },
-                    ["path", "contract"],
-                ),
-            )
         if self.enabled_tools is not None:
             enabled = set(self.enabled_tools)
             tools = [
@@ -340,7 +359,6 @@ class ToolRuntime:
             "read_file_excerpt": self.read_file_excerpt,
             "read_many_files": self.read_many_files,
             "write_file": self.write_file,
-            "write_spec_contract": self.write_spec_contract,
             "list_files": self.list_files,
             "find_files": self.find_files,
             "grep_files": self.grep_files,
@@ -584,23 +602,6 @@ class ToolRuntime:
         if current_hash != observation.get("sha256"):
             raise ValueError(f"write_file blocked: {relative} changed since it was read. Call read_file again before writing.")
 
-    def write_spec_contract(self, args: dict[str, Any]) -> dict[str, Any]:
-        if not self.spec_contract_write_enabled:
-            raise ValueError("write_spec_contract is disabled for this agent")
-        path = self.resolve_path(str(args["path"]))
-        contract = args.get("contract")
-        if not isinstance(contract, dict):
-            raise ValueError("write_spec_contract requires a contract object")
-        relative = relative_to(path, self.working_folder)
-        if not relative.startswith("docs/specs/") or not relative.endswith("/contract.json"):
-            raise ValueError("write_spec_contract path must be docs/specs/<task-id>/contract.json")
-        spec_agent.validate_contract(contract)
-        self.validate_write_path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps(contract, indent=2, sort_keys=True) + "\n"
-        path.write_text(content, encoding="utf-8")
-        return {"ok": True, "path": relative, "bytes": path.stat().st_size}
-
     def validate_write_path(self, path: Path) -> None:
         if not self.write_enabled:
             raise ValueError("write_file is disabled for this agent; finish with final_report instead")
@@ -783,7 +784,7 @@ class ToolRuntime:
         wait_selector = str(args.get("wait_selector") or "body")
         full_page = bool(args.get("full_page", True))
         timeout_seconds = int(args.get("timeout_seconds") or 30)
-        output_dir = self.working_folder / ".workflow" / "tool-results" / "visual-snapshots"
+        output_dir = self.working_folder / ".hooky" / "tool-results" / "visual-snapshots"
         output_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ%f")[:22]
         screenshot_path = output_dir / f"{stamp}.png"
@@ -888,7 +889,7 @@ class ToolRuntime:
         long_running_violation = long_running_bash_violation(command)
         if long_running_violation:
             return {"ok": False, "error": long_running_violation}
-        if ".workflow" in lowered and self.read_blocked_prefixes:
+        if ".hooky" in lowered and self.read_blocked_prefixes:
             return {"ok": False, "error": "bash command references a path that is not available to this agent"}
         for blocked in self.bash_blocked_substrings:
             if blocked.lower() in lowered:
@@ -947,7 +948,7 @@ class ToolRuntime:
             }
         process_id = f"proc-{self.next_process_id}"
         self.next_process_id += 1
-        log_path = self.working_folder / ".workflow" / "managed-processes" / f"{process_id}.log"
+        log_path = self.working_folder / ".hooky" / "managed-processes" / f"{process_id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_handle = log_path.open("a", encoding="utf-8")
         process = subprocess.Popen(
@@ -1479,13 +1480,13 @@ def run_tool_agent(
                             messages=messages,
                             tools=runtime.tools(),
                             tool_choice="auto",
-                            **spec_agent.openrouter_request_options(),
+                            **openrouter_request_options(),
                         )
                 except TimeoutError as exc:
                     raise AgentRunError(str(exc), current_result()) from exc
                 assistant_ended_at = utc_timestamp()
                 assistant_duration_ms = round((time.monotonic() - assistant_start) * 1000, 2)
-                usage = spec_agent.response_usage(completion)
+                usage = response_usage(completion)
                 accumulate_usage(total_usage, usage)
                 message = completion.choices[0].message
                 message_payload = message.model_dump(exclude_none=True) if hasattr(message, "model_dump") else message
@@ -1901,8 +1902,8 @@ def maybe_compact_messages(
             {"role": "system", "content": compaction_system_prompt(runtime)},
             {"role": "user", "content": prompt},
         ],
-        response_format=spec_agent.structured_response_format("context_compaction", compaction_schema()),
-        **spec_agent.openrouter_request_options(),
+        response_format=structured_response_format("context_compaction", compaction_schema()),
+        **openrouter_request_options(),
     )
     content = completion.choices[0].message.content
     if not content:
@@ -1929,7 +1930,7 @@ def maybe_compact_messages(
         "older_messages_compacted": len(older),
         "recent_messages_kept": len(recent),
         "summary_chars": len(runtime.anchored_summary),
-        "usage": spec_agent.response_usage(completion),
+        "usage": response_usage(completion),
     }
     return compacted, event, archive
 
@@ -2974,7 +2975,7 @@ def file_sha256(path: Path) -> str:
 
 
 def write_tool_result_artifact(root: Path, category: str, content: str) -> str:
-    directory = root / ".workflow" / "tool-results" / category
+    directory = root / ".hooky" / "tool-results" / category
     directory.mkdir(parents=True, exist_ok=True)
     filename = utc_timestamp().replace(":", "").replace("+", "Z") + ".log"
     path = directory / filename
@@ -3382,96 +3383,6 @@ def is_disposable_runtime_output(relative: str) -> bool:
         if part.endswith("-report") or part.endswith("-reports"):
             return True
     return False
-
-
-def read_remediation_context(working_folder: Path, stage: str) -> dict[str, Any] | None:
-    path = Path(working_folder) / ".workflow/artifacts/remediation/current.json"
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if payload.get("root_cause_stage") != stage:
-        return None
-    return payload
-
-
-def read_task_state(working_folder: Path) -> dict[str, Any]:
-    workflow_state_path = Path(working_folder) / ".workflow/state.json"
-    if not workflow_state_path.exists():
-        return {}
-    try:
-        workflow_state = json.loads(workflow_state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    current_task = workflow_state.get("current_task")
-    if not current_task:
-        return {}
-    task_state_path = Path(working_folder) / ".workflow/tasks" / str(current_task) / "state.json"
-    if not task_state_path.exists():
-        return {}
-    try:
-        return json.loads(task_state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def upstream_evidence_context(working_folder: Path) -> dict[str, Any]:
-    root = Path(working_folder)
-    state = read_task_state(root)
-    artifacts = state.get("artifacts") if isinstance(state.get("artifacts"), dict) else {}
-    stages: dict[str, Any] = {}
-    for stage in ("spec", "test", "builder", "verifier", "eval"):
-        artifact = artifacts.get(stage) if isinstance(artifacts.get(stage), dict) else {}
-        stage_payload: dict[str, Any] = {
-            "artifacts": {
-                key: value
-                for key, value in artifact.items()
-                if isinstance(value, (str, list, dict, int, float, bool)) or value is None
-            },
-            "runtime": runtime_evidence_files(root, stage, artifact),
-        }
-        stages[stage] = stage_payload
-    return {
-        "instruction": "Use these explicit artifact and runtime evidence paths before guessing filenames or listing directories.",
-        "stages": stages,
-    }
-
-
-def runtime_evidence_files(root: Path, stage: str, artifact: dict[str, Any]) -> dict[str, str]:
-    candidates: list[Path] = []
-    report_dir = artifact.get("report_dir")
-    if isinstance(report_dir, str) and report_dir:
-        candidates.append(root / report_dir)
-    if stage == "spec":
-        candidates.append(root / ".workflow/artifacts/specs/_runtime")
-    elif stage == "test":
-        candidates.append(root / ".workflow/artifacts/test-agent")
-    elif stage == "builder":
-        candidates.append(root / ".workflow/artifacts/builder-agent")
-    elif stage == "verifier":
-        candidates.append(root / ".workflow/artifacts/verifier-agent")
-    elif stage == "eval":
-        candidates.append(root / ".workflow/artifacts/eval-agent")
-
-    result: dict[str, str] = {}
-    names = {
-        "events": "runtime_events.log",
-        "timeline": "runtime_timeline.md",
-        "tool_events": "tool_events.json",
-        "tool_calls": "tool_calls.md",
-        "metadata": "runtime_metadata.json",
-        "transcript": "runtime_transcript.json",
-        "context_snapshot": "context_snapshot.md",
-        "dynamic_context": "dynamic_context.json",
-    }
-    for directory in candidates:
-        for key, filename in names.items():
-            path = directory / filename
-            if key not in result and path.exists():
-                result[key] = relative_to(path.resolve(), root.resolve())
-    return result
 
 
 def tavily_search(

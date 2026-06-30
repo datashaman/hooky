@@ -1,7 +1,0 @@
-{
-  "expected_status": "fail",
-  "expected_safe_to_merge": false,
-  "expected_topics": ["verifier"],
-  "name": "verifier-failed"
-}
-

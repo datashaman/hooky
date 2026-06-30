@@ -1,8 +1,0 @@
-{
-  "context_length": 1047576,
-  "model": "openai/gpt-4.1-mini",
-  "reasoning_request": null,
-  "source": "manual-multimodal-required",
-  "updated_at": "2026-06-29T06:40:00+00:00",
-  "variant_id": "openai/gpt-4.1-mini"
-}

@@ -1,8 +1,0 @@
-{
-  "required_report_files": [
-    "context_snapshot.md",
-    "contract.json",
-    "dynamic_context.json",
-    "test_report.md"
-  ]
-}

@@ -55,7 +55,7 @@ The loop must be resumable from durable files, not conversation context. The
 primary state should be small enough to read directly:
 
 ```text
-.workflow/loop/
+.hooky/
   feature_list.json
   progress.md
   contract.md
@@ -111,7 +111,7 @@ state files, but they must be available when the loop behaves badly.
 Each attempt should keep grep-friendly raw transcripts for each model role:
 
 ```text
-.workflow/loop/attempts/001/traces/
+.hooky/attempts/001/traces/
   planner.jsonl
   generator.jsonl
   evaluator.jsonl
@@ -128,9 +128,9 @@ The `evaluator` may cite transcript moments when explaining a bad trajectory.
 Useful local inspection commands:
 
 ```bash
-uv run hooky -C <workspace> loop runtime-log --attempt 002 --follow
-uv run hooky -C <workspace> loop transcript --attempt 002 --role assistant --last 10
-uv run hooky -C <workspace> loop stall --attempt 002
+uv run hooky -C <workspace> runtime-log --attempt 002 --follow
+uv run hooky -C <workspace> transcript --attempt 002 --role assistant --last 10
+uv run hooky -C <workspace> stall --attempt 002
 ```
 
 `runtime-log` shows the live model/tool event stream. `transcript` shows the
@@ -149,7 +149,7 @@ Local runs must not require an external collector. If OpenTelemetry is enabled,
 write a local artifact beside the raw transcripts:
 
 ```text
-.workflow/loop/attempts/001/otel/
+.hooky/attempts/001/otel/
   spans.jsonl
 ```
 

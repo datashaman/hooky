@@ -1,8 +1,0 @@
-{
-  "name": "eval-agent-overengineered-fixture",
-  "private": true,
-  "scripts": {
-    "test": "node --test tests/calculator.test.js"
-  }
-}
-

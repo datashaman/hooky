@@ -61,16 +61,8 @@ def in_workspace(workspace: Path):
         os.chdir(previous)
 
 
-def repo_file(path: str) -> Path:
-    return REPO_ROOT / path
-
-
-def workflow_dir(workspace: Path) -> Path:
-    return workspace / ".workflow"
-
-
 def loop_dir(workspace: Path) -> Path:
-    return workflow_dir(workspace) / "loop"
+    return workspace / ".hooky"
 
 
 def loop_attempts_dir(workspace: Path) -> Path:
@@ -713,7 +705,7 @@ def reset_loop_attempt_workspace(workspace: Path) -> str:
         return "no git repository; preserving workspace for next attempt"
     commands = [
         ["git", "-C", str(workspace), "reset", "--hard", "HEAD"],
-        ["git", "-C", str(workspace), "clean", "-fd", "-e", ".workflow", "-e", "node_modules"],
+        ["git", "-C", str(workspace), "clean", "-fd", "-e", ".hooky", "-e", "node_modules"],
     ]
     outputs: list[str] = []
     for command in commands:
@@ -843,6 +835,21 @@ def is_git_worktree(workspace: Path) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
+def git_has_head(workspace: Path) -> bool:
+    return git_command(workspace, ["rev-parse", "--verify", "HEAD"], check=False).returncode == 0
+
+
+def ensure_workspace_ready(workspace: Path, *, git: bool = True) -> None:
+    workspace.mkdir(parents=True, exist_ok=True)
+    if not git:
+        return
+    was_worktree = is_git_worktree(workspace)
+    if not was_worktree:
+        git_command(workspace, ["init"], check=True)
+    if not was_worktree or not git_has_head(workspace):
+        agent_runtime.ensure_git_baseline(workspace)
+
+
 @app.command()
 def init(
     ctx: typer.Context,
@@ -854,13 +861,7 @@ def init(
 ) -> None:
     """Initialize a workspace with loop runtime context."""
     workspace = workspace_from_ctx(ctx)
-    workspace.mkdir(parents=True, exist_ok=True)
-    if git and not is_git_worktree(workspace):
-        git_command(workspace, ["init"], check=True)
-    copy_missing(repo_file(".workflow/agents"), workspace / ".workflow/agents", force=force)
-    copy_missing(repo_file("AGENTS.md"), workspace / "AGENTS.md", force=force)
-    if git:
-        agent_runtime.ensure_git_baseline(workspace)
+    ensure_workspace_ready(workspace, git=git)
     proposal = read_optional_proposal_file_or_stdin(proposal_file)
     title = title or title_from_body(proposal)
     loop_root = initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
@@ -953,7 +954,7 @@ def loop_watch(
     follow: Annotated[bool, typer.Option("--follow/--no-follow", "-f", help="Follow the loop log.")] = True,
     last_run_path: Annotated[Path, typer.Option(help="Path written by loop init/run; used when the current directory has no loop.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
-    """Show or follow .workflow/loop/log.md."""
+    """Show or follow .hooky/log.md."""
     workspace = workspace_for_loop(ctx, last_run_path)
     ctx.obj["workspace"] = workspace
     ensure_loop_initialized(workspace)
@@ -1234,7 +1235,7 @@ def loop_trace_grep(
 
 
 @app.command("harness-review", hidden=True)
-def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(help="Write .workflow/loop/harness_review.md.")] = True) -> None:
+def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(help="Write .hooky/harness_review.md.")] = True) -> None:
     """Review the loop harness against the Karpathy loop principles."""
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
@@ -1324,6 +1325,7 @@ def run_model_loop_once(
     force: bool,
     last_run_path: Path,
 ) -> None:
+    ensure_workspace_ready(workspace)
     if not loop_state_path(workspace).exists() or force:
         initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
     elif proposal:
@@ -1516,6 +1518,7 @@ def loop_run(
 ) -> None:
     """Run the Karpathy-style loop suite through one attempt."""
     workspace = workspace_from_ctx(ctx)
+    ensure_workspace_ready(workspace)
     if proposal_file is not None:
         proposal = resolve_workspace_path(workspace, proposal_file).read_text(encoding="utf-8")
     elif not proposal and not sys.stdin.isatty():
@@ -1672,7 +1675,7 @@ def loop_log(
     title: Annotated[str, typer.Option(help="Short log title.")] = "manual note",
     body: Annotated[str, typer.Option(help="Optional log body.")] = "",
 ) -> None:
-    """Append an entry to .workflow/loop/log.md."""
+    """Append an entry to .hooky/log.md."""
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     append_loop_log(workspace, op, title, body)

@@ -1,6 +1,0 @@
-{
-  "protected_prefixes": [
-    ".workflow/artifacts/test-agent",
-    "tests"
-  ]
-}

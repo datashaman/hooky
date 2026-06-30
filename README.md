@@ -25,7 +25,7 @@ Loop roles are separated:
 - `generator`: proposes testable done criteria, then changes the workspace during implementation attempts.
 - `evaluator`: reviews the contract and implementation attempts. It does not edit the workspace.
 
-The roles have separate prompts and context windows. They communicate through durable files under `.workflow/loop/`, not through hidden in-memory handoffs.
+The roles have separate prompts and context windows. They communicate through durable files under `.hooky/`, not through hidden in-memory handoffs.
 
 ## Local CLI Workflow
 
@@ -68,12 +68,12 @@ uv run hooky trace-grep TodoMVC
 
 Durable loop files:
 
-- `.workflow/loop/proposal.md`
-- `.workflow/loop/contract.md`
-- `.workflow/loop/feature_list.json`
-- `.workflow/loop/progress.md`
-- `.workflow/loop/log.md`
-- `.workflow/loop/attempts/<id>/`
+- `.hooky/proposal.md`
+- `.hooky/contract.md`
+- `.hooky/feature_list.json`
+- `.hooky/progress.md`
+- `.hooky/log.md`
+- `.hooky/attempts/<id>/`
 
 ## Agent Skills
 

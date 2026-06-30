@@ -1,6 +1,0 @@
-{
-  "expected_status": "fail",
-  "expected_topics": ["test integrity"],
-  "name": "tampered-tests"
-}
-

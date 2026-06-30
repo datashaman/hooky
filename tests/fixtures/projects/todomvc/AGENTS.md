@@ -1,6 +1,6 @@
 # TodoMVC Agent Context
 
-This fixture represents a React TodoMVC project used to evaluate SDLC agents.
+This fixture represents a React TodoMVC project used by the Hooky loop.
 
 ## Application Shape
 
@@ -39,7 +39,7 @@ This fixture represents a React TodoMVC project used to evaluate SDLC agents.
   - `.filters a`
 - Tests should cover persistence by inspecting `localStorage` only at user-visible workflow boundaries.
 - Tests should avoid depending on internal source file names.
-- Tests should be written so the Builder Agent can satisfy them with a normal React TodoMVC implementation rather than test-only hooks.
+- Tests should be written so a normal React TodoMVC implementation can satisfy them rather than test-only hooks.
 - Do not choose a different test runner unless the approved spec or project files explicitly replace Playwright.
 
 ## Available Local Tooling
@@ -51,14 +51,13 @@ This fixture represents a React TodoMVC project used to evaluate SDLC agents.
 - `npm run dev` starts the Vite development server on port 4173.
 - `npm test` maps to `playwright test`.
 - The Playwright config starts the Vite dev server and uses `http://127.0.0.1:4173` as `baseURL`.
-- The Test Agent may run setup commands and may add test-only dependencies if the approved test strategy requires missing test tooling.
-- The Test Agent may run generated tests to prove the suite is red before implementation. It must report failing tests and must not fix production code.
-- The Test Agent must report every dependency manifest or lockfile change in `dependency_changes`.
-- The Test Agent must not add production implementation dependencies unless the approved spec or project context explicitly defines them as part of the test target.
+- The generator may run setup commands and may add test-only dependencies if the accepted contract requires missing test tooling.
+- The generator may run tests during development, but the evaluator decides whether the attempt passes.
+- The generator must report every dependency manifest or lockfile change in its attempt report.
+- The generator must not add production implementation dependencies unless the accepted contract or project context explicitly defines them as part of the target.
 
 ## Project Boundaries
 
-- The Test Agent may create test files and fixtures only.
-- The Test Agent must not create or modify production implementation files.
-- The Test Agent must not introduce unreported dependency changes.
-- The Test Agent must preserve the approved acceptance criteria exactly.
+- The generator may create project-native tests and implementation files after contract acceptance.
+- The generator must not introduce unreported dependency changes.
+- The generator must preserve the accepted contract criteria exactly.
