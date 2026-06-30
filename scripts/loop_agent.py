@@ -143,6 +143,20 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
         raise ValueError("feature_list.json must include features array")
 
 
+def validate_generator_contract_write(working_folder: Path, path: Path, content: str) -> None:
+    relative = path.resolve().relative_to(working_folder.resolve()).as_posix()
+    if relative == ".workflow/loop/contract.md":
+        if "## Done Criteria" not in content or len(content.strip()) < 100:
+            raise ValueError("contract.md writes must preserve a substantive ## Done Criteria section")
+        return
+    if relative == ".workflow/loop/feature_list.json":
+        payload = json.loads(content)
+        if not isinstance(payload.get("features"), list):
+            raise ValueError("feature_list.json writes must include a features array")
+        return
+    raise ValueError(f"unexpected generator contract write: {relative}")
+
+
 def validate_evaluator_contract_report(report: dict[str, Any], _working_folder: Path) -> None:
     if not isinstance(report.get("accepted"), bool):
         raise ValueError("evaluator contract report must include accepted boolean")
@@ -261,6 +275,7 @@ def generate_generator_contract_artifacts(
         max_seconds=int(os.environ.get("LOOP_GENERATOR_MAX_SECONDS", "240")),
         context_window_tokens=model_metadata.get("context_length"),
         final_validator=lambda report: validate_generator_contract_report(report, working_folder),
+        write_validator=lambda path, content: validate_generator_contract_write(working_folder, path, content),
         skills=agent_skills.discover_skills(working_folder),
         write_enabled=True,
         write_allowed_prefixes=[".workflow/loop/contract.md", ".workflow/loop/feature_list.json"],
