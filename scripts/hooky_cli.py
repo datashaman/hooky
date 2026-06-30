@@ -235,7 +235,7 @@ def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:
     return loop_attempts_dir(workspace) / attempt_id
 
 
-def initialize_loop_files(workspace: Path, *, title: str | None, boundary: str = "", force: bool = False) -> Path:
+def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str = "", force: bool = False) -> Path:
     loop_root = loop_dir(workspace)
     if loop_state_path(workspace).exists() and not force:
         raise typer.BadParameter("loop already initialized. Use --force to overwrite.")
@@ -247,8 +247,8 @@ def initialize_loop_files(workspace: Path, *, title: str | None, boundary: str =
     contract_lines = ["# Loop Contract", ""]
     if title:
         contract_lines.extend(["## Problem", "", f"# {title}", ""])
-    if boundary:
-        contract_lines.extend(["## Boundary", "", boundary.strip(), ""])
+    if proposal:
+        contract_lines.extend(["## Proposal", "", proposal.strip(), ""])
     contract_lines.extend(
         [
             "## Done Criteria",
@@ -390,9 +390,9 @@ def read_body_arg_or_file(body: str | None, body_file: Path | None) -> str:
     raise typer.BadParameter("body is required via --body or --body-file")
 
 
-def read_optional_body_file_or_stdin(body_file: Path | None) -> str:
-    if body_file:
-        return body_file.read_text(encoding="utf-8").strip()
+def read_optional_proposal_file_or_stdin(proposal_file: Path | None) -> str:
+    if proposal_file:
+        return proposal_file.read_text(encoding="utf-8").strip()
     if not sys.stdin.isatty():
         return sys.stdin.read().strip()
     return ""
@@ -1367,15 +1367,15 @@ def skills_show(ctx: typer.Context, name: Annotated[str, typer.Argument(help="Sk
 def loop_init(
     ctx: typer.Context,
     title: Annotated[str | None, typer.Option(help="Problem title for contract.md.")] = None,
-    body_file: Annotated[Path | None, typer.Option(help="Optional problem boundary Markdown file.")] = None,
+    proposal_file: Annotated[Path | None, typer.Option(help="Optional problem proposal Markdown file.")] = None,
     force: Annotated[bool, typer.Option(help="Overwrite existing loop files.")] = False,
     last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Initialize the Karpathy-style loop durable state files."""
     workspace = workspace_from_ctx(ctx)
-    boundary = read_optional_body_file_or_stdin(body_file)
-    title = title or title_from_body(boundary)
-    loop_root = initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
+    proposal = read_optional_proposal_file_or_stdin(proposal_file)
+    title = title or title_from_body(proposal)
+    loop_root = initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
     write_last_run_workspace(last_run_path, workspace)
     typer.echo(f"loop: {loop_root}")
     typer.echo("next: hooky loop status")
@@ -1433,28 +1433,28 @@ def run_model_loop_once(
     workspace: Path,
     *,
     title: str | None,
-    boundary: str,
+    proposal: str,
     force: bool,
     last_run_path: Path,
 ) -> None:
     if not loop_state_path(workspace).exists() or force:
-        initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
-    elif boundary:
+        initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
+    elif proposal:
         path = loop_contract_path(workspace)
-        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Boundary", boundary), encoding="utf-8")
+        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal), encoding="utf-8")
 
     state = read_loop_state(workspace)
     planner_report, planner_usage = loop_agent.generate_planner_artifacts(
         working_folder=workspace,
-        boundary=boundary or loop_contract_path(workspace).read_text(encoding="utf-8"),
+        proposal=proposal or loop_contract_path(workspace).read_text(encoding="utf-8"),
         attempt_id=state.get("current_attempt"),
     )
-    state["status"] = "boundary-written"
+    state["status"] = "proposal-written"
     state["contract_accepted"] = False
     state["last_action"] = "run:planner"
     state.setdefault("role_usage", {})["planner"] = planner_usage
     write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(planner_report.get("summary") or "Planner wrote contract boundary."))
+    write_loop_progress(workspace, state, note=str(planner_report.get("summary") or "Planner wrote contract proposal."))
     append_loop_log(workspace, "planner", "planner wrote contract", str(planner_report.get("summary") or ""))
 
     generator_contract_report, generator_contract_usage = loop_agent.generate_generator_contract_artifacts(
@@ -1540,7 +1540,7 @@ def run_model_loop_once(
 def loop_run(
     ctx: typer.Context,
     title: Annotated[str | None, typer.Option(help="Problem title used when initializing a new loop.")] = None,
-    boundary: Annotated[str, typer.Option(help="Planner boundary text for contract.md.")] = "",
+    proposal: Annotated[str, typer.Option(help="Planner proposal text for contract.md.")] = "",
     criteria: Annotated[str, typer.Option(help="Generator-proposed done criteria.")] = "- Define done criteria explicitly.",
     review: Annotated[str, typer.Option(help="Evaluator contract review text.")] = "Contract criteria are accepted for this local run.",
     status: Annotated[str, typer.Option(help="Evaluator status: pass or fail.")] = "pass",
@@ -1553,13 +1553,13 @@ def loop_run(
     """Run the local Karpathy-style loop suite through one attempt."""
     workspace = workspace_from_ctx(ctx)
     if models:
-        run_model_loop_once(workspace, title=title, boundary=boundary, force=force, last_run_path=last_run_path)
+        run_model_loop_once(workspace, title=title, proposal=proposal, force=force, last_run_path=last_run_path)
         return
     if not loop_state_path(workspace).exists() or force:
-        initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
-    elif boundary:
+        initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
+    elif proposal:
         path = loop_contract_path(workspace)
-        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Boundary", boundary), encoding="utf-8")
+        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal), encoding="utf-8")
     if status not in {"pass", "fail"}:
         raise typer.BadParameter("status must be pass or fail")
     if recommendation not in {"continue", "restart-attempt", "restart-contract", "stop"}:
@@ -1682,32 +1682,32 @@ def loop_log(
     typer.echo(f"log: {loop_log_path(workspace)}")
 
 
-@loop_app.command("boundary")
-def loop_boundary(
+@loop_app.command("proposal")
+def loop_proposal(
     ctx: typer.Context,
-    body: Annotated[str | None, typer.Option(help="Problem boundary text.")] = None,
-    body_file: Annotated[Path | None, typer.Option(help="Problem boundary Markdown file.")] = None,
+    proposal: Annotated[str | None, typer.Option(help="Problem proposal text.")] = None,
+    proposal_file: Annotated[Path | None, typer.Option(help="Problem proposal Markdown file.")] = None,
 ) -> None:
-    """Write the planner problem boundary into contract.md."""
+    """Write the planner problem proposal into contract.md."""
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
-    boundary = read_body_arg_or_file(body, body_file)
+    proposal_text = read_body_arg_or_file(proposal, proposal_file)
     path = loop_contract_path(workspace)
-    path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Boundary", boundary), encoding="utf-8")
+    path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal_text), encoding="utf-8")
     state = read_loop_state(workspace)
-    state["status"] = "boundary-written"
+    state["status"] = "proposal-written"
     state["contract_accepted"] = False
-    state["last_action"] = "boundary"
+    state["last_action"] = "proposal"
     write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note="Problem boundary updated.")
-    append_loop_log(workspace, "planner", "boundary updated")
+    write_loop_progress(workspace, state, note="Problem proposal updated.")
+    append_loop_log(workspace, "planner", "proposal updated")
     typer.echo(f"contract: {path}")
 
 
 @loop_app.command("planner")
 def loop_planner(
     ctx: typer.Context,
-    boundary: Annotated[str, typer.Option(help="Problem boundary text for the planner.")] = "",
+    proposal: Annotated[str, typer.Option(help="Problem proposal text for the planner.")] = "",
 ) -> None:
     """Run the real planner model role to write contract.md."""
     workspace = workspace_from_ctx(ctx)
@@ -1715,15 +1715,15 @@ def loop_planner(
     state = read_loop_state(workspace)
     report, usage = loop_agent.generate_planner_artifacts(
         working_folder=workspace,
-        boundary=boundary or loop_contract_path(workspace).read_text(encoding="utf-8"),
+        proposal=proposal or loop_contract_path(workspace).read_text(encoding="utf-8"),
         attempt_id=state.get("current_attempt"),
     )
-    state["status"] = "boundary-written"
+    state["status"] = "proposal-written"
     state["contract_accepted"] = False
     state["last_action"] = "planner"
     state.setdefault("role_usage", {})["planner"] = usage
     write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(report.get("summary") or "Planner wrote contract boundary."))
+    write_loop_progress(workspace, state, note=str(report.get("summary") or "Planner wrote contract proposal."))
     append_loop_log(workspace, "planner", "planner wrote contract", str(report.get("summary") or ""))
     typer.echo(f"contract: {loop_contract_path(workspace)}")
     typer.echo(f"summary: {report.get('summary')}")

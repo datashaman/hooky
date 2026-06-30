@@ -10,7 +10,7 @@ Use this vocabulary consistently when discussing this loop.
 The loop has three model roles, each with its own context window and system
 prompt:
 
-- `planner`: turns vague user input into a problem boundary. It never edits code.
+- `planner`: turns vague user input into a problem proposal. It never edits code.
 - `generator`: changes the project to satisfy the contract. It does not grade its
   own work.
 - `evaluator`: assumes the current attempt is broken, inspects diffs, runs tools,
@@ -27,9 +27,9 @@ contract, stop at a cap, or ask for human input.
 ## Contract Negotiation
 
 The `planner` does not write the final grading contract. It writes the problem
-boundary. The grading contract is negotiated before implementation:
+proposal. The grading contract is negotiated before implementation:
 
-1. The `planner` writes the problem boundary into `contract.md`.
+1. The `planner` writes the problem proposal into `contract.md`.
 2. The `generator` revises `contract.md` with proposed done criteria.
 3. The `evaluator` reviews `contract.md`, records objections in `log.md`, and
    updates `progress.md` with the current contract-negotiation status.
@@ -38,7 +38,7 @@ boundary. The grading contract is negotiated before implementation:
    assertions.
 6. Only after contract acceptance may the `generator` write implementation.
 
-The original planner output is the boundary. The negotiated contract is the
+The original planner output is the proposal. The negotiated contract is the
 grading instrument. The `generator` may propose criteria, but cannot approve
 them. The `evaluator` may reject weak, vague, missing, or untestable criteria
 before any code is written.
@@ -60,7 +60,7 @@ Supporting artifacts such as patches, screenshots, test logs, and transcripts
 may live under attempt-specific folders, but those artifacts are evidence. They
 are not the primary loop state.
 
-`contract.md` carries both the problem boundary and the accepted grading
+`contract.md` carries both the problem proposal and the accepted grading
 contract. `feature_list.json` is the structured checklist projected from the
 accepted contract. `progress.md` records the current loop state and next action.
 `log.md` records append-only decisions, objections, restarts, and notable events.
@@ -221,7 +221,7 @@ next, but does not invent the evaluation itself.
 
 Common bottlenecks include:
 
-- unclear problem boundary
+- unclear problem proposal
 - weak contract
 - bad generator trajectory
 - evaluator blindness

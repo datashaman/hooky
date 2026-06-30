@@ -492,7 +492,7 @@ class HookyProgressTests(unittest.TestCase):
         feature_list = hooky_cli.read_json(self.workspace / ".workflow/loop/feature_list.json")
         self.assertEqual(feature_list["features"], [])
 
-    def test_loop_init_reads_boundary_from_stdin_and_derives_title(self) -> None:
+    def test_loop_init_reads_proposal_from_stdin_and_derives_title(self) -> None:
         result = CliRunner().invoke(
             hooky_cli.app,
             ["-C", str(self.workspace), "loop", "init"],
@@ -504,13 +504,13 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("# Build a todo app", contract)
         self.assertIn("Users can add and complete todos.", contract)
 
-    def test_loop_init_derives_title_from_body_file_when_title_missing(self) -> None:
-        body_file = self.workspace / "boundary.md"
+    def test_loop_init_derives_title_from_proposal_file_when_title_missing(self) -> None:
+        body_file = self.workspace / "proposal.md"
         body_file.write_text("Build a calendar\n\nUsers can add events.\n", encoding="utf-8")
 
         result = CliRunner().invoke(
             hooky_cli.app,
-            ["-C", str(self.workspace), "loop", "init", "--body-file", str(body_file)],
+            ["-C", str(self.workspace), "loop", "init", "--proposal-file", str(body_file)],
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
@@ -530,11 +530,11 @@ class HookyProgressTests(unittest.TestCase):
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
 
-        boundary = runner.invoke(
-            hooky_cli.app,
-            ["-C", str(self.workspace), "loop", "boundary", "--body", "Build a browser todo app."],
-        )
         proposal = runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "proposal", "--proposal", "Build a browser todo app."],
+        )
+        contract = runner.invoke(
             hooky_cli.app,
             ["-C", str(self.workspace), "loop", "propose-contract", "--body", "- Add todos\n- Persist todos"],
         )
@@ -543,8 +543,8 @@ class HookyProgressTests(unittest.TestCase):
             ["-C", str(self.workspace), "loop", "review-contract", "--status", "rejected", "--body", "Missing route criteria."],
         )
 
-        self.assertEqual(boundary.exit_code, 0, boundary.output)
         self.assertEqual(proposal.exit_code, 0, proposal.output)
+        self.assertEqual(contract.exit_code, 0, contract.output)
         self.assertEqual(review.exit_code, 0, review.output)
         contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
         self.assertIn("Build a browser todo app.", contract)
@@ -573,22 +573,22 @@ class HookyProgressTests(unittest.TestCase):
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
         contract_path = self.workspace / ".workflow/loop/contract.md"
 
-        def fake_planner(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+        def fake_planner(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
             self.assertEqual(working_folder.resolve(), self.workspace.resolve())
-            self.assertIn("Build a calendar", boundary)
-            contract_path.write_text("# Loop Contract\n\n## Boundary\n\nBuild a calendar.\n", encoding="utf-8")
-            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Boundary written."}, {"cost": 0.01}
+            self.assertIn("Build a calendar", proposal)
+            contract_path.write_text("# Loop Contract\n\n## Proposal\n\nBuild a calendar.\n", encoding="utf-8")
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Proposal written."}, {"cost": 0.01}
 
         with mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner):
             result = runner.invoke(
                 hooky_cli.app,
-                ["-C", str(self.workspace), "loop", "planner", "--boundary", "Build a calendar"],
+                ["-C", str(self.workspace), "loop", "planner", "--proposal", "Build a calendar"],
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("Boundary written.", result.output)
+        self.assertIn("Proposal written.", result.output)
         state = hooky_cli.read_loop_state(self.workspace)
-        self.assertEqual(state["status"], "boundary-written")
+        self.assertEqual(state["status"], "proposal-written")
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["role_usage"]["planner"]["cost"], 0.01)
         self.assertIn("Build a calendar", contract_path.read_text(encoding="utf-8"))
@@ -740,14 +740,14 @@ class HookyProgressTests(unittest.TestCase):
     def test_loop_run_models_executes_three_role_suite(self) -> None:
         runner = CliRunner()
 
-        def fake_planner(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+        def fake_planner(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
             self.assertEqual(working_folder.resolve(), self.workspace.resolve())
-            self.assertIn("Build todos", boundary)
+            self.assertIn("Build todos", proposal)
             (working_folder / ".workflow/loop/contract.md").write_text(
-                "# Loop Contract\n\n## Boundary\n\nBuild todos.\n",
+                "# Loop Contract\n\n## Proposal\n\nBuild todos.\n",
                 encoding="utf-8",
             )
-            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Boundary ready."}, {"cost": 0.01}
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Proposal ready."}, {"cost": 0.01}
 
         def fake_contract(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
             (working_folder / ".workflow/loop/contract.md").write_text(
@@ -798,7 +798,7 @@ class HookyProgressTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             result = runner.invoke(
                 hooky_cli.app,
-                ["-C", str(self.workspace), "loop", "run", "--models", "--boundary", "Build todos"],
+                ["-C", str(self.workspace), "loop", "run", "--models", "--proposal", "Build todos"],
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
@@ -959,7 +959,7 @@ class HookyProgressTests(unittest.TestCase):
                 "run",
                 "--title",
                 "Todo app",
-                "--boundary",
+                "--proposal",
                 "Build a TodoMVC-style app.",
                 "--criteria",
                 "- Add todos\n- Persist todos",

@@ -183,7 +183,7 @@ def validate_evaluator_attempt_report(report: dict[str, Any], _working_folder: P
         raise ValueError("failed evaluator report must include findings")
 
 
-def generate_planner_artifacts(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required; loop planner has no non-AI path")
     working_folder = working_folder.resolve()
@@ -213,7 +213,7 @@ def generate_planner_artifacts(*, working_folder: Path, boundary: str, attempt_i
         result = run_tool_agent(
             model=model,
             system=planner_system_prompt(),
-            user=planner_user_prompt(boundary, model_metadata),
+            user=planner_user_prompt(proposal, model_metadata),
             runtime=runtime,
         )
     except AgentRunError as exc:
@@ -479,7 +479,7 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
 def planner_system_prompt() -> str:
     return """You are the planner in a three-role Karpathy-style loop.
 
-You have one responsibility: turn vague user input into the problem boundary in .workflow/loop/contract.md.
+You have one responsibility: turn vague user input into the problem proposal in .workflow/loop/contract.md.
 
 You must never edit production code, tests, attempt artifacts, or evaluator reports.
 You must not write the final grading contract. The generator proposes done criteria later and the evaluator reviews them.
@@ -489,10 +489,10 @@ Finish only with final_report.
 """
 
 
-def planner_user_prompt(boundary: str, model_metadata: dict[str, Any]) -> str:
-    return f"""Problem boundary input:
+def planner_user_prompt(proposal: str, model_metadata: dict[str, Any]) -> str:
+    return f"""Problem proposal input:
 
-{boundary.strip() or "(no boundary provided)"}
+{proposal.strip() or "(no proposal provided)"}
 
 Selected model:
 ```json
@@ -501,7 +501,7 @@ Selected model:
 
 Write .workflow/loop/contract.md with:
 - title
-- problem boundary
+- problem proposal
 - non-goals or unknowns if any
 - placeholder Done Criteria section stating that the generator must propose criteria
 - placeholder Taste Rubric section stating that it is optional and must be explicit when subjective quality matters
@@ -584,7 +584,7 @@ Selected model:
 {json.dumps(model_metadata, indent=2, sort_keys=True)}
 ```
 
-Accept only if the Done Criteria are concrete, testable, within the planner boundary, and sufficient for a small working product.
+Accept only if the Done Criteria are concrete, testable, within the planner proposal, and sufficient for a small working product.
 If rejecting, list required_changes as specific edits the generator should make to the contract.
 Finish only with final_report.
 """
