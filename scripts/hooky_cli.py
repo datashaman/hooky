@@ -283,6 +283,82 @@ def update_loop_attempt(state: dict[str, Any], attempt_id: str, **updates: Any) 
     raise typer.BadParameter(f"attempt not found: {attempt_id}")
 
 
+def start_loop_attempt_state(workspace: Path, state: dict[str, Any]) -> tuple[str, Path, dict[str, Any]]:
+    if not state.get("contract_accepted"):
+        raise typer.BadParameter("contract is not accepted. Run `hooky loop accept-contract` first.")
+    active = state.get("current_attempt")
+    if active:
+        raise typer.BadParameter(f"attempt already active: {active}")
+    attempt_id = next_loop_attempt_id(state)
+    attempt_dir = loop_attempt_dir(workspace, attempt_id)
+    (attempt_dir / "traces").mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "otel").mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "traces/planner.jsonl").touch()
+    (attempt_dir / "traces/generator.jsonl").touch()
+    (attempt_dir / "traces/evaluator.jsonl").touch()
+    (attempt_dir / "otel/spans.jsonl").touch()
+    attempt = {
+        "id": attempt_id,
+        "status": "running",
+        "started_at": utc_now(),
+        "path": attempt_dir.relative_to(workspace).as_posix(),
+    }
+    state.setdefault("attempts", []).append(attempt)
+    state["current_attempt"] = attempt_id
+    state["status"] = "attempt-running"
+    return attempt_id, attempt_dir, state
+
+
+def apply_loop_evaluator_report(
+    workspace: Path,
+    state: dict[str, Any],
+    *,
+    attempt_id: str,
+    report: dict[str, Any],
+    report_path: Path,
+    action: str,
+) -> dict[str, Any]:
+    status = str(report.get("status"))
+    recommendation = str(report.get("recommendation"))
+    bottleneck = report.get("bottleneck")
+    findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    attempt_status = "passed" if status == "pass" else "failed"
+    if recommendation == "restart-attempt":
+        attempt_status = "restarted"
+    update_loop_attempt(
+        state,
+        attempt_id,
+        status=attempt_status,
+        completed_at=utc_now(),
+        evaluator_report=report_path.relative_to(workspace).as_posix(),
+        **({"bottleneck": bottleneck} if bottleneck else {}),
+    )
+    state["current_attempt"] = None
+    if recommendation == "restart-attempt":
+        state["status"] = "restart-attempt"
+    elif recommendation == "restart-contract":
+        state["status"] = "restart-contract"
+        state["contract_accepted"] = False
+    elif status == "pass":
+        state["status"] = "passed"
+    elif recommendation == "stop":
+        state["status"] = "stopped"
+    else:
+        state["status"] = "attempt-failed"
+    state["last_action"] = f"{action}:{recommendation}"
+    if bottleneck:
+        state["bottleneck"] = bottleneck
+    note = f"Evaluator status={status}, recommendation={recommendation}."
+    if bottleneck:
+        note += f" Bottleneck: {bottleneck}."
+    if findings:
+        note += " Findings: " + "; ".join(str(item) for item in findings)
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, "evaluator", f"attempt {attempt_id} report", note)
+    return state
+
+
 def replace_markdown_section(text: str, heading: str, body: str) -> str:
     marker = f"## {heading}"
     lines = text.splitlines()
@@ -1337,6 +1413,113 @@ def loop_watch(
     typer.echo(path.read_text(encoding="utf-8").rstrip())
 
 
+def run_model_loop_once(
+    workspace: Path,
+    *,
+    title: str | None,
+    boundary: str,
+    force: bool,
+    last_run_path: Path,
+) -> None:
+    if not loop_state_path(workspace).exists() or force:
+        initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
+    elif boundary:
+        path = loop_contract_path(workspace)
+        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Boundary", boundary), encoding="utf-8")
+
+    state = read_loop_state(workspace)
+    planner_report, planner_usage = loop_agent.generate_planner_artifacts(
+        working_folder=workspace,
+        boundary=boundary or loop_contract_path(workspace).read_text(encoding="utf-8"),
+        attempt_id=state.get("current_attempt"),
+    )
+    state["status"] = "boundary-written"
+    state["contract_accepted"] = False
+    state["last_action"] = "run:planner"
+    state.setdefault("role_usage", {})["planner"] = planner_usage
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=str(planner_report.get("summary") or "Planner wrote contract boundary."))
+    append_loop_log(workspace, "planner", "planner wrote contract", str(planner_report.get("summary") or ""))
+
+    generator_contract_report, generator_contract_usage = loop_agent.generate_generator_contract_artifacts(
+        working_folder=workspace,
+        attempt_id=state.get("current_attempt"),
+    )
+    state = read_loop_state(workspace)
+    state["status"] = "contract-proposed"
+    state["contract_accepted"] = False
+    state["last_action"] = "run:generator-contract"
+    state.setdefault("role_usage", {})["generator_contract"] = generator_contract_usage
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=str(generator_contract_report.get("summary") or "Generator proposed contract."))
+    append_loop_log(workspace, "generator", "generator proposed contract", str(generator_contract_report.get("summary") or ""))
+
+    evaluator_contract_report, evaluator_contract_usage = loop_agent.generate_evaluator_contract_artifacts(
+        working_folder=workspace,
+        attempt_id=state.get("current_attempt"),
+    )
+    state = read_loop_state(workspace)
+    accepted = bool(evaluator_contract_report.get("accepted"))
+    state["status"] = "contract-accepted" if accepted else "contract-rejected"
+    state["contract_accepted"] = accepted
+    state["last_action"] = "run:evaluator-contract"
+    state.setdefault("role_usage", {})["evaluator_contract"] = evaluator_contract_usage
+    write_loop_state(workspace, state)
+    review = str(evaluator_contract_report.get("review") or "")
+    write_loop_progress(workspace, state, note=f"Contract review {'accepted' if accepted else 'rejected'}. {review}")
+    append_loop_log(workspace, "evaluator", f"contract {'accepted' if accepted else 'rejected'}", review)
+    if not accepted:
+        write_last_run_workspace(last_run_path, workspace)
+        typer.echo("status: contract-rejected")
+        typer.echo(f"review: {review}")
+        return
+
+    attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
+    state["last_action"] = "run:start-attempt"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
+    append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
+
+    generator_report, generator_usage = loop_agent.generate_generator_implementation_artifacts(
+        working_folder=workspace,
+        attempt_id=attempt_id,
+    )
+    write_json(attempt_dir / "generator_report.json", generator_report)
+    state = read_loop_state(workspace)
+    state.setdefault("role_usage", {})["generator_implementation"] = generator_usage
+    state["last_action"] = "run:generator-implement"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=str(generator_report.get("summary") or "Generator completed implementation pass."))
+    append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(generator_report.get("summary") or ""))
+
+    evaluator_report, evaluator_usage = loop_agent.generate_evaluator_attempt_artifacts(
+        working_folder=workspace,
+        attempt_id=attempt_id,
+    )
+    evaluator_report = {
+        "schema_version": 1,
+        "attempt": attempt_id,
+        "written_at": utc_now(),
+        **evaluator_report,
+    }
+    report_path = attempt_dir / "evaluator_report.json"
+    write_json(report_path, evaluator_report)
+    state = read_loop_state(workspace)
+    state.setdefault("role_usage", {})["evaluator_attempt"] = evaluator_usage
+    state = apply_loop_evaluator_report(
+        workspace,
+        state,
+        attempt_id=attempt_id,
+        report=evaluator_report,
+        report_path=report_path,
+        action="run:evaluator-attempt",
+    )
+    write_last_run_workspace(last_run_path, workspace)
+    typer.echo(f"attempt: {attempt_id}")
+    typer.echo(f"status: {state['status']}")
+    typer.echo(f"report: {report_path}")
+
+
 @loop_app.command("run")
 def loop_run(
     ctx: typer.Context,
@@ -1347,11 +1530,15 @@ def loop_run(
     status: Annotated[str, typer.Option(help="Evaluator status: pass or fail.")] = "pass",
     recommendation: Annotated[str, typer.Option(help="Evaluator recommendation: continue, restart-attempt, restart-contract, or stop.")] = "continue",
     bottleneck: Annotated[str | None, typer.Option(help="Evaluator bottleneck.")] = None,
+    models: Annotated[bool, typer.Option("--models", help="Run the real planner/generator/evaluator model roles.")] = False,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
     last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Run the local Karpathy-style loop suite through one attempt."""
     workspace = workspace_from_ctx(ctx)
+    if models:
+        run_model_loop_once(workspace, title=title, boundary=boundary, force=force, last_run_path=last_run_path)
+        return
     if not loop_state_path(workspace).exists() or force:
         initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
     elif boundary:
@@ -1593,6 +1780,33 @@ def loop_review_contract(
     typer.echo(f"contract_review: {status}")
 
 
+@loop_app.command("evaluator-contract")
+def loop_evaluator_contract(ctx: typer.Context) -> None:
+    """Run the real evaluator model role to accept or reject the proposed contract."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    report, usage = loop_agent.generate_evaluator_contract_artifacts(
+        working_folder=workspace,
+        attempt_id=state.get("current_attempt"),
+    )
+    accepted = bool(report.get("accepted"))
+    state["status"] = "contract-accepted" if accepted else "contract-rejected"
+    state["contract_accepted"] = accepted
+    state["last_action"] = "evaluator-contract"
+    state.setdefault("role_usage", {})["evaluator_contract"] = usage
+    write_loop_state(workspace, state)
+    review = str(report.get("review") or "")
+    required_changes = report.get("required_changes") if isinstance(report.get("required_changes"), list) else []
+    note = f"Contract review {'accepted' if accepted else 'rejected'}. {review}"
+    if required_changes:
+        note += " Required changes: " + "; ".join(str(item) for item in required_changes)
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, "evaluator", f"contract {'accepted' if accepted else 'rejected'}", note)
+    typer.echo(f"contract_review: {'accepted' if accepted else 'rejected'}")
+    typer.echo(f"review: {review}")
+
+
 @loop_app.command("accept-contract")
 def loop_accept_contract(ctx: typer.Context) -> None:
     """Mark contract.md as accepted for implementation."""
@@ -1614,34 +1828,35 @@ def loop_start_attempt(ctx: typer.Context) -> None:
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
-    if not state.get("contract_accepted"):
-        raise typer.BadParameter("contract is not accepted. Run `hooky loop accept-contract` first.")
-    active = state.get("current_attempt")
-    if active:
-        raise typer.BadParameter(f"attempt already active: {active}")
-    attempt_id = next_loop_attempt_id(state)
-    attempt_dir = loop_attempt_dir(workspace, attempt_id)
-    (attempt_dir / "traces").mkdir(parents=True, exist_ok=True)
-    (attempt_dir / "otel").mkdir(parents=True, exist_ok=True)
-    (attempt_dir / "traces/planner.jsonl").touch()
-    (attempt_dir / "traces/generator.jsonl").touch()
-    (attempt_dir / "traces/evaluator.jsonl").touch()
-    (attempt_dir / "otel/spans.jsonl").touch()
-    attempt = {
-        "id": attempt_id,
-        "status": "running",
-        "started_at": utc_now(),
-        "path": attempt_dir.relative_to(workspace).as_posix(),
-    }
-    state.setdefault("attempts", []).append(attempt)
-    state["current_attempt"] = attempt_id
-    state["status"] = "attempt-running"
+    attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
     state["last_action"] = "start-attempt"
     write_loop_state(workspace, state)
     write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
     append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"path: {attempt_dir}")
+
+
+@loop_app.command("generator-implement")
+def loop_generator_implement(ctx: typer.Context) -> None:
+    """Run the real generator model role for the active implementation attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    attempt_id = active_loop_attempt(state)
+    report, usage = loop_agent.generate_generator_implementation_artifacts(
+        working_folder=workspace,
+        attempt_id=attempt_id,
+    )
+    report_path = loop_attempt_dir(workspace, attempt_id) / "generator_report.json"
+    write_json(report_path, report)
+    state.setdefault("role_usage", {})["generator_implementation"] = usage
+    state["last_action"] = "generator-implement"
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=str(report.get("summary") or "Generator completed implementation pass."))
+    append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(report.get("summary") or ""))
+    typer.echo(f"report: {report_path}")
+    typer.echo(f"summary: {report.get('summary')}")
 
 
 @loop_app.command("complete-attempt")
@@ -1679,6 +1894,39 @@ def loop_complete_attempt(
     typer.echo(f"result: {result}")
 
 
+@loop_app.command("evaluator-attempt")
+def loop_evaluator_attempt(ctx: typer.Context) -> None:
+    """Run the real evaluator model role for the active implementation attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    attempt_id = active_loop_attempt(state)
+    report, usage = loop_agent.generate_evaluator_attempt_artifacts(
+        working_folder=workspace,
+        attempt_id=attempt_id,
+    )
+    report = {
+        "schema_version": 1,
+        "attempt": attempt_id,
+        "written_at": utc_now(),
+        **report,
+    }
+    report_path = loop_attempt_dir(workspace, attempt_id) / "evaluator_report.json"
+    write_json(report_path, report)
+    state.setdefault("role_usage", {})["evaluator_attempt"] = usage
+    state = apply_loop_evaluator_report(
+        workspace,
+        state,
+        attempt_id=attempt_id,
+        report=report,
+        report_path=report_path,
+        action="evaluator-attempt",
+    )
+    typer.echo(f"report: {report_path}")
+    typer.echo(f"recommendation: {report.get('recommendation')}")
+    typer.echo(f"status: {state.get('status')}")
+
+
 @loop_app.command("evaluator-report")
 def loop_evaluator_report(
     ctx: typer.Context,
@@ -1711,44 +1959,14 @@ def loop_evaluator_report(
     }
     report_path = loop_attempt_dir(workspace, attempt_id) / "evaluator_report.json"
     write_json(report_path, report)
-    attempt_status = "passed" if status == "pass" else "failed"
-    if recommendation == "restart-attempt":
-        attempt_status = "restarted"
-    update_loop_attempt(
+    apply_loop_evaluator_report(
+        workspace,
         state,
-        attempt_id,
-        status=attempt_status,
-        completed_at=utc_now(),
-        evaluator_report=report_path.relative_to(workspace).as_posix(),
-        **({"bottleneck": bottleneck} if bottleneck else {}),
+        attempt_id=attempt_id,
+        report=report,
+        report_path=report_path,
+        action="evaluator-report",
     )
-    if recommendation == "restart-attempt":
-        state["current_attempt"] = None
-        state["status"] = "restart-attempt"
-    elif recommendation == "restart-contract":
-        state["current_attempt"] = None
-        state["status"] = "restart-contract"
-        state["contract_accepted"] = False
-    elif status == "pass":
-        state["current_attempt"] = None
-        state["status"] = "passed"
-    elif recommendation == "stop":
-        state["current_attempt"] = None
-        state["status"] = "stopped"
-    else:
-        state["current_attempt"] = None
-        state["status"] = "attempt-failed"
-    state["last_action"] = f"evaluator-report:{recommendation}"
-    if bottleneck:
-        state["bottleneck"] = bottleneck
-    note = f"Evaluator status={status}, recommendation={recommendation}."
-    if bottleneck:
-        note += f" Bottleneck: {bottleneck}."
-    if finding:
-        note += " Findings: " + "; ".join(finding)
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=note)
-    append_loop_log(workspace, "evaluator", f"attempt {attempt_id} report", note)
     typer.echo(f"report: {report_path}")
     typer.echo(f"recommendation: {recommendation}")
 

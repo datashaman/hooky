@@ -75,6 +75,50 @@ def generator_contract_schema() -> dict[str, Any]:
     }
 
 
+def evaluator_contract_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "accepted", "review", "required_changes"],
+        "properties": {
+            "status": {"type": "string", "enum": ["done", "blocked"]},
+            "accepted": {"type": "boolean"},
+            "review": {"type": "string"},
+            "required_changes": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
+def generator_implementation_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "summary", "changed_files", "tests_run", "failures"],
+        "properties": {
+            "status": {"type": "string", "enum": ["done", "blocked"]},
+            "summary": {"type": "string"},
+            "changed_files": {"type": "array", "items": {"type": "string"}},
+            "tests_run": {"type": "array", "items": {"type": "string"}},
+            "failures": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
+def evaluator_attempt_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["status", "recommendation", "bottleneck", "findings", "score"],
+        "properties": {
+            "status": {"type": "string", "enum": ["pass", "fail"]},
+            "recommendation": {"type": "string", "enum": ["continue", "restart-attempt", "restart-contract", "stop"]},
+            "bottleneck": {"type": "string"},
+            "findings": {"type": "array", "items": {"type": "string"}},
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+    }
+
+
 def validate_planner_report(report: dict[str, Any], working_folder: Path) -> None:
     if report.get("contract_path") != ".workflow/loop/contract.md":
         raise ValueError("planner must report contract_path=.workflow/loop/contract.md")
@@ -97,6 +141,46 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
     payload = json.loads(feature_list.read_text(encoding="utf-8"))
     if not isinstance(payload.get("features"), list):
         raise ValueError("feature_list.json must include features array")
+
+
+def validate_evaluator_contract_report(report: dict[str, Any], _working_folder: Path) -> None:
+    if not isinstance(report.get("accepted"), bool):
+        raise ValueError("evaluator contract report must include accepted boolean")
+    if not isinstance(report.get("review"), str) or not report["review"].strip():
+        raise ValueError("evaluator contract report must include review text")
+    changes = report.get("required_changes")
+    if not isinstance(changes, list) or any(not isinstance(item, str) for item in changes):
+        raise ValueError("evaluator contract report must include required_changes strings")
+    if not report["accepted"] and not [item for item in changes if item.strip()]:
+        raise ValueError("rejected contract must include required_changes")
+
+
+def validate_generator_implementation_report(report: dict[str, Any], working_folder: Path) -> None:
+    for key in ("changed_files", "tests_run", "failures"):
+        value = report.get(key)
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError(f"generator implementation report must include {key} strings")
+    for raw_path in report.get("changed_files", []):
+        path = (working_folder / raw_path).resolve()
+        try:
+            relative = path.relative_to(working_folder.resolve()).as_posix()
+        except ValueError as exc:
+            raise ValueError(f"changed file is outside workspace: {raw_path}") from exc
+        if relative.startswith(".workflow/"):
+            raise ValueError(f"generator must not report .workflow changes: {raw_path}")
+
+
+def validate_evaluator_attempt_report(report: dict[str, Any], _working_folder: Path) -> None:
+    if report.get("recommendation") not in {"continue", "restart-attempt", "restart-contract", "stop"}:
+        raise ValueError("evaluator recommendation is invalid")
+    score = report.get("score")
+    if not isinstance(score, int | float) or score < 0 or score > 1:
+        raise ValueError("evaluator score must be between 0 and 1")
+    findings = report.get("findings")
+    if not isinstance(findings, list) or any(not isinstance(item, str) for item in findings):
+        raise ValueError("evaluator findings must be strings")
+    if report.get("status") == "fail" and not [item for item in findings if item.strip()]:
+        raise ValueError("failed evaluator report must include findings")
 
 
 def generate_planner_artifacts(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -216,6 +300,182 @@ def generate_generator_contract_artifacts(*, working_folder: Path, attempt_id: s
     return result.final_report, result.usage
 
 
+def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise RuntimeError("OPENROUTER_API_KEY is required; loop evaluator has no non-AI path")
+    working_folder = working_folder.resolve()
+    model = selected_model()
+    model_metadata = selected_model_metadata()
+    live_root = working_folder / ".workflow/loop"
+    if attempt_id:
+        live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+    runtime = ToolRuntime(
+        working_folder=working_folder,
+        final_report_schema=evaluator_contract_schema(),
+        max_cost_usd=float(os.environ.get("LOOP_EVALUATOR_MAX_COST_USD", "0.20")),
+        max_seconds=int(os.environ.get("LOOP_EVALUATOR_MAX_SECONDS", "240")),
+        context_window_tokens=model_metadata.get("context_length"),
+        final_validator=lambda report: validate_evaluator_contract_report(report, working_folder),
+        skills=agent_skills.discover_skills(working_folder),
+        write_enabled=False,
+        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
+        read_blocked_prefixes=[".workflow"],
+        live_log_root=live_root,
+        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_prefix="role=evaluator ",
+    )
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=evaluator_contract_system_prompt(),
+            user=evaluator_contract_user_prompt(
+                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                model_metadata,
+            ),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            live_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("loop-evaluator-contract", model, model_metadata, result, status="error", error=str(exc)),
+        )
+        raise
+    write_runtime_log(
+        live_root,
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+        metadata=build_runtime_metadata("loop-evaluator-contract", model, model_metadata, result),
+    )
+    if result.final_report is None:
+        raise RuntimeError("Loop evaluator finished without final_report")
+    return result.final_report, result.usage
+
+
+def generate_generator_implementation_artifacts(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise RuntimeError("OPENROUTER_API_KEY is required; loop generator has no non-AI path")
+    working_folder = working_folder.resolve()
+    model = selected_model()
+    model_metadata = selected_model_metadata()
+    live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+    runtime = ToolRuntime(
+        working_folder=working_folder,
+        final_report_schema=generator_implementation_schema(),
+        max_cost_usd=float(os.environ.get("LOOP_GENERATOR_MAX_COST_USD", "0.50")),
+        max_seconds=int(os.environ.get("LOOP_GENERATOR_MAX_SECONDS", "600")),
+        context_window_tokens=model_metadata.get("context_length"),
+        final_validator=lambda report: validate_generator_implementation_report(report, working_folder),
+        skills=agent_skills.discover_skills(working_folder),
+        write_enabled=True,
+        write_blocked_prefixes=[".workflow"],
+        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
+        read_blocked_prefixes=[".workflow"],
+        live_log_root=live_root,
+        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_prefix="role=generator ",
+    )
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=generator_implementation_system_prompt(),
+            user=generator_implementation_user_prompt(
+                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                attempt_id,
+                model_metadata,
+            ),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            live_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("loop-generator-implementation", model, model_metadata, result, status="error", error=str(exc)),
+        )
+        raise
+    write_runtime_log(
+        live_root,
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+        metadata=build_runtime_metadata("loop-generator-implementation", model, model_metadata, result),
+    )
+    if result.final_report is None:
+        raise RuntimeError("Loop generator finished without final_report")
+    return result.final_report, result.usage
+
+
+def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise RuntimeError("OPENROUTER_API_KEY is required; loop evaluator has no non-AI path")
+    working_folder = working_folder.resolve()
+    model = selected_model()
+    model_metadata = selected_model_metadata()
+    live_root = working_folder / ".workflow/loop/attempts" / attempt_id / "traces"
+    runtime = ToolRuntime(
+        working_folder=working_folder,
+        final_report_schema=evaluator_attempt_schema(),
+        max_cost_usd=float(os.environ.get("LOOP_EVALUATOR_MAX_COST_USD", "0.50")),
+        max_seconds=int(os.environ.get("LOOP_EVALUATOR_MAX_SECONDS", "600")),
+        context_window_tokens=model_metadata.get("context_length"),
+        final_validator=lambda report: validate_evaluator_attempt_report(report, working_folder),
+        skills=agent_skills.discover_skills(working_folder),
+        write_enabled=False,
+        read_allowed_prefixes=[".workflow/loop", ".workflow/tool-results"],
+        read_blocked_prefixes=[".workflow"],
+        live_log_root=live_root,
+        live_event_log_paths=[working_folder / ".workflow/loop/log.runtime"],
+        live_event_prefix="role=evaluator ",
+    )
+    try:
+        result = run_tool_agent(
+            model=model,
+            system=evaluator_attempt_system_prompt(),
+            user=evaluator_attempt_user_prompt(
+                (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
+                (working_folder / ".workflow/loop/feature_list.json").read_text(encoding="utf-8"),
+                attempt_id,
+                model_metadata,
+            ),
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            live_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata("loop-evaluator-attempt", model, model_metadata, result, status="error", error=str(exc)),
+        )
+        raise
+    write_runtime_log(
+        live_root,
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+        metadata=build_runtime_metadata("loop-evaluator-attempt", model, model_metadata, result),
+    )
+    if result.final_report is None:
+        raise RuntimeError("Loop evaluator finished without final_report")
+    return result.final_report, result.usage
+
+
 def planner_system_prompt() -> str:
     return """You are the planner in a three-role Karpathy-style loop.
 
@@ -292,4 +552,110 @@ Write .workflow/loop/feature_list.json with this shape:
 ```
 
 Then call final_report with status, contract_path, feature_list_path, and summary.
+"""
+
+
+def evaluator_contract_system_prompt() -> str:
+    return """You are the evaluator in a three-role Karpathy-style loop.
+
+This is contract negotiation only. You must not edit files.
+
+Your job is to reject weak, vague, untestable, self-serving, or under-specified done criteria before implementation starts.
+Assume the contract is broken until the checklist is concrete enough for an independent evaluator to grade.
+You cannot write code, tests, or contract changes. You can only return final_report.
+"""
+
+
+def evaluator_contract_user_prompt(contract: str, feature_list: str, model_metadata: dict[str, Any]) -> str:
+    return f"""Review this proposed contract and feature list.
+
+contract.md:
+```markdown
+{contract}
+```
+
+feature_list.json:
+```json
+{feature_list}
+```
+
+Selected model:
+```json
+{json.dumps(model_metadata, indent=2, sort_keys=True)}
+```
+
+Accept only if the Done Criteria are concrete, testable, within the planner boundary, and sufficient for a small working product.
+If rejecting, list required_changes as specific edits the generator should make to the contract.
+Finish only with final_report.
+"""
+
+
+def generator_implementation_system_prompt() -> str:
+    return """You are the generator in a three-role Karpathy-style loop.
+
+You have one responsibility now: implement the accepted contract.
+You must not grade your own work and must not edit .workflow. The evaluator will grade independently.
+
+Use files for code, tests, and project artifacts. Keep changes scoped to the contract.
+Use todo_write for substantive work and run relevant commands before final_report.
+"""
+
+
+def generator_implementation_user_prompt(contract: str, feature_list: str, attempt_id: str, model_metadata: dict[str, Any]) -> str:
+    return f"""Attempt: {attempt_id}
+
+Accepted contract.md:
+```markdown
+{contract}
+```
+
+feature_list.json:
+```json
+{feature_list}
+```
+
+Selected model:
+```json
+{json.dumps(model_metadata, indent=2, sort_keys=True)}
+```
+
+Implement the contract in this workspace. Do not edit .workflow. Do not declare the attempt passed.
+Finish only with final_report describing changed_files, tests_run, and any failures.
+"""
+
+
+def evaluator_attempt_system_prompt() -> str:
+    return """You are the evaluator in a three-role Karpathy-style loop.
+
+Assume the implementation is broken. Your job is to prove whether it satisfies the accepted contract.
+You may read files and run commands, including browser/UI verification when relevant. You must not edit files.
+
+Return a recommendation:
+- continue when the attempt passes or when a simple next attempt should continue from current direction
+- restart-attempt when implementation has gone sideways but the contract is still right
+- restart-contract when the contract itself is wrong or incomplete
+- stop when no useful automated progress is possible
+"""
+
+
+def evaluator_attempt_user_prompt(contract: str, feature_list: str, attempt_id: str, model_metadata: dict[str, Any]) -> str:
+    return f"""Attempt: {attempt_id}
+
+Accepted contract.md:
+```markdown
+{contract}
+```
+
+feature_list.json:
+```json
+{feature_list}
+```
+
+Selected model:
+```json
+{json.dumps(model_metadata, indent=2, sort_keys=True)}
+```
+
+Evaluate the workspace against the contract. Inspect diffs, run relevant commands, and use visual/browser checks when the product has a UI.
+Finish only with final_report containing status, recommendation, bottleneck, findings, and score.
 """

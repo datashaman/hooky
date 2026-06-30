@@ -599,6 +599,32 @@ class HookyProgressTests(unittest.TestCase):
         features = hooky_cli.read_json(feature_path)
         self.assertEqual(features["features"][0]["id"], "F001")
 
+    def test_loop_evaluator_contract_command_runs_role_and_updates_state(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+
+        def fake_evaluator(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(working_folder.resolve(), self.workspace.resolve())
+            self.assertIsNone(attempt_id)
+            return {
+                "status": "done",
+                "accepted": False,
+                "review": "Criteria are not testable enough.",
+                "required_changes": ["Add persistence criteria."],
+            }, {"cost": 0.03}
+
+        with mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_evaluator):
+            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "evaluator-contract"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("contract_review: rejected", result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "contract-rejected")
+        self.assertFalse(state["contract_accepted"])
+        self.assertEqual(state["role_usage"]["evaluator_contract"]["cost"], 0.03)
+        progress = (self.workspace / ".workflow/loop/progress.md").read_text(encoding="utf-8")
+        self.assertIn("Add persistence criteria.", progress)
+
     def test_loop_attempt_lifecycle_creates_trace_and_otel_artifacts(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
@@ -628,6 +654,133 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(state["bottleneck"], "generator_trajectory")
         progress = (self.workspace / ".workflow/loop/progress.md").read_text(encoding="utf-8")
         self.assertIn("generator_trajectory", progress)
+
+    def test_loop_generator_implement_command_runs_role_for_active_attempt(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        def fake_generator(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(working_folder.resolve(), self.workspace.resolve())
+            self.assertEqual(attempt_id, "001")
+            return {
+                "status": "done",
+                "summary": "Implemented the first pass.",
+                "changed_files": ["src/app.py"],
+                "tests_run": ["pytest"],
+                "failures": [],
+            }, {"cost": 0.04}
+
+        with mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_generator):
+            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "generator-implement"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Implemented the first pass.", result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/generator_report.json")
+        self.assertEqual(report["changed_files"], ["src/app.py"])
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["role_usage"]["generator_implementation"]["cost"], 0.04)
+
+    def test_loop_evaluator_attempt_command_applies_recommendation(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        def fake_evaluator(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(working_folder.resolve(), self.workspace.resolve())
+            self.assertEqual(attempt_id, "001")
+            return {
+                "status": "fail",
+                "recommendation": "restart-attempt",
+                "bottleneck": "implementation drift",
+                "findings": ["The UI does not satisfy the contract."],
+                "score": 0.25,
+            }, {"cost": 0.05}
+
+        with mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_evaluator):
+            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "evaluator-attempt"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("recommendation: restart-attempt", result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-attempt")
+        self.assertIsNone(state["current_attempt"])
+        self.assertEqual(state["bottleneck"], "implementation drift")
+        self.assertEqual(state["attempts"][0]["status"], "restarted")
+        self.assertEqual(state["role_usage"]["evaluator_attempt"]["cost"], 0.05)
+
+    def test_loop_run_models_executes_three_role_suite(self) -> None:
+        runner = CliRunner()
+
+        def fake_planner(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(working_folder.resolve(), self.workspace.resolve())
+            self.assertIn("Build todos", boundary)
+            (working_folder / ".workflow/loop/contract.md").write_text(
+                "# Loop Contract\n\n## Boundary\n\nBuild todos.\n",
+                encoding="utf-8",
+            )
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Boundary ready."}, {"cost": 0.01}
+
+        def fake_contract(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            (working_folder / ".workflow/loop/contract.md").write_text(
+                "# Loop Contract\n\n## Done Criteria\n\n- Add todos\n",
+                encoding="utf-8",
+            )
+            (working_folder / ".workflow/loop/feature_list.json").write_text(
+                json.dumps({"schema_version": 1, "features": [{"id": "F001", "text": "Add todos", "status": "pending"}]}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "status": "done",
+                "contract_path": ".workflow/loop/contract.md",
+                "feature_list_path": ".workflow/loop/feature_list.json",
+                "summary": "Contract ready.",
+            }, {"cost": 0.02}
+
+        def fake_contract_review(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            return {"status": "done", "accepted": True, "review": "Good enough.", "required_changes": []}, {"cost": 0.03}
+
+        def fake_implementation(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(attempt_id, "001")
+            return {
+                "status": "done",
+                "summary": "Built it.",
+                "changed_files": ["src/app.py"],
+                "tests_run": ["pytest"],
+                "failures": [],
+            }, {"cost": 0.04}
+
+        def fake_attempt_review(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(attempt_id, "001")
+            return {
+                "status": "pass",
+                "recommendation": "continue",
+                "bottleneck": "",
+                "findings": [],
+                "score": 1.0,
+            }, {"cost": 0.05}
+
+        patches = [
+            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+        ]
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = runner.invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "loop", "run", "--models", "--boundary", "Build todos"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("status: passed", result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "passed")
+        self.assertEqual(state["attempts"][0]["status"], "passed")
+        self.assertEqual(state["role_usage"]["evaluator_attempt"]["cost"], 0.05)
 
     def test_loop_restart_attempt_preserves_durable_files(self) -> None:
         runner = CliRunner()
