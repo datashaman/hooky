@@ -193,7 +193,8 @@ def append_loop_log(workspace: Path, op: str, title: str, body: str = "") -> Non
         entry += ("" if not existing.strip() else "\n") + f"{day_header}\n\n"
     entry += f"- {time_label} {op} | {title}\n"
     if body.strip():
-        entry += "\n" + body.strip() + "\n"
+        body_lines = body.strip().splitlines()
+        entry += "".join(f"  {line}\n" if line.strip() else "  \n" for line in body_lines)
     entry += "\n"
     with path.open("a", encoding="utf-8") as handle:
         handle.write(entry)

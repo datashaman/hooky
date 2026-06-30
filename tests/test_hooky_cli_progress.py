@@ -494,6 +494,7 @@ class HookyProgressTests(unittest.TestCase):
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertRegex(log, r"(?m)^## \d{4}-\d{2}-\d{2}$")
         self.assertRegex(log, r"(?m)^- \d{2}:\d{2}:\d{2}Z init \| loop initialized$")
+        self.assertRegex(log, r"(?m)^  workspace: ")
 
     def test_loop_init_reads_proposal_from_stdin_and_derives_title(self) -> None:
         result = CliRunner().invoke(
