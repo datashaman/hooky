@@ -904,7 +904,7 @@ class HookyProgressTests(unittest.TestCase):
             return {
                 "status": "pass",
                 "recommendation": "continue",
-                "bottleneck": "",
+                "bottleneck": "none_visible_after_trace_review",
                 "findings": [],
                 "score": 1.0,
             }, {"cost": 0.05}
@@ -1055,7 +1055,7 @@ class HookyProgressTests(unittest.TestCase):
             return {
                 "status": "pass",
                 "recommendation": "continue",
-                "bottleneck": "",
+                "bottleneck": "none_visible_after_trace_review",
                 "findings": [],
                 "score": 1.0,
             }, {"cost": 0.05}
@@ -1135,7 +1135,7 @@ class HookyProgressTests(unittest.TestCase):
             return {
                 "status": "pass",
                 "recommendation": "continue",
-                "bottleneck": "",
+                "bottleneck": "none_visible_after_trace_review",
                 "findings": [],
                 "score": 1.0,
             }, {"cost": 0.05}
@@ -1291,6 +1291,195 @@ class HookyProgressTests(unittest.TestCase):
         report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertIn("capture_visual_snapshot", " ".join(report["findings"]))
+
+    def test_loop_evaluator_pass_is_downgraded_for_reference_ui_with_only_empty_snapshot(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        (self.workspace / ".workflow/loop/proposal.md").write_text(
+            "Build a TodoMVC app that visually matches the canonical template using todomvc-app-css.\n",
+            encoding="utf-8",
+        )
+        (self.workspace / ".workflow/loop/contract.md").write_text(
+            "# Loop Contract\n\n"
+            "## Done Criteria\n\n"
+            "- UI matches the canonical TodoMVC template using official CSS.\n\n"
+            "## Taste Rubric\n\n"
+            "- design weight 0.35: official TodoMVC CSS layout and spacing match the reference.\n"
+            "- originality weight 0.10: restraint and fidelity to the canonical template, not novelty.\n"
+            "- craft weight 0.25: canonical DOM/classes allow official CSS to apply across states.\n"
+            "- functionality weight 0.30: empty, populated, completed/filter, and editing states remain usable.\n",
+            encoding="utf-8",
+        )
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        traces = self.workspace / ".workflow/loop/attempts/001/traces"
+        traces.mkdir(parents=True, exist_ok=True)
+        (traces / "tool_events.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/empty.png",
+                            "metrics": {},
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "1",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertIn("multiple states", " ".join(report["findings"]))
+
+    def test_loop_evaluator_pass_is_downgraded_for_failed_latest_test_evidence(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        traces = self.workspace / ".workflow/loop/attempts/001/traces"
+        traces.mkdir(parents=True, exist_ok=True)
+        (traces / "tool_events.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "run_tests",
+                        "result": {
+                            "ok": False,
+                            "command": "npm test",
+                            "timed_out": True,
+                            "output_tail": "Timed out waiting for web server",
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "1",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertEqual(report["bottleneck"], "verification_tests_failed")
+        self.assertIn("latest executable test evidence failed", " ".join(report["findings"]))
+
+    def test_loop_evaluator_pass_allows_later_successful_test_evidence(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        traces = self.workspace / ".workflow/loop/attempts/001/traces"
+        traces.mkdir(parents=True, exist_ok=True)
+        (traces / "tool_events.json").write_text(
+            json.dumps(
+                [
+                    {"name": "run_tests", "result": {"ok": False, "command": "npm test", "timed_out": True}},
+                    {"name": "run_tests", "result": {"ok": True, "command": "npm test", "returncode": 0}},
+                    {
+                        "name": "capture_visual_snapshot",
+                        "result": {
+                            "ok": True,
+                            "screenshot_path": ".workflow/tool-results/visual-snapshots/shot.png",
+                            "metrics": {},
+                        },
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--bottleneck",
+                "none_visible_after_trace_review",
+                "--score",
+                "1",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "pass")
+
+    def test_loop_evaluator_pass_restarts_contract_when_subjective_rubric_is_missing(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        (self.workspace / ".workflow/loop/contract.md").write_text(
+            "# Loop Contract\n\n"
+            "## Done Criteria\n\n- Build a polished branded dashboard with excellent craft.\n\n"
+            "## Taste Rubric\n\n_Optional. Required only when subjective quality matters._\n",
+            encoding="utf-8",
+        )
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "0.9",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertEqual(report["recommendation"], "restart-contract")
+        self.assertEqual(report["bottleneck"], "missing_taste_rubric")
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-contract")
+        self.assertFalse(state["contract_accepted"])
 
     def test_loop_evaluator_pass_is_downgraded_for_reported_clipped_primary_ui(self) -> None:
         runner = CliRunner()
@@ -1602,6 +1791,47 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("fake_final_report_text_entries: 1", stall.output)
         self.assertEqual(runtime_log.exit_code, 0, runtime_log.output)
         self.assertIn("tool_calls=0", runtime_log.output)
+
+    def test_loop_inspect_trace_grep_and_harness_review_surface_debug_state(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        trace_root = self.workspace / ".workflow/loop/attempts/001/traces"
+        (trace_root / "runtime_transcript.json").write_text(
+            json.dumps(
+                [
+                    {"role": "system", "message": "system prompt"},
+                    {"role": "user", "message": "Build TodoMVC"},
+                    {
+                        "role": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": "I will inspect the contract.",
+                            "tool_calls": [{"function": {"name": "read_file"}}],
+                        },
+                    },
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (trace_root / "runtime_events.log").write_text("role=evaluator assistant tools=read_file\n", encoding="utf-8")
+        (trace_root / "tool_events.json").write_text(json.dumps([{"name": "read_file", "result": {"ok": True}}]), encoding="utf-8")
+
+        inspect = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "inspect", "--attempt", "001"])
+        grep = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "trace-grep", "TodoMVC", "--attempt", "001"])
+        review = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "harness-review"])
+
+        self.assertEqual(inspect.exit_code, 0, inspect.output)
+        self.assertIn("transcript_entries: 3", inspect.output)
+        self.assertIn("read_file: 1", inspect.output)
+        self.assertEqual(grep.exit_code, 0, grep.output)
+        self.assertIn("TodoMVC", grep.output)
+        self.assertEqual(review.exit_code, 0, review.output)
+        self.assertIn("Loop Harness Review", review.output)
+        self.assertIn("missing substantive Taste Rubric in contract.md", review.output)
+        self.assertTrue((self.workspace / ".workflow/loop/harness_review.md").exists())
 
     def test_loop_status_uses_last_run_workspace_when_current_directory_has_no_loop(self) -> None:
         last_run_path = self.workspace / "loop-last-run-path"

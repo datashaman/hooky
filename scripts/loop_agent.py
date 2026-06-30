@@ -168,6 +168,11 @@ def evaluator_attempt_schema() -> dict[str, Any]:
             "bottleneck": {"type": "string"},
             "findings": {"type": "array", "items": {"type": "string"}},
             "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "rubric_scores": {
+                "type": "object",
+                "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1},
+            },
+            "score_explanation": {"type": "string"},
         },
     }
 
@@ -187,8 +192,11 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
         raise ValueError("generator must report feature_list_path=.workflow/loop/feature_list.json")
     contract = working_folder / ".workflow/loop/contract.md"
     feature_list = working_folder / ".workflow/loop/feature_list.json"
-    if not contract.exists() or "## Done Criteria" not in contract.read_text(encoding="utf-8"):
+    contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
+    if not contract.exists() or "## Done Criteria" not in contract_text:
         raise ValueError("generator must write done criteria into .workflow/loop/contract.md")
+    if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(contract_text):
+        raise ValueError("generator must define a substantive Taste Rubric for reference visual requirements")
     if not feature_list.exists():
         raise ValueError("generator must write .workflow/loop/feature_list.json")
     payload = json.loads(feature_list.read_text(encoding="utf-8"))
@@ -207,6 +215,8 @@ def validate_generator_contract_write(working_folder: Path, path: Path, content:
     if relative == ".workflow/loop/contract.md":
         if "## Done Criteria" not in content or len(content.strip()) < 100:
             raise ValueError("contract.md writes must preserve a substantive ## Done Criteria section")
+        if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(content):
+            raise ValueError("contract.md must include a substantive Taste Rubric for reference visual requirements")
         return
     if relative == ".workflow/loop/feature_list.json":
         payload = json.loads(content)
@@ -216,7 +226,7 @@ def validate_generator_contract_write(working_folder: Path, path: Path, content:
     raise ValueError(f"unexpected generator contract write: {relative}")
 
 
-def validate_evaluator_contract_report(report: dict[str, Any], _working_folder: Path) -> None:
+def validate_evaluator_contract_report(report: dict[str, Any], working_folder: Path) -> None:
     if not isinstance(report.get("accepted"), bool):
         raise ValueError("evaluator contract report must include accepted boolean")
     if not isinstance(report.get("review"), str) or not report["review"].strip():
@@ -226,6 +236,11 @@ def validate_evaluator_contract_report(report: dict[str, Any], _working_folder: 
         raise ValueError("evaluator contract report must include required_changes strings")
     if not report["accepted"] and not [item for item in changes if item.strip()]:
         raise ValueError("rejected contract must include required_changes")
+    if report["accepted"]:
+        contract = working_folder / ".workflow/loop/contract.md"
+        contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
+        if reference_visual_rubric_required(read_loop_proposal(working_folder)) and not taste_rubric_is_substantive(contract_text):
+            raise ValueError("accepted contract must include a substantive Taste Rubric for reference visual requirements")
 
 
 def validate_generator_implementation_report(report: dict[str, Any], working_folder: Path) -> None:
@@ -243,9 +258,11 @@ def validate_generator_implementation_report(report: dict[str, Any], working_fol
             raise ValueError(f"generator must not report .workflow changes: {raw_path}")
 
 
-def validate_evaluator_attempt_report(report: dict[str, Any], _working_folder: Path) -> None:
+def validate_evaluator_attempt_report(report: dict[str, Any], working_folder: Path) -> None:
     if report.get("recommendation") not in {"continue", "restart-attempt", "restart-contract", "stop"}:
         raise ValueError("evaluator recommendation is invalid")
+    if not isinstance(report.get("bottleneck"), str) or not report["bottleneck"].strip():
+        raise ValueError("evaluator report must include a non-empty bottleneck")
     score = report.get("score")
     if not isinstance(score, int | float) or score < 0 or score > 1:
         raise ValueError("evaluator score must be between 0 and 1")
@@ -254,6 +271,109 @@ def validate_evaluator_attempt_report(report: dict[str, Any], _working_folder: P
         raise ValueError("evaluator findings must be strings")
     if report.get("status") == "fail" and not [item for item in findings if item.strip()]:
         raise ValueError("failed evaluator report must include findings")
+    contract = working_folder / ".workflow/loop/contract.md"
+    contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
+    if taste_rubric_is_substantive(contract_text):
+        rubric_scores = report.get("rubric_scores")
+        if not isinstance(rubric_scores, dict) or not rubric_scores:
+            raise ValueError("evaluator report must include rubric_scores when contract.md defines a Taste Rubric")
+        required_axes = {"design", "originality", "craft", "functionality"}
+        missing_axes = sorted(required_axes.difference(str(key) for key in rubric_scores))
+        if missing_axes:
+            raise ValueError("rubric_scores missing required axes: " + ", ".join(missing_axes))
+        if any(not isinstance(value, int | float) or value < 0 or value > 1 for value in rubric_scores.values()):
+            raise ValueError("rubric_scores values must be between 0 and 1")
+        if not isinstance(report.get("score_explanation"), str) or not report["score_explanation"].strip():
+            raise ValueError("evaluator report must include score_explanation when grading a Taste Rubric")
+
+
+def markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    start: int | None = None
+    marker = f"## {heading}"
+    for index, line in enumerate(lines):
+        if line.strip().lower() == marker.lower():
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    end = len(lines)
+    for index in range(start, len(lines)):
+        if lines[index].startswith("## "):
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def markdown_without_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    marker = f"## {heading}"
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip().lower() == marker.lower():
+            start = index
+            break
+    if start is None:
+        return text
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("## "):
+            end = index
+            break
+    return "\n".join(lines[:start] + lines[end:])
+
+
+def taste_rubric_is_substantive(contract: str) -> bool:
+    rubric = markdown_section(contract, "Taste Rubric").lower()
+    if not rubric:
+        return False
+    placeholders = ("optional", "required only", "subjective quality matters", "_")
+    stripped = re.sub(r"[\s_*`.-]+", " ", rubric).strip()
+    if not stripped:
+        return False
+    if all(term in rubric for term in ("optional", "subjective")) and len(stripped) < 120:
+        return False
+    if any(axis in rubric for axis in ("design", "originality", "craft", "functionality", "weight", "reference")):
+        return True
+    return not any(term in rubric for term in placeholders)
+
+
+def taste_rubric_required(contract: str) -> bool:
+    without_rubric = markdown_without_section(contract, "Taste Rubric")
+    taste_terms = (
+        "taste",
+        "aesthetic",
+        "aesthetics",
+        "beautiful",
+        "polished",
+        "delightful",
+        "premium",
+        "original",
+        "originality",
+        "brand",
+        "branded",
+        "visual design",
+        "craft",
+    )
+    return any(term in without_rubric.lower() for term in taste_terms)
+
+
+def reference_visual_rubric_required(text: str) -> bool:
+    lower = text.lower()
+    reference_terms = (
+        "reference implementation",
+        "reference site",
+        "reference visual",
+        "template",
+        "canonical",
+        "look and behave exactly",
+        "visually match",
+    )
+    visual_terms = ("visual", "layout", "style", "css", "html", "ui", "screenshot")
+    if any(term in lower for term in reference_terms) and any(term in lower for term in visual_terms):
+        return True
+    todomvc_terms = ("todomvc", "todomvc-app-css", "todomvc-common", "todoapp", "app-spec.md")
+    return any(term in lower for term in todomvc_terms) and any(term in lower for term in ("canonical", "template", "official", "css", "visual"))
 
 
 def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -650,6 +770,12 @@ Selected model:
 
 Revise .workflow/loop/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
 If the original proposal contains bullet, checkbox, or numbered checklist items, preserve every item as an acceptance requirement or split it into more specific requirements. Do not drop checklist items just because they seem obvious.
+If the original proposal cites a visual reference, canonical template, official CSS, or reference implementation, convert that into a substantive Taste Rubric instead of leaving taste optional. The rubric must include design, originality, craft, and functionality axes. For canonical/template work, originality should score restraint and fidelity rather than novelty.
+For TodoMVC-style reference work, explicitly require:
+- official CSS/assets are imported and local CSS remains minimal;
+- canonical DOM/classes are preserved so official CSS applies;
+- visual checks cover empty, populated, completed/filter, and editing states;
+- browser-default controls, overlapping footer/filter controls, collapsed footer/main regions, or missing canonical affordances fail the attempt.
 
 Write .workflow/loop/feature_list.json with this shape:
 ```json
@@ -713,6 +839,8 @@ Selected model:
 
 Accept only if the Done Criteria are concrete, testable, within the planner proposal, and sufficient for a small working product.
 If the original proposal contains bullet, checkbox, or numbered checklist items, reject unless every item is covered by Done Criteria and feature_list entries. Use proposal_refs when available, but inspect the text yourself.
+If the original proposal cites a visual reference, canonical template, official CSS, or reference implementation, reject unless contract.md contains a substantive Taste Rubric covering design, originality, craft, and functionality. For canonical/template work, the rubric must define originality as appropriate restraint/fidelity, not novelty.
+For TodoMVC-style reference work, reject unless the contract requires canonical DOM/classes, official CSS/assets, minimal local CSS, and visual evaluation of empty, populated, completed/filter, and editing states.
 If rejecting, list required_changes as specific edits the generator should make to the contract.
 Finish only by calling final_report. Do not describe final_report in markdown; call the tool with JSON arguments matching the schema.
 """
@@ -776,6 +904,10 @@ Assume the implementation is broken. Your job is to prove whether it satisfies t
 You may read files and run commands, including browser/UI verification when relevant. You must not edit files.
 Do not pass an attempt based on placeholder tests, dummy tests, smoke-only assertions, or source inspection alone.
 When the accepted contract describes a browser UI, web app, layout, CSS, or visual behavior, you must start or use the running app, call capture_visual_snapshot, inspect the attached screenshot image, and include visual findings. Obvious layout defects, overlapping controls, clipped content, browser-default styling where styled UI was required, or console errors are failures even when functional tests pass.
+When the contract cites a visual reference, canonical template, official CSS, or reference implementation, one screenshot is not enough. Exercise representative states before passing: initial/empty state, populated state, completed/filter state, and editing or modal/active interaction state where applicable. Inspect that the canonical classes/DOM expected by the reference CSS are present and that controls do not collapse or overlap.
+For TodoMVC-style contracts, explicitly verify the populated view uses `.main` and `.footer`, the official CSS applies to footer/filter layout, completed items are line-through, the selected filter has canonical styling, editing mode uses `.editing` plus `.edit`, and local CSS is minimal.
+When the accepted contract defines a Taste Rubric, grade it explicitly with rubric_scores for design, originality, craft, and functionality plus score_explanation. When the task asks for subjective taste, polish, aesthetics, originality, brand fit, or craft but the contract lacks a substantive Taste Rubric, do not invent criteria after the fact; fail with recommendation=restart-contract.
+Always set a non-empty bottleneck. On pass, name the weakest remaining part of the loop or product process. Use none_visible_after_trace_review only when you inspected traces/artifacts and found no meaningful bottleneck.
 
 Return a recommendation:
 - continue when the attempt passes, or when failures are normal implementation defects that another generator pass can fix
@@ -807,7 +939,9 @@ Selected model:
 
 Evaluate the workspace against the contract. Inspect diffs, run relevant commands, and use visual/browser checks when the product has a UI.
 For browser/UI products, do not pass without capture_visual_snapshot evidence from the running app and explicit findings from the screenshot image.
+For reference/canonical UI products, capture visual evidence from multiple meaningful UI states, not just first load. If a canonical CSS/template contract is present, source inspect the expected classes and then verify those classes render correctly in the browser.
 If the available tests are placeholder-only, report that as a verification failure even if the test command exits 0.
 If tests fail, report the failing criteria and choose continue or restart-attempt unless there is a true automation blocker.
-Finish only with final_report containing status, recommendation, bottleneck, findings, and score.
+Finish only with final_report containing status, recommendation, a non-empty bottleneck, findings, and score.
+If the contract includes a substantive Taste Rubric, also include rubric_scores and score_explanation.
 """

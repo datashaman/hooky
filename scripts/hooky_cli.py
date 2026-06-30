@@ -218,6 +218,20 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
+def loop_visible_bottleneck(state: dict[str, Any]) -> str:
+    raw = state.get("bottleneck")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    for attempt in reversed(attempts):
+        if not isinstance(attempt, dict):
+            continue
+        bottleneck = attempt.get("bottleneck")
+        if isinstance(bottleneck, str) and bottleneck.strip():
+            return bottleneck.strip()
+    return ""
+
+
 def write_loop_progress(workspace: Path, state: dict[str, Any], *, note: str | None = None) -> None:
     current_attempt = state.get("current_attempt")
     lines = [
@@ -391,14 +405,24 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
     if report.get("status") != "pass":
         return report
     evidence_failures: list[str] = []
+    contract_text = loop_contract_path(workspace).read_text(encoding="utf-8", errors="ignore") if loop_contract_path(workspace).exists() else ""
+    rubric_restart_required = loop_agent.taste_rubric_required(contract_text) and not loop_agent.taste_rubric_is_substantive(contract_text)
+    if rubric_restart_required:
+        evidence_failures.append(
+            "Evaluator cannot pass this attempt: subjective quality is requested but contract.md does not define a substantive Taste Rubric."
+        )
     if has_placeholder_only_tests(workspace):
         evidence_failures.append(
             "Evaluator cannot pass this attempt: the executable test suite appears to contain only placeholder tests."
         )
+    test_failures = loop_attempt_test_evidence_failures(workspace, attempt_id)
+    evidence_failures.extend(test_failures)
     if loop_attempt_requires_visual_evidence(workspace) and not loop_attempt_captured_visual_snapshot(workspace, attempt_id):
         evidence_failures.append(
             "Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app."
         )
+    reference_visual_failures = loop_attempt_reference_visual_evidence_failures(workspace, attempt_id)
+    evidence_failures.extend(reference_visual_failures)
     visual_failures = loop_attempt_blocking_visual_failures(workspace, attempt_id, report)
     evidence_failures.extend(visual_failures)
     if not evidence_failures:
@@ -407,11 +431,68 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
     findings = amended.get("findings") if isinstance(amended.get("findings"), list) else []
     amended["findings"] = [*findings, *evidence_failures]
     amended["status"] = "fail"
-    amended["recommendation"] = "continue"
-    amended["bottleneck"] = amended.get("bottleneck") or "verification_evidence"
+    amended["recommendation"] = "restart-contract" if rubric_restart_required else "continue"
+    current_bottleneck = amended.get("bottleneck")
+    if rubric_restart_required:
+        amended["bottleneck"] = "missing_taste_rubric"
+    elif test_failures:
+        amended["bottleneck"] = "verification_tests_failed"
+    elif not isinstance(current_bottleneck, str) or not current_bottleneck.strip() or current_bottleneck == "none_visible_after_trace_review":
+        amended["bottleneck"] = "verification_evidence"
     current_score = amended.get("score")
     amended["score"] = min(float(current_score), 0.5) if isinstance(current_score, int | float) else 0.5
     return amended
+
+
+def loop_attempt_test_evidence_failures(workspace: Path, attempt_id: str) -> list[str]:
+    events = loop_attempt_tool_events(workspace, attempt_id)
+    test_events = [event for event in events if tool_event_is_test_execution(event)]
+    if not test_events:
+        return []
+    latest = test_events[-1]
+    result = latest.get("result")
+    if not isinstance(result, dict):
+        return ["Evaluator cannot pass this attempt: latest executable test evidence is malformed."]
+    if tool_result_passed(result):
+        return []
+    command = str(result.get("command") or "test command")
+    reason = str(result.get("error") or result.get("summary") or result.get("output_tail") or "failed")
+    return [
+        "Evaluator cannot pass this attempt: latest executable test evidence failed "
+        f"({command}): {agent_runtime.single_line(reason, 240)}"
+    ]
+
+
+def tool_event_is_test_execution(event: dict[str, Any]) -> bool:
+    name = str(event.get("name") or "")
+    if name == "run_tests":
+        return True
+    if name != "bash":
+        return False
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return False
+    command = str(result.get("command") or "").lower()
+    test_terms = (
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "pytest",
+        "playwright test",
+        "vitest",
+        "jest",
+    )
+    return any(term in command for term in test_terms)
+
+
+def tool_result_passed(result: dict[str, Any]) -> bool:
+    if result.get("ok") is True:
+        return True
+    if result.get("passed") is True:
+        return True
+    if result.get("returncode") == 0 and result.get("timed_out") is not True and result.get("failed") is not True:
+        return True
+    return False
 
 
 def loop_attempt_blocking_visual_failures(workspace: Path, attempt_id: str, report: dict[str, Any]) -> list[str]:
@@ -427,6 +508,17 @@ def loop_attempt_blocking_visual_failures(workspace: Path, attempt_id: str, repo
             "Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content."
         )
     return unique_lines(failures)
+
+
+def loop_attempt_reference_visual_evidence_failures(workspace: Path, attempt_id: str) -> list[str]:
+    if not loop_attempt_requires_reference_visual_evidence(workspace):
+        return []
+    count = loop_attempt_visual_snapshot_count(workspace, attempt_id)
+    if count >= 2:
+        return []
+    return [
+        "Evaluator cannot pass this attempt: reference/canonical UI work needs visual snapshots from multiple states, not only first load."
+    ]
 
 
 def loop_attempt_tool_events(workspace: Path, attempt_id: str) -> list[dict[str, Any]]:
@@ -588,14 +680,29 @@ def loop_attempt_requires_visual_evidence(workspace: Path) -> bool:
     return any(name in dependencies for name in ("react", "vue", "svelte", "@angular/core", "vite", "@vitejs/plugin-react"))
 
 
+def loop_attempt_requires_reference_visual_evidence(workspace: Path) -> bool:
+    text = ""
+    for path in [loop_contract_path(workspace), loop_feature_list_path(workspace), loop_proposal_path(workspace)]:
+        if path.exists():
+            text += "\n" + path.read_text(encoding="utf-8", errors="ignore")
+    return loop_agent.reference_visual_rubric_required(text) or loop_agent.taste_rubric_is_substantive(text) and any(
+        term in text.lower() for term in ("reference", "canonical", "template", "official css", "todomvc")
+    )
+
+
 def loop_attempt_captured_visual_snapshot(workspace: Path, attempt_id: str) -> bool:
+    return loop_attempt_visual_snapshot_count(workspace, attempt_id) > 0
+
+
+def loop_attempt_visual_snapshot_count(workspace: Path, attempt_id: str) -> int:
+    count = 0
     for event in loop_attempt_tool_events(workspace, attempt_id):
         if event.get("name") != "capture_visual_snapshot":
             continue
         result = event.get("result")
         if isinstance(result, dict) and result.get("ok") is True and result.get("screenshot_path"):
-            return True
-    return False
+            count += 1
+    return count
 
 
 def format_evaluator_feedback(report: dict[str, Any]) -> str:
@@ -1895,6 +2002,166 @@ def loop_stall(
             typer.echo("- " + (agent_runtime.single_line(text, 500) if text else "[empty]"))
 
 
+@loop_app.command("inspect")
+def loop_inspect(
+    ctx: typer.Context,
+    attempt: Annotated[str | None, typer.Option(help="Attempt id. Defaults to active/latest attempt.")] = None,
+    last: Annotated[int, typer.Option(help="Number of recent transcript entries to summarize.")] = 8,
+) -> None:
+    """Summarize status, runtime log, transcript, tool use, and stall signals."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_debug_root(workspace, state, attempt)
+    attempt_id = attempt or latest_loop_attempt_id(state) or "contract"
+    typer.echo(f"loop: {loop_dir(workspace)}")
+    typer.echo(f"status: {state.get('status')}")
+    typer.echo(f"attempt: {attempt_id}")
+    typer.echo(f"runtime_log: {root / 'runtime_events.log'}")
+    typer.echo(f"transcript: {root / 'runtime_transcript.json'}")
+    typer.echo(f"tool_events: {root / 'tool_events.json'}")
+    report_path = loop_attempt_dir(workspace, attempt_id) / "evaluator_report.json" if attempt_id != "contract" else None
+    if report_path and report_path.exists():
+        report = read_json(report_path)
+        typer.echo(f"evaluator_status: {report.get('status')}")
+        typer.echo(f"recommendation: {report.get('recommendation')}")
+        typer.echo(f"bottleneck: {report.get('bottleneck') or 'none'}")
+        typer.echo(f"score: {report.get('score')}")
+    try:
+        entries = load_loop_transcript(root)
+    except typer.BadParameter:
+        entries = []
+    if entries:
+        assistants = [entry for entry in entries if transcript_role(entry) == "assistant"]
+        no_tool = [entry for entry in assistants if not transcript_tool_calls(entry)]
+        trailing_no_tool = 0
+        for entry in reversed(assistants):
+            if transcript_tool_calls(entry):
+                break
+            trailing_no_tool += 1
+        typer.echo(f"transcript_entries: {len(entries)}")
+        typer.echo(f"assistant_entries: {len(assistants)}")
+        typer.echo(f"no_tool_assistant_entries: {len(no_tool)}")
+        typer.echo(f"trailing_no_tool_assistant_entries: {trailing_no_tool}")
+        typer.echo("")
+        typer.echo("recent:")
+        for entry in entries[-last:]:
+            role = transcript_role(entry)
+            calls = transcript_tool_calls(entry)
+            text = transcript_text(entry).strip()
+            preview = agent_runtime.single_line(text, 300) if text else "[empty]"
+            suffix = f" tools={len(calls)}" if role == "assistant" else ""
+            typer.echo(f"- {role}{suffix}: {preview}")
+    else:
+        typer.echo("transcript_entries: 0")
+    tool_events_path = root / "tool_events.json"
+    if tool_events_path.exists():
+        events = read_json(tool_events_path)
+        if isinstance(events, list):
+            names: dict[str, int] = {}
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                name = str(event.get("name") or "unknown")
+                names[name] = names.get(name, 0) + 1
+            if names:
+                typer.echo("")
+                typer.echo("tools:")
+                for name, count in sorted(names.items()):
+                    typer.echo(f"- {name}: {count}")
+
+
+@loop_app.command("trace-grep")
+def loop_trace_grep(
+    ctx: typer.Context,
+    pattern: Annotated[str, typer.Argument(help="Case-insensitive text to search for in loop transcripts and runtime logs.")],
+    attempt: Annotated[str | None, typer.Option(help="Attempt id. Defaults to active/latest attempt.")] = None,
+    lines: Annotated[int, typer.Option(help="Maximum matching lines to print.")] = 20,
+) -> None:
+    """Search persisted loop debug artifacts without ad hoc shell commands."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_debug_root(workspace, state, attempt)
+    needle = pattern.lower()
+    matches = 0
+    files = [
+        root / "runtime_events.log",
+        root / "runtime_transcript.json",
+        root / "tool_events.json",
+    ]
+    files.extend(sorted(root.glob("*.jsonl")))
+    for path in files:
+        if not path.exists():
+            continue
+        for index, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if needle not in line.lower():
+                continue
+            typer.echo(f"{path}:{index}: {agent_runtime.single_line(line, 1000)}")
+            matches += 1
+            if matches >= lines:
+                return
+    if matches == 0:
+        typer.echo("no matches")
+
+
+@loop_app.command("harness-review")
+def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(help="Write .workflow/loop/harness_review.md.")] = True) -> None:
+    """Review the loop harness against the Karpathy loop principles."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_dir(workspace)
+    files = {
+        "feature_list": loop_feature_list_path(workspace).exists(),
+        "progress": loop_progress_path(workspace).exists(),
+        "contract": loop_contract_path(workspace).exists(),
+        "log": loop_log_path(workspace).exists(),
+    }
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    latest = latest_loop_attempt_id(state)
+    trace_root = loop_attempt_dir(workspace, latest) / "traces" if latest else root
+    trace_files = [trace_root / "runtime_events.log", trace_root / "runtime_transcript.json", trace_root / "tool_events.json"]
+    visible_bottleneck = loop_visible_bottleneck(state)
+    contract_text = loop_contract_path(workspace).read_text(encoding="utf-8", errors="ignore") if loop_contract_path(workspace).exists() else ""
+    taste_rubric_present = loop_agent.taste_rubric_is_substantive(contract_text)
+    reference_visual_required = loop_attempt_requires_reference_visual_evidence(workspace)
+    reference_visual_count = loop_attempt_visual_snapshot_count(workspace, latest) if latest else 0
+    checks = [
+        ("loop_procedure", True, "loop run drives planner, generator, evaluator, and control flow"),
+        ("role_separation", True, "planner/generator/evaluator are separate model roles"),
+        ("durable_state", all(files.values()), ", ".join(f"{name}={exists}" for name, exists in files.items())),
+        ("contract_negotiation", bool(state.get("contract_accepted")) or state.get("status") in {"contract-rejected", "restart-contract"}, f"status={state.get('status')}"),
+        ("restart_paths", True, "restart-attempt and restart-contract commands exist; review attempt history for use"),
+        ("subjective_scoring", taste_rubric_present, "substantive Taste Rubric present in contract.md" if taste_rubric_present else "missing substantive Taste Rubric in contract.md"),
+        (
+            "reference_visual_states",
+            not reference_visual_required or reference_visual_count >= 2,
+            f"snapshots={reference_visual_count}" if reference_visual_required else "not required",
+        ),
+        ("trace_reading", any(path.exists() for path in trace_files), f"trace_root={trace_root}"),
+        ("bottleneck_visible", bool(visible_bottleneck), f"bottleneck={visible_bottleneck or 'none'}"),
+        ("harness_restraint", True, "manual review required; delete rules whose failure mode no longer exists"),
+    ]
+    lines = ["# Loop Harness Review", "", f"- workspace: {workspace}", f"- status: {state.get('status')}", f"- attempts: {len(attempts)}", ""]
+    for name, passed, detail in checks:
+        mark = "pass" if passed else "gap"
+        lines.append(f"- {mark}: {name} - {detail}")
+    gaps = [name for name, passed, _detail in checks if not passed]
+    lines.extend(["", "## Recommendation", ""])
+    if gaps:
+        lines.append("Address gaps: " + ", ".join(gaps))
+    else:
+        lines.append("No structural gaps detected. Read traces before adding more harness.")
+    output = "\n".join(lines) + "\n"
+    if write:
+        path = root / "harness_review.md"
+        path.write_text(output, encoding="utf-8")
+        append_loop_log(workspace, "harness-review", "reviewed loop harness", f"report: {path.relative_to(workspace).as_posix()}")
+        typer.echo(f"report: {path}")
+    typer.echo(output.rstrip())
+
+
 def run_model_role_with_retries(
     workspace: Path,
     label: str,
@@ -2518,7 +2785,7 @@ def loop_evaluator_report(
     ctx: typer.Context,
     status: Annotated[str, typer.Option(help="Evaluator status: pass or fail.")] = "fail",
     recommendation: Annotated[str, typer.Option(help="Recommended control action: continue, restart-attempt, restart-contract, or stop.")] = "continue",
-    bottleneck: Annotated[str | None, typer.Option(help="Current bottleneck.")] = None,
+    bottleneck: Annotated[str, typer.Option(help="Current bottleneck. Use none_visible_after_trace_review only after trace/artifact review.")] = "none_visible_after_trace_review",
     finding: Annotated[list[str] | None, typer.Option("--finding", help="Evaluator finding. Repeat for multiple findings.")] = None,
     score: Annotated[float | None, typer.Option(help="Optional subjective/objective score from 0.0 to 1.0.")] = None,
 ) -> None:
@@ -2529,6 +2796,8 @@ def loop_evaluator_report(
         raise typer.BadParameter("status must be pass or fail")
     if recommendation not in {"continue", "restart-attempt", "restart-contract", "stop"}:
         raise typer.BadParameter("recommendation must be continue, restart-attempt, restart-contract, or stop")
+    if not bottleneck.strip():
+        raise typer.BadParameter("bottleneck must be non-empty")
     if score is not None and (score < 0 or score > 1):
         raise typer.BadParameter("score must be between 0.0 and 1.0")
     state = read_loop_state(workspace)

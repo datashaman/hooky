@@ -176,6 +176,138 @@ class LoopAgentPolicyTests(unittest.TestCase):
         self.assertEqual(metadata["model"], "openai/gpt-4.1")
         self.assertEqual(metadata["source"], "LOOP_EVALUATOR_MODEL")
 
+    def test_evaluator_requires_rubric_scores_when_taste_rubric_is_substantive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loop_dir = root / ".workflow/loop"
+            loop_dir.mkdir(parents=True)
+            (loop_dir / "contract.md").write_text(
+                "# Loop Contract\n\n"
+                "## Done Criteria\n\n- Build a polished dashboard.\n\n"
+                "## Taste Rubric\n\n"
+                "- design weight 0.35: calm, legible hierarchy\n"
+                "- originality weight 0.15: not a generic template\n"
+                "- craft weight 0.25: aligned spacing and refined states\n"
+                "- functionality weight 0.25: workflows remain clear\n",
+                encoding="utf-8",
+            )
+            base_report = {
+                "status": "pass",
+                "recommendation": "continue",
+                "bottleneck": "taste_calibration",
+                "findings": [],
+                "score": 0.8,
+            }
+
+            with self.assertRaisesRegex(ValueError, "rubric_scores"):
+                loop_agent.validate_evaluator_attempt_report(base_report, root)
+
+            loop_agent.validate_evaluator_attempt_report(
+                {
+                    **base_report,
+                    "rubric_scores": {
+                        "design": 0.8,
+                        "originality": 0.7,
+                        "craft": 0.75,
+                        "functionality": 0.9,
+                    },
+                    "score_explanation": "Strong functional fit with adequate polish.",
+                },
+                root,
+            )
+
+    def test_evaluator_attempt_requires_non_empty_bottleneck(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".workflow/loop").mkdir(parents=True)
+            (root / ".workflow/loop/contract.md").write_text("# Loop Contract\n\n## Done Criteria\n\n- Build it.\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "non-empty bottleneck"):
+                loop_agent.validate_evaluator_attempt_report(
+                    {
+                        "status": "pass",
+                        "recommendation": "continue",
+                        "bottleneck": "",
+                        "findings": [],
+                        "score": 1.0,
+                    },
+                    root,
+                )
+
+    def test_taste_rubric_required_detects_subjective_contract_language(self) -> None:
+        contract = "# Loop Contract\n\n## Done Criteria\n\n- Build a polished branded interface.\n\n## Taste Rubric\n\n_Optional._\n"
+
+        self.assertTrue(loop_agent.taste_rubric_required(contract))
+
+    def test_reference_visual_rubric_required_detects_todomvc_spec_language(self) -> None:
+        proposal = (
+            "Build a React/Vite TodoMVC app using todomvc-common and todomvc-app-css. "
+            "The UI should visually match the canonical TodoMVC template and official CSS."
+        )
+
+        self.assertTrue(loop_agent.reference_visual_rubric_required(proposal))
+
+    def test_generator_contract_requires_taste_rubric_for_reference_visual_proposal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loop_dir = root / ".workflow/loop"
+            loop_dir.mkdir(parents=True)
+            (loop_dir / "proposal.md").write_text(
+                "Build a TodoMVC app that visually matches the canonical template using todomvc-app-css.\n",
+                encoding="utf-8",
+            )
+            contract = loop_dir / "contract.md"
+            contract.write_text(
+                "# Loop Contract\n\n"
+                "## Done Criteria\n\n"
+                "- UI matches the canonical TodoMVC layout.\n\n"
+                "## Taste Rubric\n\n"
+                "Optional when subjective quality matters.\n",
+                encoding="utf-8",
+            )
+            (loop_dir / "feature_list.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "features": [{"id": "F001", "text": "UI matches canonical TodoMVC layout", "status": "pending"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Taste Rubric"):
+                loop_agent.validate_generator_contract_report(
+                    {
+                        "status": "done",
+                        "contract_path": ".workflow/loop/contract.md",
+                        "feature_list_path": ".workflow/loop/feature_list.json",
+                        "summary": "done",
+                    },
+                    root,
+                )
+
+            contract.write_text(
+                "# Loop Contract\n\n"
+                "## Done Criteria\n\n"
+                "- UI matches the canonical TodoMVC layout.\n\n"
+                "## Taste Rubric\n\n"
+                "- design weight 0.35: official TodoMVC CSS layout and spacing match the reference.\n"
+                "- originality weight 0.10: restraint and fidelity to the canonical template, not novelty.\n"
+                "- craft weight 0.25: canonical DOM/classes allow official CSS to apply across states.\n"
+                "- functionality weight 0.30: empty, populated, completed/filter, and editing states remain usable.\n",
+                encoding="utf-8",
+            )
+
+            loop_agent.validate_generator_contract_report(
+                {
+                    "status": "done",
+                    "contract_path": ".workflow/loop/contract.md",
+                    "feature_list_path": ".workflow/loop/feature_list.json",
+                    "summary": "done",
+                },
+                root,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
