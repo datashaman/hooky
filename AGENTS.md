@@ -1,32 +1,29 @@
 # Hooky Agent Context
 
-Hooky is an agentic SDLC loop. Work flows through explicit phases:
+Hooky is an agentic SDLC loop. The public pipeline is the loop pipeline.
 
-1. Gather
-2. Reason
-3. Act
-4. Verify
-5. Repeat
+The loop uses three roles, three context windows, and three system prompts:
 
-Agents are implementations of phases, not the top-level architecture. The current default agent mapping is:
+1. Planner turns a proposal into a contract boundary and never edits product code.
+2. Generator proposes testable done criteria, then changes the workspace during implementation attempts.
+3. Evaluator reviews contracts and implementation attempts, uses trace/test/visual evidence, and never edits code.
 
-1. Spec Agent
-2. Human approval
-3. Builder Agent
-4. Verifier Agent
-5. Eval Agent
-6. System-owned change proposal, then optional hosted pull request or merge
+The loop sequence is:
 
-The legacy Test Agent still exists for compatibility and eval work, but it is not part of the default pipeline. Builder owns the task-local TDD loop: it creates or updates executable tests from the approved spec, then implements production code until the suite passes.
+1. Gather proposal and repository context.
+2. Reason by writing or revising `.workflow/loop/contract.md`.
+3. Act by implementing an attempt in the workspace.
+4. Verify by evaluating the attempt against contract, tests, traces, and visual evidence.
+5. Repeat by continuing, restarting the attempt, restarting the contract, or surfacing a human review point.
 
-See `docs/loop-model.md` for the phase model and stage compatibility mapping.
+See `docs/loop-model.md` for the loop model.
 
 ## Architecture Rules
 
-- Each agent has one responsibility.
-- Each agent consumes approved artifacts from the previous stage.
-- Each agent emits a typed report or contract.
-- Agents must not perform another agent's responsibility.
+- Each role has one responsibility.
+- Each role consumes durable files from `.workflow/loop/` and the current workspace state.
+- Each role emits a typed report, contract update, or attempt artifact.
+- Roles must not perform another role's responsibility.
 - Agents must operate within an explicit cost budget.
 - Agent outputs must be observable and auditable.
 
@@ -34,18 +31,19 @@ See `docs/loop-model.md` for the phase model and stage compatibility mapping.
 
 - `.workflow/agents/common/` stores static runtime context shared by all agents.
 - `.workflow/agents/` stores static agent context, templates, and eval configuration.
+- `.workflow/loop/` stores durable loop state, contract, progress, log, attempt reports, and traces.
 - `.workflow/eval-runs/` stores generated eval outputs and reports.
 - `.workflow/eval-cache/` stores cached eval attempts.
-- `.workflow/artifacts/change-proposals/` stores local git proposal artifacts created by Hooky after Builder runs.
 - `scripts/` stores local executable agent harnesses.
 - `tests/fixtures/` stores eval fixtures.
 
-## Stage Boundaries
+## Role Boundaries
 
-- The Spec Agent writes specification artifacts only.
-- The Builder Agent writes task-local executable tests and production implementation from an approved spec.
-- Hooky, not the Builder Agent, derives the git change proposal from the resulting workspace.
-- Verifier and Eval agents do not edit code or tests.
+- Planner writes proposal/contract material only.
+- Generator may write implementation files and project-native tests only after the evaluator accepts the contract.
+- Evaluator may read files, run tests, launch browsers, inspect screenshots, and write evaluator reports under `.workflow/loop/attempts/<id>/`.
+- Evaluator must not edit implementation or test files.
+- System code owns `.workflow/loop/state.json`, log append operations, attempt bookkeeping, and command orchestration.
 
 ## Required Runtime Basics
 

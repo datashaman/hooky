@@ -1,8 +1,8 @@
 # Hooky Loop Model
 
-Hooky is organized around phases first and agents second.
+Hooky is organized around the loop first and roles second.
 
-Agents are role-specific workers. Phases describe what the loop is doing.
+Roles are planner, generator, and evaluator. Phases describe what the loop is doing at a given moment.
 
 ## Phases
 
@@ -11,47 +11,46 @@ Agents are role-specific workers. Phases describe what the loop is doing.
    - This phase is mostly deterministic tooling.
 2. Reason
    - Turn gathered context into a contract, diagnosis, strategy, or next action.
-   - The Spec Agent currently implements the default Reason phase for new work.
+   - Planner and evaluator contract review implement the contract side of this phase.
 3. Act
    - Change the workspace or run setup commands under the approved contract.
-   - The Builder Agent currently implements the default Act phase.
+   - Generator implements this phase after the contract is accepted.
 4. Verify
    - Prove the result against tests, artifacts, contracts, and visual evidence.
-   - The Verifier Agent and deterministic tools implement this phase.
+   - Evaluator plus deterministic tools implement this phase.
 5. Repeat
    - Decide whether the loop passes, fails, resumes from a phase, restarts, or needs human input.
-   - The Eval Agent and remediation controller implement this phase.
+   - Evaluator recommendations and loop orchestration implement this phase.
 
-## Stage Compatibility
+## Roles
 
-The current stage names remain compatibility handles:
-
-- `spec` maps to `reason`
-- `builder` maps to `act`
-- `verifier` maps to `verify`
-- `eval` maps to `repeat`
-
-The legacy `test` stage maps to `act` because executable test creation is now part of Builder's TDD loop.
+- `planner`: writes the initial proposal/contract boundary and never touches implementation code.
+- `generator`: proposes done criteria during negotiation, then writes implementation/tests during attempts.
+- `evaluator`: rejects weak contracts, grades attempts, reads traces and screenshots, and never edits code.
 
 ## State
 
-Task state keeps both views:
+Loop state is deliberately small and lives on disk:
 
-- `stage_status` preserves existing command and artifact compatibility.
-- `phase_status` exposes the loop sequence.
+- `.workflow/loop/proposal.md`
+- `.workflow/loop/contract.md`
+- `.workflow/loop/feature_list.json`
+- `.workflow/loop/progress.md`
+- `.workflow/loop/log.md`
+- `.workflow/loop/state.json`
+- `.workflow/loop/attempts/<id>/`
 
 Example:
 
 ```json
 {
-  "phase_status": {
-    "gather": {"status": "passed", "source": "workspace_task_context"},
-    "reason": {"status": "passed", "stage": "spec", "agent": "spec"},
-    "act": {"status": "running", "stage": "builder", "agent": "builder"},
-    "verify": {"status": "not-run"},
-    "repeat": {"status": "not-run"}
-  }
+  "status": "attempt-running",
+  "contract_accepted": true,
+  "current_attempt": "001",
+  "attempts": [
+    {"id": "001", "status": "running", "path": ".workflow/loop/attempts/001"}
+  ]
 }
 ```
 
-Runtime logs include `phase=<name>` on stage events. Remediation plans include both root-cause stage and root-cause phase.
+Runtime logs, transcripts, tool events, OpenTelemetry-style spans, evaluator reports, and visual evidence live under the active attempt directory. Debug commands read those files directly instead of reconstructing what might have happened from model summaries.
