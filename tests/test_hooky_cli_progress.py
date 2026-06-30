@@ -492,6 +492,32 @@ class HookyProgressTests(unittest.TestCase):
         feature_list = hooky_cli.read_json(self.workspace / ".workflow/loop/feature_list.json")
         self.assertEqual(feature_list["features"], [])
 
+    def test_loop_init_reads_boundary_from_stdin_and_derives_title(self) -> None:
+        result = CliRunner().invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "init"],
+            input="Build a todo app\n\nUsers can add and complete todos.\n",
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
+        self.assertIn("# Build a todo app", contract)
+        self.assertIn("Users can add and complete todos.", contract)
+
+    def test_loop_init_derives_title_from_body_file_when_title_missing(self) -> None:
+        body_file = self.workspace / "boundary.md"
+        body_file.write_text("Build a calendar\n\nUsers can add events.\n", encoding="utf-8")
+
+        result = CliRunner().invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "init", "--body-file", str(body_file)],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        contract = (self.workspace / ".workflow/loop/contract.md").read_text(encoding="utf-8")
+        self.assertIn("# Build a calendar", contract)
+        self.assertIn("Users can add events.", contract)
+
     def test_loop_start_attempt_requires_accepted_contract(self) -> None:
         CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
 

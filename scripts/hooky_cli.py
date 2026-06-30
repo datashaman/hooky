@@ -390,6 +390,21 @@ def read_body_arg_or_file(body: str | None, body_file: Path | None) -> str:
     raise typer.BadParameter("body is required via --body or --body-file")
 
 
+def read_optional_body_file_or_stdin(body_file: Path | None) -> str:
+    if body_file:
+        return body_file.read_text(encoding="utf-8").strip()
+    if not sys.stdin.isatty():
+        return sys.stdin.read().strip()
+    return ""
+
+
+def title_from_body(body: str) -> str | None:
+    if not body:
+        return None
+    first_line = body.splitlines()[0].strip()
+    return first_line or None
+
+
 def read_global_state(workspace: Path) -> dict[str, Any]:
     path = global_state_path(workspace)
     return read_json(path) if path.exists() else {}
@@ -1358,7 +1373,8 @@ def loop_init(
 ) -> None:
     """Initialize the Karpathy-style loop durable state files."""
     workspace = workspace_from_ctx(ctx)
-    boundary = body_file.read_text(encoding="utf-8").strip() if body_file else ""
+    boundary = read_optional_body_file_or_stdin(body_file)
+    title = title or title_from_body(boundary)
     loop_root = initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
     write_last_run_workspace(last_run_path, workspace)
     typer.echo(f"loop: {loop_root}")
