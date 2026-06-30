@@ -1445,6 +1445,169 @@ def loop_watch(
     typer.echo(path.read_text(encoding="utf-8").rstrip())
 
 
+def latest_loop_attempt_id(state: dict[str, Any]) -> str | None:
+    if state.get("current_attempt"):
+        return str(state["current_attempt"])
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
+    for attempt in reversed(attempts):
+        if isinstance(attempt, dict) and attempt.get("id"):
+            return str(attempt["id"])
+    return None
+
+
+def loop_debug_root(workspace: Path, state: dict[str, Any], attempt: str | None) -> Path:
+    attempt_id = attempt or latest_loop_attempt_id(state)
+    if attempt_id:
+        return loop_attempt_dir(workspace, attempt_id) / "traces"
+    return loop_dir(workspace)
+
+
+def load_loop_transcript(root: Path) -> list[dict[str, Any]]:
+    path = root / "runtime_transcript.json"
+    if not path.exists():
+        raise typer.BadParameter(f"runtime transcript not found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise typer.BadParameter(f"runtime transcript is not a list: {path}")
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def transcript_message(entry: dict[str, Any]) -> dict[str, Any]:
+    message = entry.get("message")
+    return message if isinstance(message, dict) else entry
+
+
+def transcript_role(entry: dict[str, Any]) -> str:
+    message = transcript_message(entry)
+    return str(message.get("role") or entry.get("role") or "event")
+
+
+def transcript_text(entry: dict[str, Any]) -> str:
+    message = transcript_message(entry)
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or item))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    if isinstance(entry.get("message"), str):
+        return str(entry["message"])
+    return ""
+
+
+def transcript_tool_calls(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    message = transcript_message(entry)
+    calls = message.get("tool_calls")
+    return calls if isinstance(calls, list) else []
+
+
+@loop_app.command("runtime-log")
+def loop_runtime_log(
+    ctx: typer.Context,
+    attempt: Annotated[str | None, typer.Option(help="Attempt id. Defaults to active/latest attempt, or contract-level runtime if none exists.")] = None,
+    follow: Annotated[bool, typer.Option("--follow/--no-follow", "-f", help="Follow the runtime event log.")] = False,
+    tail_path: Annotated[bool, typer.Option("--tail-path", help="Only print the runtime event log path.")] = False,
+    lines: Annotated[int, typer.Option(help="Number of lines to show when not following.")] = 80,
+) -> None:
+    """Show the live model/tool runtime log for the loop or an attempt."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_debug_root(workspace, state, attempt)
+    path = root / "runtime_events.log"
+    if tail_path:
+        typer.echo(path)
+        return
+    if follow:
+        follow_runtime_log(workspace, "loop", state, path)
+        return
+    if not path.exists():
+        raise typer.BadParameter(f"runtime log not found: {path}")
+    content = path.read_text(encoding="utf-8").splitlines()
+    typer.echo("\n".join(content[-lines:]))
+
+
+@loop_app.command("transcript")
+def loop_transcript(
+    ctx: typer.Context,
+    attempt: Annotated[str | None, typer.Option(help="Attempt id. Defaults to active/latest attempt, or contract-level runtime if none exists.")] = None,
+    role: Annotated[str, typer.Option(help="Role filter: all, system, user, assistant, or tool.")] = "all",
+    last: Annotated[int, typer.Option(help="Number of matching transcript entries to show.")] = 20,
+    full: Annotated[bool, typer.Option("--full", help="Print full message text instead of a preview.")] = False,
+) -> None:
+    """Show actual persisted model conversation entries for loop debugging."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_debug_root(workspace, state, attempt)
+    entries = load_loop_transcript(root)
+    allowed_roles = {"all", "system", "user", "assistant", "tool"}
+    if role not in allowed_roles:
+        raise typer.BadParameter("role must be one of: all, system, user, assistant, tool")
+    selected = [entry for entry in entries if role == "all" or transcript_role(entry) == role]
+    for index, entry in list(enumerate(selected, 1))[-last:]:
+        entry_role = transcript_role(entry)
+        calls = transcript_tool_calls(entry)
+        kind = str(entry.get("kind") or "message")
+        text = transcript_text(entry).strip()
+        typer.echo(f"## {index}. {entry_role} kind={kind} tool_calls={len(calls)}")
+        if calls:
+            names = [
+                str((call.get("function") or {}).get("name") or call.get("name") or "unknown")
+                for call in calls
+                if isinstance(call, dict)
+            ]
+            typer.echo("tools: " + ", ".join(names))
+        if entry_role == "tool":
+            typer.echo("tool: " + str(entry.get("name") or "unknown"))
+            result = entry.get("result")
+            typer.echo(agent_runtime.single_line(json.dumps(result, sort_keys=True) if isinstance(result, dict) else str(result), 1200))
+        elif text:
+            typer.echo(text if full else agent_runtime.single_line(text, 1200))
+        else:
+            typer.echo("[empty]")
+        typer.echo("")
+
+
+@loop_app.command("stall")
+def loop_stall(
+    ctx: typer.Context,
+    attempt: Annotated[str | None, typer.Option(help="Attempt id. Defaults to active/latest attempt.")] = None,
+    last: Annotated[int, typer.Option(help="Number of recent assistant entries to inspect.")] = 20,
+) -> None:
+    """Summarize recent no-tool assistant responses and fake final_report text."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_debug_root(workspace, state, attempt)
+    entries = load_loop_transcript(root)
+    assistants = [entry for entry in entries if transcript_role(entry) == "assistant"]
+    recent = assistants[-last:]
+    no_tool = [entry for entry in recent if not transcript_tool_calls(entry)]
+    fake_final = [entry for entry in no_tool if "final_report" in transcript_text(entry)]
+    trailing_no_tool = 0
+    for entry in reversed(assistants):
+        if transcript_tool_calls(entry):
+            break
+        trailing_no_tool += 1
+    typer.echo(f"transcript: {root / 'runtime_transcript.json'}")
+    typer.echo(f"assistant_entries_checked: {len(recent)}")
+    typer.echo(f"no_tool_assistant_entries: {len(no_tool)}")
+    typer.echo(f"fake_final_report_text_entries: {len(fake_final)}")
+    typer.echo(f"trailing_no_tool_assistant_entries: {trailing_no_tool}")
+    if no_tool:
+        typer.echo("")
+        typer.echo("recent no-tool assistant messages:")
+        for entry in no_tool[-5:]:
+            text = transcript_text(entry).strip()
+            typer.echo("- " + (agent_runtime.single_line(text, 500) if text else "[empty]"))
+
+
 def run_model_loop_once(
     workspace: Path,
     *,

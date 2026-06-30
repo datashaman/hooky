@@ -75,6 +75,7 @@ class ToolRuntime:
     live_event_log_paths: list[Path] = field(default_factory=list)
     live_event_prefix: str = ""
     heartbeat_seconds: int = 20
+    no_tool_response_limit: int = 5
     write_enabled: bool = True
     read_blocked_prefixes: list[str] = field(default_factory=lambda: [".workflow"])
     read_allowed_prefixes: list[str] = field(default_factory=lambda: [".workflow/tool-results"])
@@ -116,6 +117,8 @@ class ToolRuntime:
         self.anchored_summary = ""
         if os.environ.get("AGENT_HEARTBEAT_SECONDS"):
             self.heartbeat_seconds = int(os.environ["AGENT_HEARTBEAT_SECONDS"])
+        if os.environ.get("AGENT_NO_TOOL_RESPONSE_LIMIT"):
+            self.no_tool_response_limit = int(os.environ["AGENT_NO_TOOL_RESPONSE_LIMIT"])
         if os.environ.get("AGENT_MAX_EXTENSION_SECONDS"):
             self.max_extension_seconds = int(os.environ["AGENT_MAX_EXTENSION_SECONDS"])
         if os.environ.get("AGENT_MAX_EXTENSION_REQUESTS"):
@@ -1262,7 +1265,32 @@ def run_tool_agent(
 ) -> AgentRunResult:
     from openrouter import OpenRouter
 
+    transcript: list[dict[str, Any]] = []
+    tool_events: list[dict[str, Any]] = []
+    compaction_events: list[dict[str, Any]] = []
+    pre_compaction_archives: list[dict[str, Any]] = []
+    total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    started_at = utc_timestamp()
+    soft_deadline_sent = False
+    consecutive_no_tool_responses = 0
     messages: list[Any] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    transcript.extend(
+        [
+            {
+                "role": "system",
+                "message": system,
+                "started_at": utc_timestamp(),
+                "ended_at": utc_timestamp(),
+            },
+            {
+                "role": "user",
+                "kind": "initial",
+                "message": user,
+                "started_at": utc_timestamp(),
+                "ended_at": utc_timestamp(),
+            },
+        ]
+    )
     preselected_skill_message = preselected_skills_message(runtime)
     if preselected_skill_message:
         messages.append(preselected_skill_message)
@@ -1282,13 +1310,15 @@ def run_tool_agent(
         image_message = image_input_message(runtime, initial_images, "Initial visual evidence attached for inspection.")
         if image_message:
             messages.append(image_message)
-    transcript: list[dict[str, Any]] = []
-    tool_events: list[dict[str, Any]] = []
-    compaction_events: list[dict[str, Any]] = []
-    pre_compaction_archives: list[dict[str, Any]] = []
-    total_usage: dict[str, Any] = {"cost": 0.0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    started_at = utc_timestamp()
-    soft_deadline_sent = False
+            transcript.append(
+                {
+                    "role": "image_input",
+                    "message": "Initial visual evidence attached for inspection.",
+                    "images": initial_images,
+                    "started_at": utc_timestamp(),
+                    "ended_at": utc_timestamp(),
+                }
+            )
 
     def current_result() -> AgentRunResult:
         return AgentRunResult(
@@ -1355,7 +1385,8 @@ def run_tool_agent(
                     messages.append({"role": "user", "content": warning})
                     transcript.append(
                         {
-                            "role": "runtime_notice",
+                            "role": "user",
+                            "kind": "soft_deadline",
                             "message": warning,
                             "started_at": utc_timestamp(),
                             "ended_at": utc_timestamp(),
@@ -1436,8 +1467,27 @@ def run_tool_agent(
 
                 tool_calls = getattr(message, "tool_calls", None) or []
                 if not tool_calls:
-                    messages.append({"role": "user", "content": "Continue by using the available tools. Finish only by calling final_report."})
+                    consecutive_no_tool_responses += 1
+                    if runtime.no_tool_response_limit > 0 and consecutive_no_tool_responses > runtime.no_tool_response_limit:
+                        raise AgentRunError(
+                            f"agent produced {consecutive_no_tool_responses} consecutive assistant messages without tool calls",
+                            current_result(),
+                        )
+                    prompt = "Continue by using the available tools. Finish only by calling final_report."
+                    messages.append({"role": "user", "content": prompt})
+                    transcript.append(
+                        {
+                            "role": "user",
+                            "kind": "no_tool_calls",
+                            "message": prompt,
+                            "started_at": utc_timestamp(),
+                            "ended_at": utc_timestamp(),
+                        }
+                    )
+                    append_live_event(runtime, format_runtime_event_line(transcript[-1]))
+                    flush_live_log()
                     continue
+                consecutive_no_tool_responses = 0
 
                 for tool_call in tool_calls:
                     raw_name = tool_call.function.name
@@ -1762,7 +1812,11 @@ def prefix_event_line(line: str, prefix: str) -> str:
 
 
 def render_runtime_events_log(transcript: list[dict[str, Any]]) -> str:
-    lines = [format_runtime_event_line(item) for item in transcript if item.get("role") in {"assistant", "tool", "compaction", "pre_compaction"}]
+    lines = [
+        format_runtime_event_line(item)
+        for item in transcript
+        if item.get("role") in {"system", "user", "assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}
+    ]
     return "\n".join(line for line in lines if line) + ("\n" if lines else "")
 
 
@@ -1790,6 +1844,10 @@ def format_runtime_event_line(item: dict[str, Any]) -> str:
         arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
         status = "ok" if result.get("ok") is True else "error" if result.get("ok") is False else "unknown"
         return f"{timestamp} tool name={name} status={status} duration={duration} {tail_detail(name, arguments, result)}".rstrip()
+    if role in {"system", "user", "runtime_notice"}:
+        kind = str(item.get("kind") or "message")
+        message = single_line(str(item.get("message") or ""), 180)
+        return f"{timestamp} {role} kind={kind} message={quote_value(message, 180)}"
     return f"{timestamp} {role}"
 
 
@@ -1986,7 +2044,11 @@ def todo_label(item: dict[str, Any]) -> str:
 
 def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
     lines = ["# Runtime Timeline", ""]
-    items = [item for item in transcript if item.get("role") in {"assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}]
+    items = [
+        item
+        for item in transcript
+        if item.get("role") in {"system", "user", "assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}
+    ]
     if not items:
         lines.append("No runtime events recorded.")
         lines.append("")
@@ -2022,11 +2084,17 @@ def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
             details = summarize_tool_timing(item) + summarize_tool_event(name, arguments, result)
             lines.extend(f"- {detail}" for detail in details)
             lines.append("")
+        elif role in {"system", "user", "runtime_notice"}:
+            kind = str(item.get("kind") or "message")
+            lines.append(f"## {index}. `{role}` `{kind}`")
+            details = summarize_tool_timing(item)
+            if item.get("message"):
+                details.append("message: " + single_line(str(item["message"]), 500))
+            lines.extend(f"- {detail}" for detail in details)
+            lines.append("")
         else:
             lines.append(f"## {index}. `{role}`")
             details = summarize_tool_timing(item)
-            if role == "runtime_notice" and item.get("message"):
-                details.append("message: " + single_line(str(item["message"]), 500))
             lines.extend(f"- {detail}" for detail in details)
             lines.append("")
     return "\n".join(lines)

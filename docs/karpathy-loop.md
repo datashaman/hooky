@@ -119,6 +119,19 @@ When a prompt or loop policy changes because of trace evidence, record the
 change in `log.md` with a reference to the attempt, role, and trace location.
 The `evaluator` may cite transcript moments when explaining a bad trajectory.
 
+Useful local inspection commands:
+
+```bash
+uv run hooky -C <workspace> loop runtime-log --attempt 002 --follow
+uv run hooky -C <workspace> loop transcript --attempt 002 --role assistant --last 10
+uv run hooky -C <workspace> loop stall --attempt 002
+```
+
+`runtime-log` shows the live model/tool event stream. `transcript` shows the
+persisted conversation entries, including system and user prompts. `stall`
+summarizes repeated assistant turns with no tool calls and detects Markdown
+`final_report` text that was not submitted through the required tool.
+
 ## OpenTelemetry
 
 OpenTelemetry is useful as supporting observability, not as primary loop memory.

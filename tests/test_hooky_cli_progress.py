@@ -1029,6 +1029,56 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("watchable", content_result.output)
         self.assertIn("hello", content_result.output)
 
+    def test_loop_debug_commands_show_runtime_transcript_and_stalls(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        trace_root = self.workspace / ".workflow/loop/attempts/001/traces"
+        hooky_cli.write_json(
+            trace_root / "runtime_transcript.json",
+            {
+                "bad": "shape",
+            },
+        )
+        (trace_root / "runtime_transcript.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "role": "user",
+                        "kind": "initial",
+                        "message": "Implement TodoMVC.",
+                        "started_at": "2026-06-30T00:00:00+00:00",
+                        "ended_at": "2026-06-30T00:00:00+00:00",
+                    },
+                    {
+                        "role": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "content": "**final_report** {\"status\":\"done\"}",
+                        },
+                        "started_at": "2026-06-30T00:00:01+00:00",
+                        "ended_at": "2026-06-30T00:00:01+00:00",
+                    },
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (trace_root / "runtime_events.log").write_text("2026-06-30T00:00:01+00:00 assistant tool_calls=0\n", encoding="utf-8")
+
+        transcript = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "transcript", "--attempt", "001"])
+        stall = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "stall", "--attempt", "001"])
+        runtime_log = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "runtime-log", "--attempt", "001"])
+
+        self.assertEqual(transcript.exit_code, 0, transcript.output)
+        self.assertIn("Implement TodoMVC.", transcript.output)
+        self.assertIn("final_report", transcript.output)
+        self.assertEqual(stall.exit_code, 0, stall.output)
+        self.assertIn("fake_final_report_text_entries: 1", stall.output)
+        self.assertEqual(runtime_log.exit_code, 0, runtime_log.output)
+        self.assertIn("tool_calls=0", runtime_log.output)
+
     def test_loop_status_uses_last_run_workspace_when_current_directory_has_no_loop(self) -> None:
         last_run_path = self.workspace / "loop-last-run-path"
         runner = CliRunner()

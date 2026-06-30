@@ -185,7 +185,8 @@ class ProtectedPathTests(unittest.TestCase):
         rendered = agent_runtime.render_runtime_timeline_markdown(
             [
                 {
-                    "role": "runtime_notice",
+                    "role": "user",
+                    "kind": "no_tool_calls",
                     "message": "Runtime soft deadline: about 30s remain.",
                     "started_at": "2026-06-29T00:00:00+00:00",
                     "ended_at": "2026-06-29T00:00:00+00:00",
@@ -193,8 +194,25 @@ class ProtectedPathTests(unittest.TestCase):
             ]
         )
 
-        self.assertIn("runtime_notice", rendered)
+        self.assertIn("user", rendered)
+        self.assertIn("no_tool_calls", rendered)
         self.assertIn("Runtime soft deadline", rendered)
+
+    def test_runtime_event_log_includes_user_prompts(self) -> None:
+        rendered = agent_runtime.render_runtime_events_log(
+            [
+                {
+                    "role": "user",
+                    "kind": "no_tool_calls",
+                    "message": "Continue by using the available tools.",
+                    "started_at": "2026-06-29T00:00:00+00:00",
+                    "ended_at": "2026-06-29T00:00:00+00:00",
+                }
+            ]
+        )
+
+        self.assertIn("user kind=no_tool_calls", rendered)
+        self.assertIn("Continue by using the available tools", rendered)
 
     def test_read_file_excerpt_and_many_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
