@@ -130,7 +130,7 @@ class ProtectedPathTests(unittest.TestCase):
     def test_write_allowed_prefixes_remain_available_for_system_artifact_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            artifact = root / ".hooky/contract.md"
+            artifact = root / ".hooky/runs/local/contract.md"
             artifact.parent.mkdir(parents=True)
             artifact.write_text("before", encoding="utf-8")
             runtime = agent_runtime.ToolRuntime(
@@ -138,11 +138,11 @@ class ProtectedPathTests(unittest.TestCase):
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
                 max_seconds=30,
-                write_allowed_prefixes=[".hooky/contract.md"],
+                write_allowed_prefixes=[".hooky/runs/local/contract.md"],
                 write_blocked_prefixes=[],
             )
 
-            result = runtime.write_file({"path": ".hooky/contract.md", "content": "after"})
+            result = runtime.write_file({"path": ".hooky/runs/local/contract.md", "content": "after"})
 
             self.assertTrue(result["ok"])
             self.assertEqual(artifact.read_text(encoding="utf-8"), "after")
@@ -435,7 +435,7 @@ The contract is close but still underspecified.
     def test_tool_result_artifacts_are_readable_without_exposing_workflow_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            result_path = root / ".hooky/tool-results/test-runs/result.log"
+            result_path = root / ".hooky/runs/local/tool-results/test-runs/result.log"
             result_path.parent.mkdir(parents=True)
             result_path.write_text("line one\nline two\n", encoding="utf-8")
             (root / ".hooky/artifacts/state.json").parent.mkdir(parents=True)
@@ -443,7 +443,7 @@ The contract is close but still underspecified.
             runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             excerpt = runtime.read_file_excerpt(
-                {"path": ".hooky/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
+                {"path": ".hooky/runs/local/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
             )
             root_listing = runtime.list_files({"path": "."})
 
@@ -452,7 +452,7 @@ The contract is close but still underspecified.
             with self.assertRaises(FileNotFoundError):
                 runtime.read_file({"path": ".hooky/artifacts/state.json"})
             with self.assertRaises(FileNotFoundError):
-                runtime.write_file({"path": ".hooky/tool-results/test-runs/new.log", "content": "nope"})
+                runtime.write_file({"path": ".hooky/runs/local/tool-results/test-runs/new.log", "content": "nope"})
 
     def test_todo_text_is_used_for_active_log_label(self) -> None:
         self.assertEqual(

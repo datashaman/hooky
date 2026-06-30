@@ -43,7 +43,7 @@ grading instrument. The `generator` may propose criteria, but cannot approve
 them. The `evaluator` may reject weak, vague, missing, or untestable criteria
 before any code is written.
 
-`loop run` repeats generator/evaluator contract negotiation automatically when
+`hooky run` repeats generator/evaluator contract negotiation automatically when
 the evaluator rejects the proposed contract. The evaluator feedback is passed
 back to the generator for the next proposal. The loop stops at
 `LOOP_CONTRACT_MAX_ROUNDS` rounds, defaulting to `3`, to avoid unbounded
@@ -55,7 +55,7 @@ The loop must be resumable from durable files, not conversation context. The
 primary state should be small enough to read directly:
 
 ```text
-.hooky/
+.hooky/runs/<key>/
   feature_list.json
   progress.md
   contract.md
@@ -71,10 +71,14 @@ contract. `feature_list.json` is the structured checklist projected from the
 accepted contract. `progress.md` records the current loop state and next action.
 `log.md` records append-only decisions, objections, restarts, and notable events.
 
-`log.md` is append-only. Entries should use a stable heading format:
+`log.md` is append-only. Entries are grouped by day and include UTC time on each
+event line:
 
 ```text
-## [YYYY-MM-DD] op | title
+## YYYY-MM-DD
+
+- HH:MM:SSZ op | title
+  - optional detail line
 ```
 
 ## Subjective Scoring
@@ -111,7 +115,7 @@ state files, but they must be available when the loop behaves badly.
 Each attempt should keep grep-friendly raw transcripts for each model role:
 
 ```text
-.hooky/attempts/001/traces/
+.hooky/runs/<key>/attempts/001/traces/
   planner.jsonl
   generator.jsonl
   evaluator.jsonl
@@ -128,9 +132,9 @@ The `evaluator` may cite transcript moments when explaining a bad trajectory.
 Useful local inspection commands:
 
 ```bash
-uv run hooky -C <workspace> runtime-log --attempt 002 --follow
-uv run hooky -C <workspace> transcript --attempt 002 --role assistant --last 10
-uv run hooky -C <workspace> stall --attempt 002
+hooky -C <workspace> runtime-log --attempt 002 --follow
+hooky -C <workspace> transcript --attempt 002 --role assistant --last 10
+hooky -C <workspace> stall --attempt 002
 ```
 
 `runtime-log` shows the live model/tool event stream. `transcript` shows the
@@ -149,7 +153,7 @@ Local runs must not require an external collector. If OpenTelemetry is enabled,
 write a local artifact beside the raw transcripts:
 
 ```text
-.hooky/attempts/001/otel/
+.hooky/runs/<key>/attempts/001/otel/
   spans.jsonl
 ```
 

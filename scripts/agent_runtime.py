@@ -29,6 +29,8 @@ import agent_skills
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
 FinalValidator = Callable[[dict[str, Any]], None]
+DEFAULT_RUNTIME_DIR = ".hooky/runs/local"
+RUNTIME_DIR_ENV = "HOOKY_RUN_DIR"
 DISPOSABLE_RUNTIME_DIR_NAMES = {
     ".pytest_cache",
     ".ruff_cache",
@@ -38,6 +40,15 @@ DISPOSABLE_RUNTIME_DIR_NAMES = {
     "coverage",
     "test-results",
 }
+
+
+def runtime_dir() -> str:
+    raw = os.environ.get(RUNTIME_DIR_ENV, DEFAULT_RUNTIME_DIR).strip().strip("/")
+    return raw or DEFAULT_RUNTIME_DIR
+
+
+def runtime_path(root: Path, *parts: str) -> Path:
+    return root / runtime_dir() / Path(*parts)
 
 
 def openrouter_request_options() -> dict[str, Any]:
@@ -112,7 +123,7 @@ class ToolRuntime:
     no_tool_response_limit: int = 5
     write_enabled: bool = True
     read_blocked_prefixes: list[str] = field(default_factory=lambda: [".hooky"])
-    read_allowed_prefixes: list[str] = field(default_factory=lambda: [".hooky/tool-results"])
+    read_allowed_prefixes: list[str] = field(default_factory=lambda: [f"{runtime_dir()}/tool-results"])
     write_allowed_prefixes: list[str] = field(default_factory=list)
     write_blocked_prefixes: list[str] = field(default_factory=lambda: [".hooky"])
     write_blocked_names: list[str] = field(default_factory=list)
@@ -784,7 +795,7 @@ class ToolRuntime:
         wait_selector = str(args.get("wait_selector") or "body")
         full_page = bool(args.get("full_page", True))
         timeout_seconds = int(args.get("timeout_seconds") or 30)
-        output_dir = self.working_folder / ".hooky" / "tool-results" / "visual-snapshots"
+        output_dir = runtime_path(self.working_folder, "tool-results", "visual-snapshots")
         output_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ%f")[:22]
         screenshot_path = output_dir / f"{stamp}.png"
@@ -2975,7 +2986,7 @@ def file_sha256(path: Path) -> str:
 
 
 def write_tool_result_artifact(root: Path, category: str, content: str) -> str:
-    directory = root / ".hooky" / "tool-results" / category
+    directory = runtime_path(root, "tool-results", category)
     directory.mkdir(parents=True, exist_ok=True)
     filename = utc_timestamp().replace(":", "").replace("+", "Z") + ".log"
     path = directory / filename

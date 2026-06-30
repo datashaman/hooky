@@ -1,9 +1,11 @@
 # Usage Sequences
 
 These diagrams show the common ways Hooky is expected to run. The same loop
-state is used in every case: `.hooky/proposal.md`, `.hooky/contract.md`,
-`.hooky/feature_list.json`, `.hooky/progress.md`, `.hooky/log.md`, and
-attempt artifacts under `.hooky/attempts/<id>/`.
+state shape is used in every case, namespaced by run key:
+`.hooky/runs/<key>/proposal.md`, `.hooky/runs/<key>/contract.md`,
+`.hooky/runs/<key>/feature_list.json`, `.hooky/runs/<key>/progress.md`,
+`.hooky/runs/<key>/log.md`, and attempt artifacts under
+`.hooky/runs/<key>/attempts/<id>/`.
 
 ## Auto-Approve Flow
 
@@ -25,14 +27,14 @@ sequenceDiagram
     User->>CLI: hooky run --proposal-file proposal.md
     CLI->>FS: create proposal, contract draft, state, log
     CLI->>Planner: gather repo context + proposal
-    Planner->>FS: write proposal boundary in contract.md
+    Planner->>FS: write proposal section in contract.md
     CLI->>Generator: propose done criteria
     Generator->>FS: update contract.md and feature_list.json
     CLI->>Evaluator: review proposed contract
-    Evaluator->>FS: write contract review evidence
+    Evaluator-->>CLI: accept or reject contract
 
     alt contract accepted
-        CLI->>FS: mark contract accepted
+        CLI->>FS: mark contract accepted in state/progress/log
     else contract rejected
         CLI->>Generator: revise criteria with evaluator feedback
         Generator->>FS: update contract.md and feature_list.json
@@ -40,7 +42,7 @@ sequenceDiagram
     end
 
     loop attempts until pass, cap, or blocker
-        CLI->>FS: create .hooky/attempts/<id>
+        CLI->>FS: create .hooky/runs/<key>/attempts/<id>
         CLI->>Generator: implement accepted contract
         Generator->>Tools: run project commands as needed
         Tools-->>Generator: test/runtime output
@@ -57,9 +59,11 @@ sequenceDiagram
 
 ## Flow With HITL
 
-Use this when a human should approve the contract, a restart, external
+Use this when a human should inspect the initial proposal, a restart, external
 side-effects, or the final merge decision. The human is not another model role;
-the human changes durable files or issues an explicit command.
+the human reviews durable files and either starts `hooky run`, reruns
+initialization with revised proposal input, or handles merge/publish outside
+Hooky.
 
 ```mermaid
 sequenceDiagram
@@ -73,23 +77,21 @@ sequenceDiagram
     participant Human as Human reviewer
 
     User->>CLI: hooky init --proposal-file proposal.md
-    CLI->>FS: initialize loop files and git baseline
-    CLI->>Planner: write proposal boundary
-    Planner->>FS: update contract.md
-    CLI->>Generator: propose done criteria
-    Generator->>FS: update contract.md and feature_list.json
-    CLI->>Evaluator: review contract
-    Evaluator->>FS: log accepted/rejected contract review
-
-    CLI-->>Human: surface review point with contract/log paths
-    Human->>FS: inspect contract.md, feature_list.json, log.md
-    alt approve
-        Human->>CLI: hooky accept-contract
-    else revise proposal or contract
-        Human->>CLI: hooky proposal / hooky review-contract
-        CLI->>Generator: revise criteria from durable feedback
+    CLI->>FS: initialize proposal, contract draft, state, log, git baseline
+    CLI-->>Human: hooky status and durable file paths
+    Human->>FS: inspect proposal.md, contract.md, feature_list.json, log.md
+    alt proceed with current proposal
+        Human->>CLI: hooky run
+        CLI->>Planner: gather repo context + proposal
+        Planner->>FS: update contract.md proposal section
+        CLI->>Generator: propose done criteria
         Generator->>FS: update contract.md and feature_list.json
-        CLI->>Evaluator: review again
+        CLI->>Evaluator: review contract
+        Evaluator-->>CLI: accept or reject contract
+        CLI->>FS: write state/progress/log updates
+    else revise proposal
+        Human->>CLI: hooky init --force --proposal-file proposal.md
+        CLI->>FS: rewrite initial durable files
     end
 
     CLI->>Generator: implement attempt
@@ -99,10 +101,10 @@ sequenceDiagram
 
     alt evaluator passes
         CLI-->>Human: surface final review with report, diff, screenshots
-        Human->>CLI: merge, publish, or stop outside Hooky
+        Human->>GH: merge, publish, or stop outside Hooky
     else evaluator requests restart
         CLI-->>Human: surface restart reason when policy requires approval
-        Human->>CLI: approve restart or edit contract/proposal
+        Human->>CLI: rerun, revise proposal with --force, or stop
     else evaluator finds blocker
         CLI-->>Human: ask for credentials, service access, or contract correction
     end
@@ -111,8 +113,10 @@ sequenceDiagram
 ## GitHub Event Flow
 
 Use this shape when GitHub opens or updates work and Hooky runs as automation.
-GitHub is a trigger and publication surface; Hooky still records loop truth on
-disk before posting summaries back to GitHub.
+The bundled workflow runs on manual dispatch, a `hooky:run` issue/PR label, or
+an issue/PR comment that starts with `/hooky`. GitHub is a trigger and
+publication surface; Hooky still records loop truth on disk before posting
+summaries back to GitHub.
 
 ```mermaid
 sequenceDiagram
@@ -129,19 +133,19 @@ sequenceDiagram
     Author->>GH: open issue, comment, label, or PR event
     GH->>Runner: webhook / workflow dispatch
     Runner->>FS: checkout repository and event payload
-    Runner->>CLI: hooky run --proposal-file event-proposal.md
+    Runner->>CLI: hooky run --run-key <key> --proposal-file event-proposal.md
     CLI->>FS: initialize or resume .hooky state
     CLI->>Planner: gather issue/PR payload and repo context
-    Planner->>FS: write proposal boundary
+    Planner->>FS: write proposal section
     CLI->>Generator: propose contract criteria
     Generator->>FS: update contract.md and feature_list.json
     CLI->>Evaluator: review contract
 
     alt contract or attempt needs human input
-        CLI->>GH: post comment with HITL question and artifact links
-        GH-->>Author: request approval, clarification, or credentials
-        Author->>GH: approve/comment/update issue
-        GH->>Runner: new event resumes Hooky
+        Runner->>GH: post blocker/failure summary and artifact links
+        GH-->>Author: request clarification, credentials, or proposal change
+        Author->>GH: comment, relabel, or update issue/PR
+        GH->>Runner: new event starts/resumes same run key
     else automation can continue
         CLI->>Generator: implement accepted contract
         Generator->>FS: change workspace and write report
