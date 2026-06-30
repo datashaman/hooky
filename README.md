@@ -75,6 +75,9 @@ Durable loop files:
 - `.hooky/log.md`
 - `.hooky/attempts/<id>/`
 
+For sequence diagrams covering auto-approve, human-in-the-loop, and GitHub event
+usage, see [`docs/usage-sequences.md`](docs/usage-sequences.md).
+
 ## Agent Skills
 
 Hooky supports agent skills using progressive disclosure. At run start, agents see only a catalog of available skill names and descriptions. They can call `activate_skill` to load a selected `SKILL.md`, and `read_skill_resource` to read specific referenced files from that skill directory.
