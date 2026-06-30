@@ -77,6 +77,66 @@ class HookyProgressTests(unittest.TestCase):
         log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
         self.assertIn("retry test-role", log)
 
+    def test_model_role_retry_runs_on_retry_hook_before_retry(self) -> None:
+        calls = 0
+        retries: list[int] = []
+
+        def flaky_call() -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise hooky_cli.agent_runtime.AgentRunError(
+                    "agent produced 6 consecutive assistant messages without tool calls",
+                    hooky_cli.agent_runtime.AgentRunResult(
+                        final_report=None,
+                        usage={},
+                        transcript=[],
+                        tool_events=[],
+                        compaction_events=[],
+                        pre_compaction_archives=[],
+                        started_at="2026-06-30T00:00:00+00:00",
+                        ended_at="2026-06-30T00:00:01+00:00",
+                    ),
+                )
+            self.assertEqual(retries, [1])
+            return "ok"
+
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+
+        with mock.patch.dict(os.environ, {"LOOP_MODEL_ROLE_RETRIES": "1"}):
+            result = hooky_cli.run_model_role_with_retries(
+                self.workspace,
+                "generator-implementation attempt 001",
+                flaky_call,
+                on_retry=lambda retry, _exc: retries.append(retry),
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls, 2)
+
+    def test_reset_loop_attempt_workspace_removes_untracked_files_but_preserves_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "src").mkdir()
+            (workspace / "src/App.jsx").write_text("before\n", encoding="utf-8")
+            (workspace / ".workflow/loop").mkdir(parents=True)
+            (workspace / ".workflow/loop/log.md").write_text("log\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(workspace), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(workspace), "add", "src/App.jsx"], check=True)
+            subprocess.run(["git", "-C", str(workspace), "commit", "-q", "-m", "baseline"], check=True)
+
+            (workspace / "src/App.jsx").write_text("after\n", encoding="utf-8")
+            (workspace / "tests").mkdir()
+            (workspace / "tests/stale.spec.js").write_text("stale\n", encoding="utf-8")
+
+            note = hooky_cli.reset_loop_attempt_workspace(workspace)
+
+            self.assertIn("HEAD is now at", note)
+            self.assertEqual((workspace / "src/App.jsx").read_text(encoding="utf-8"), "before\n")
+            self.assertFalse((workspace / "tests/stale.spec.js").exists())
+            self.assertTrue((workspace / ".workflow/loop/log.md").exists())
+
     def test_running_stage_records_owner_and_trace(self) -> None:
         state = hooky_cli.load_task_state(self.workspace)
 

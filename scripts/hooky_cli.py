@@ -1785,7 +1785,13 @@ def loop_stall(
             typer.echo("- " + (agent_runtime.single_line(text, 500) if text else "[empty]"))
 
 
-def run_model_role_with_retries(workspace: Path, label: str, call: Callable[[], T]) -> T:
+def run_model_role_with_retries(
+    workspace: Path,
+    label: str,
+    call: Callable[[], T],
+    *,
+    on_retry: Callable[[int, agent_runtime.AgentRunError], None] | None = None,
+) -> T:
     max_retries = int(os.environ.get("LOOP_MODEL_ROLE_RETRIES", "1"))
     attempt = 0
     while True:
@@ -1801,6 +1807,8 @@ def run_model_role_with_retries(workspace: Path, label: str, call: Callable[[], 
                 f"retry {label}",
                 f"Retry {attempt}/{max_retries} after model role error: {exc}",
             )
+            if on_retry is not None:
+                on_retry(attempt, exc)
 
 
 def run_model_loop_once(
@@ -1910,6 +1918,12 @@ def run_model_loop_once(
                 working_folder=workspace,
                 attempt_id=attempt_id,
                 evaluator_feedback=evaluator_feedback,
+            ),
+            on_retry=lambda retry, _exc: append_loop_log(
+                workspace,
+                "loop-runner",
+                f"attempt {attempt_id} generator retry reset",
+                reset_loop_attempt_workspace(workspace),
             ),
         )
         write_json(attempt_dir / "generator_report.json", generator_report)
