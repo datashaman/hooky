@@ -506,6 +506,16 @@ def workspace_for_status(ctx: typer.Context, last_run_path: Path) -> Path:
     return workspace
 
 
+def workspace_for_loop(ctx: typer.Context, last_run_path: Path = DEFAULT_LAST_RUN_PATH) -> Path:
+    workspace = workspace_from_ctx(ctx)
+    if loop_state_path(workspace).exists():
+        return workspace
+    last_workspace = workspace_from_last_run(last_run_path)
+    if last_workspace and loop_state_path(last_workspace).exists():
+        return last_workspace
+    return workspace
+
+
 def last_nonempty_line(path: Path) -> str | None:
     if not path.exists():
         return None
@@ -1267,19 +1277,25 @@ def loop_init(
     title: Annotated[str | None, typer.Option(help="Problem title for contract.md.")] = None,
     body_file: Annotated[Path | None, typer.Option(help="Optional problem boundary Markdown file.")] = None,
     force: Annotated[bool, typer.Option(help="Overwrite existing loop files.")] = False,
+    last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Initialize the Karpathy-style loop durable state files."""
     workspace = workspace_from_ctx(ctx)
     boundary = body_file.read_text(encoding="utf-8").strip() if body_file else ""
     loop_root = initialize_loop_files(workspace, title=title, boundary=boundary, force=force)
+    write_last_run_workspace(last_run_path, workspace)
     typer.echo(f"loop: {loop_root}")
     typer.echo("next: hooky loop status")
 
 
 @loop_app.command("status")
-def loop_status(ctx: typer.Context) -> None:
+def loop_status(
+    ctx: typer.Context,
+    last_run_path: Annotated[Path, typer.Option(help="Path written by loop init/run; used when the current directory has no loop.")] = DEFAULT_LAST_RUN_PATH,
+) -> None:
     """Show Karpathy-style loop state and durable file locations."""
-    workspace = workspace_from_ctx(ctx)
+    workspace = workspace_for_loop(ctx, last_run_path)
+    ctx.obj["workspace"] = workspace
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
     typer.echo(f"loop: {loop_dir(workspace)}")
@@ -1299,6 +1315,27 @@ def loop_status(ctx: typer.Context) -> None:
                 typer.echo(f"  {attempt.get('id')}: {attempt.get('status')}")
 
 
+@loop_app.command("watch")
+def loop_watch(
+    ctx: typer.Context,
+    path_only: Annotated[bool, typer.Option("--path", help="Only print the loop log path.")] = False,
+    follow: Annotated[bool, typer.Option("--follow/--no-follow", "-f", help="Follow the loop log.")] = True,
+    last_run_path: Annotated[Path, typer.Option(help="Path written by loop init/run; used when the current directory has no loop.")] = DEFAULT_LAST_RUN_PATH,
+) -> None:
+    """Show or follow .workflow/loop/log.md."""
+    workspace = workspace_for_loop(ctx, last_run_path)
+    ctx.obj["workspace"] = workspace
+    ensure_loop_initialized(workspace)
+    path = loop_log_path(workspace)
+    if path_only:
+        typer.echo(path)
+        return
+    if follow:
+        follow_runtime_log(workspace, "loop", {}, path)
+        return
+    typer.echo(path.read_text(encoding="utf-8").rstrip())
+
+
 @loop_app.command("run")
 def loop_run(
     ctx: typer.Context,
@@ -1310,6 +1347,7 @@ def loop_run(
     recommendation: Annotated[str, typer.Option(help="Evaluator recommendation: continue, restart-attempt, restart-contract, or stop.")] = "continue",
     bottleneck: Annotated[str | None, typer.Option(help="Evaluator bottleneck.")] = None,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
+    last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
     """Run the local Karpathy-style loop suite through one attempt."""
     workspace = workspace_from_ctx(ctx)
@@ -1416,6 +1454,7 @@ def loop_run(
     write_loop_state(workspace, state)
     write_loop_progress(workspace, state, note=f"Run completed with status={status}, recommendation={recommendation}.")
     append_loop_log(workspace, "evaluator", f"attempt {attempt_id} {status}", f"recommendation: {recommendation}")
+    write_last_run_workspace(last_run_path, workspace)
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"status: {state['status']}")
     typer.echo(f"report: {report_path}")

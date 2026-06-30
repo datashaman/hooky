@@ -770,6 +770,51 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(state["attempts"][0]["status"], "restarted")
         self.assertEqual(state["bottleneck"], "generator_trajectory")
 
+    def test_loop_watch_shows_path_and_log_content(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(
+            hooky_cli.app,
+            ["-C", str(self.workspace), "loop", "log", "--op", "note", "--title", "watchable", "--body", "hello"],
+        )
+
+        path_result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "watch", "--path"])
+        content_result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "watch", "--no-follow"])
+
+        self.assertEqual(path_result.exit_code, 0, path_result.output)
+        self.assertIn(".workflow/loop/log.md", path_result.output)
+        self.assertEqual(content_result.exit_code, 0, content_result.output)
+        self.assertIn("watchable", content_result.output)
+        self.assertIn("hello", content_result.output)
+
+    def test_loop_status_uses_last_run_workspace_when_current_directory_has_no_loop(self) -> None:
+        last_run_path = self.workspace / "loop-last-run-path"
+        runner = CliRunner()
+        run_result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "run",
+                "--title",
+                "Remember me",
+                "--last-run-path",
+                str(last_run_path),
+            ],
+        )
+        self.assertEqual(run_result.exit_code, 0, run_result.output)
+
+        with tempfile.TemporaryDirectory() as other:
+            status = runner.invoke(
+                hooky_cli.app,
+                ["-C", other, "loop", "status", "--last-run-path", str(last_run_path)],
+            )
+
+        self.assertEqual(status.exit_code, 0, status.output)
+        self.assertIn(f"loop: {(self.workspace / '.workflow/loop').resolve()}", status.output)
+        self.assertIn("status: passed", status.output)
+
 
 if __name__ == "__main__":
     unittest.main()
