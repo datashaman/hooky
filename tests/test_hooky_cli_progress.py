@@ -542,6 +542,31 @@ class HookyProgressTests(unittest.TestCase):
         self.assertTrue(state["contract_accepted"])
         self.assertEqual(state["status"], "contract-accepted")
 
+    def test_loop_planner_command_runs_role_and_updates_state(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        contract_path = self.workspace / ".workflow/loop/contract.md"
+
+        def fake_planner(*, working_folder: Path, boundary: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(working_folder.resolve(), self.workspace.resolve())
+            self.assertIn("Build a calendar", boundary)
+            contract_path.write_text("# Loop Contract\n\n## Boundary\n\nBuild a calendar.\n", encoding="utf-8")
+            return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Boundary written."}, {"cost": 0.01}
+
+        with mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner):
+            result = runner.invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "loop", "planner", "--boundary", "Build a calendar"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Boundary written.", result.output)
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "boundary-written")
+        self.assertFalse(state["contract_accepted"])
+        self.assertEqual(state["role_usage"]["planner"]["cost"], 0.01)
+        self.assertIn("Build a calendar", contract_path.read_text(encoding="utf-8"))
+
     def test_loop_attempt_lifecycle_creates_trace_and_otel_artifacts(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])

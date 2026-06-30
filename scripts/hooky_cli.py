@@ -30,6 +30,7 @@ import agent_runtime
 import agent_skills
 import eval_agent
 import generate_eval_report
+import loop_agent
 import spec_agent
 import test_agent
 import verifier_agent
@@ -1498,6 +1499,31 @@ def loop_boundary(
     write_loop_progress(workspace, state, note="Problem boundary updated.")
     append_loop_log(workspace, "planner", "boundary updated")
     typer.echo(f"contract: {path}")
+
+
+@loop_app.command("planner")
+def loop_planner(
+    ctx: typer.Context,
+    boundary: Annotated[str, typer.Option(help="Problem boundary text for the planner.")] = "",
+) -> None:
+    """Run the real planner model role to write contract.md."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    report, usage = loop_agent.generate_planner_artifacts(
+        working_folder=workspace,
+        boundary=boundary or loop_contract_path(workspace).read_text(encoding="utf-8"),
+        attempt_id=state.get("current_attempt"),
+    )
+    state["status"] = "boundary-written"
+    state["contract_accepted"] = False
+    state["last_action"] = "planner"
+    state.setdefault("role_usage", {})["planner"] = usage
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=str(report.get("summary") or "Planner wrote contract boundary."))
+    append_loop_log(workspace, "planner", "planner wrote contract", str(report.get("summary") or ""))
+    typer.echo(f"contract: {loop_contract_path(workspace)}")
+    typer.echo(f"summary: {report.get('summary')}")
 
 
 @loop_app.command("propose-contract")
