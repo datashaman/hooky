@@ -194,7 +194,14 @@ def append_loop_log(workspace: Path, op: str, title: str, body: str = "") -> Non
     entry += f"- {time_label} {op} | {title}\n"
     if body.strip():
         body_lines = body.strip().splitlines()
-        entry += "".join(f"  {line}\n" if line.strip() else "  \n" for line in body_lines)
+        for line in body_lines:
+            stripped = line.strip()
+            if not stripped:
+                entry += "  \n"
+            elif stripped.startswith(("- ", "* ")):
+                entry += f"  {stripped}\n"
+            else:
+                entry += f"  - {stripped}\n"
     entry += "\n"
     with path.open("a", encoding="utf-8") as handle:
         handle.write(entry)
