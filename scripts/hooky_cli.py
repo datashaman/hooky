@@ -335,6 +335,8 @@ def apply_loop_evaluator_report(
     report_path: Path,
     action: str,
 ) -> dict[str, Any]:
+    report = enforce_loop_evaluator_evidence(workspace, attempt_id, report)
+    write_json(report_path, report)
     status = str(report.get("status"))
     recommendation = str(report.get("recommendation"))
     bottleneck = report.get("bottleneck")
@@ -374,6 +376,107 @@ def apply_loop_evaluator_report(
     write_loop_progress(workspace, state, note=note)
     append_loop_log(workspace, "evaluator", f"attempt {attempt_id} report", note)
     return state
+
+
+def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: dict[str, Any]) -> dict[str, Any]:
+    if report.get("status") != "pass":
+        return report
+    evidence_failures: list[str] = []
+    if has_placeholder_only_tests(workspace):
+        evidence_failures.append(
+            "Evaluator cannot pass this attempt: the executable test suite appears to contain only placeholder tests."
+        )
+    if loop_attempt_requires_visual_evidence(workspace) and not loop_attempt_captured_visual_snapshot(workspace, attempt_id):
+        evidence_failures.append(
+            "Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app."
+        )
+    if not evidence_failures:
+        return report
+    amended = dict(report)
+    findings = amended.get("findings") if isinstance(amended.get("findings"), list) else []
+    amended["findings"] = [*findings, *evidence_failures]
+    amended["status"] = "fail"
+    amended["recommendation"] = "continue"
+    amended["bottleneck"] = amended.get("bottleneck") or "verification_evidence"
+    current_score = amended.get("score")
+    amended["score"] = min(float(current_score), 0.5) if isinstance(current_score, int | float) else 0.5
+    return amended
+
+
+def has_placeholder_only_tests(workspace: Path) -> bool:
+    test_root = workspace / "tests"
+    if not test_root.exists():
+        return False
+    test_files = [
+        path
+        for path in test_root.rglob("*")
+        if path.is_file()
+        and path.suffix in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py"}
+        and path.name not in {".gitkeep"}
+    ]
+    if not test_files:
+        return False
+    return all(is_placeholder_test_file(path) for path in test_files)
+
+
+def is_placeholder_test_file(path: Path) -> bool:
+    try:
+        content = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    compact = " ".join(content.lower().split())
+    markers = [
+        "dummy test",
+        "placeholder test",
+        "expect(true).tobe(true)",
+        "expect(true).toequal(true)",
+        "assert true",
+        "assert.true",
+        "self.asserttrue(true)",
+    ]
+    return any(marker in compact for marker in markers)
+
+
+def loop_attempt_requires_visual_evidence(workspace: Path) -> bool:
+    contract_text = ""
+    for path in [loop_contract_path(workspace), loop_feature_list_path(workspace)]:
+        if path.exists():
+            contract_text += "\n" + path.read_text(encoding="utf-8", errors="ignore").lower()
+    ui_words = ("browser", "ui", "visual", "layout", "css", "html", "react", "vite", "vue", "svelte", "angular")
+    if any(word in contract_text for word in ui_words):
+        return True
+    package_path = workspace / "package.json"
+    if not package_path.exists():
+        return False
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    dependencies: dict[str, Any] = {}
+    for key in ("dependencies", "devDependencies"):
+        value = package.get(key)
+        if isinstance(value, dict):
+            dependencies.update(value)
+    return any(name in dependencies for name in ("react", "vue", "svelte", "@angular/core", "vite", "@vitejs/plugin-react"))
+
+
+def loop_attempt_captured_visual_snapshot(workspace: Path, attempt_id: str) -> bool:
+    tool_events = loop_attempt_dir(workspace, attempt_id) / "traces" / "tool_events.json"
+    if not tool_events.exists():
+        return False
+    try:
+        events = json.loads(tool_events.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(events, list):
+        return False
+    for event in events:
+        if not isinstance(event, dict) or event.get("name") != "capture_visual_snapshot":
+            continue
+        result = event.get("result")
+        if isinstance(result, dict) and result.get("ok") is True and result.get("screenshot_path"):
+            return True
+    return False
 
 
 def format_evaluator_feedback(report: dict[str, Any]) -> str:

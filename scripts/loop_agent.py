@@ -687,6 +687,8 @@ def evaluator_attempt_system_prompt() -> str:
 
 Assume the implementation is broken. Your job is to prove whether it satisfies the accepted contract.
 You may read files and run commands, including browser/UI verification when relevant. You must not edit files.
+Do not pass an attempt based on placeholder tests, dummy tests, smoke-only assertions, or source inspection alone.
+When the accepted contract describes a browser UI, web app, layout, CSS, or visual behavior, you must start or use the running app, call capture_visual_snapshot, inspect the attached screenshot image, and include visual findings. Obvious layout defects, overlapping controls, clipped content, browser-default styling where styled UI was required, or console errors are failures even when functional tests pass.
 
 Return a recommendation:
 - continue when the attempt passes, or when failures are normal implementation defects that another generator pass can fix
@@ -717,6 +719,8 @@ Selected model:
 ```
 
 Evaluate the workspace against the contract. Inspect diffs, run relevant commands, and use visual/browser checks when the product has a UI.
+For browser/UI products, do not pass without capture_visual_snapshot evidence from the running app and explicit findings from the screenshot image.
+If the available tests are placeholder-only, report that as a verification failure even if the test command exits 0.
 If tests fail, report the failing criteria and choose continue or restart-attempt unless there is a true automation blocker.
 Finish only with final_report containing status, recommendation, bottleneck, findings, and score.
 """

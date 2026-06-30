@@ -1088,6 +1088,82 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(state["bottleneck"], "generator_trajectory")
         self.assertEqual(state["attempts"][0]["status"], "restarted")
 
+    def test_loop_evaluator_pass_is_downgraded_for_placeholder_only_tests(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        tests_dir = self.workspace / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "dummy.test.js").write_text(
+            "import { test, expect } from '@playwright/test';\n"
+            "test('dummy test', async () => { expect(true).toBe(true); });\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "1",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertEqual(report["recommendation"], "continue")
+        self.assertIn("placeholder tests", " ".join(report["findings"]))
+        state = hooky_cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "attempt-failed")
+
+    def test_loop_evaluator_pass_is_downgraded_for_ui_without_visual_snapshot(self) -> None:
+        runner = CliRunner()
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
+        (self.workspace / ".workflow/loop/contract.md").write_text(
+            "# Loop Contract\n\n## Done Criteria\n\n- Browser UI layout is visually correct.\n",
+            encoding="utf-8",
+        )
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "accept-contract"])
+        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "start-attempt"])
+        (self.workspace / "package.json").write_text('{"dependencies":{"react":"latest","vite":"latest"}}\n', encoding="utf-8")
+        tests_dir = self.workspace / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "app.spec.js").write_text(
+            "import { test, expect } from '@playwright/test';\n"
+            "test('renders app title', async ({ page }) => { await page.goto('/'); await expect(page).toHaveTitle(/App/); });\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            hooky_cli.app,
+            [
+                "-C",
+                str(self.workspace),
+                "loop",
+                "evaluator-report",
+                "--status",
+                "pass",
+                "--recommendation",
+                "continue",
+                "--score",
+                "1",
+            ],
+        )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        report = hooky_cli.read_json(self.workspace / ".workflow/loop/attempts/001/evaluator_report.json")
+        self.assertEqual(report["status"], "fail")
+        self.assertIn("capture_visual_snapshot", " ".join(report["findings"]))
+
     def test_loop_evaluator_report_restart_contract_reopens_contract(self) -> None:
         runner = CliRunner()
         runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "loop", "init"])
