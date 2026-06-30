@@ -96,6 +96,46 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertEqual(agent_runtime.requested_ports_from_command("PORT=4173 npm start"), [4173])
         self.assertEqual(agent_runtime.requested_ports_from_command("serve http://127.0.0.1:8080"), [8080])
 
+    def test_bash_rejects_long_running_server_and_background_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            server = runtime.bash({"command": "npm run dev -- --port 5173"})
+            background = runtime.bash({"command": "npx vite preview --port 5173 & echo $!"})
+            help_command = runtime.bash({"command": "printf ok && npx vite --help >/dev/null 2>&1 || true"})
+
+            self.assertFalse(server["ok"])
+            self.assertIn("start_process", server["error"])
+            self.assertFalse(background["ok"])
+            self.assertIn("background process", background["error"])
+            self.assertTrue(help_command["ok"])
+
+    def test_timed_out_shell_command_terminates_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            marker = root / "marker"
+            command = (
+                "python3 -c \""
+                "import pathlib, subprocess, time; "
+                f"p=pathlib.Path({str(marker)!r}); "
+                "subprocess.Popen(['python3','-c',"
+                "'import pathlib,time; time.sleep(2); pathlib.Path(%r).write_text(\\\"leaked\\\")' % str(p)]); "
+                "time.sleep(5)"
+                "\""
+            )
+
+            completed, timed_out = agent_runtime.run_shell_command(command, cwd=root, timeout_seconds=1)
+            time.sleep(2.5)
+
+            self.assertTrue(timed_out)
+            self.assertEqual(completed.returncode, 124)
+            self.assertFalse(marker.exists())
+
     def test_model_request_deadline_respects_remaining_stage_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"OPENROUTER_TIMEOUT_MS": "120000"}):
             runtime = agent_runtime.ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=180)

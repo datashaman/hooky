@@ -661,19 +661,7 @@ class ToolRuntime:
         before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
         timeout_seconds = int(args.get("timeout_seconds") or self.bash_timeout_seconds)
         started = utc_timestamp()
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=self.working_folder,
-                shell=True,
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-            )
-            timed_out = False
-        except subprocess.TimeoutExpired as exc:
-            completed = subprocess.CompletedProcess(command, 124, stdout=exc.stdout or "", stderr=exc.stderr or "")
-            timed_out = True
+        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=timeout_seconds)
         ended = utc_timestamp()
         protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
         output = normalize_subprocess_output(completed.stdout) + normalize_subprocess_output(completed.stderr)
@@ -857,6 +845,9 @@ class ToolRuntime:
     def bash(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
         lowered = command.lower()
+        long_running_violation = long_running_bash_violation(command)
+        if long_running_violation:
+            return {"ok": False, "error": long_running_violation}
         if ".workflow" in lowered and self.read_blocked_prefixes:
             return {"ok": False, "error": "bash command references a path that is not available to this agent"}
         for blocked in self.bash_blocked_substrings:
@@ -867,14 +858,7 @@ class ToolRuntime:
             if violation:
                 return {"ok": False, "error": f"bash command blocked by agent policy: {violation}"}
         before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
-        completed = subprocess.run(
-            command,
-            cwd=self.working_folder,
-            shell=True,
-            text=True,
-            capture_output=True,
-            timeout=self.bash_timeout_seconds,
-        )
+        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=self.bash_timeout_seconds)
         protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
         if protected_changes:
             restore_protected_paths(self.working_folder, before, protected_changes)
@@ -885,12 +869,15 @@ class ToolRuntime:
                 "stderr": completed.stderr[-8000:],
                 "error": "bash command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20]),
             }
-        return {
+        result = {
             "ok": completed.returncode == 0,
             "returncode": completed.returncode,
             "stdout": completed.stdout[-8000:],
             "stderr": completed.stderr[-8000:],
         }
+        if timed_out:
+            result["error"] = f"Command '{command}' timed out after {self.bash_timeout_seconds} seconds; process group was terminated"
+        return result
 
     def start_process(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
@@ -2854,6 +2841,83 @@ def normalize_subprocess_output(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def run_shell_command(command: str, *, cwd: Path, timeout_seconds: int) -> tuple[subprocess.CompletedProcess[str], bool]:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        return subprocess.CompletedProcess(command, process.returncode, stdout=stdout or "", stderr=stderr or ""), False
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+        return (
+            subprocess.CompletedProcess(
+                command,
+                124,
+                stdout=normalize_subprocess_output(stdout or exc.stdout),
+                stderr=normalize_subprocess_output(stderr or exc.stderr),
+            ),
+            True,
+        )
+
+
+def long_running_bash_violation(command: str) -> str | None:
+    lowered = " ".join(command.lower().split())
+    if shell_backgrounds_process(command):
+        return "bash command starts a background process; use start_process/read_process/stop_process instead"
+    server_patterns = [
+        "npm run dev",
+        "npm run preview",
+        "yarn dev",
+        "yarn preview",
+        "pnpm dev",
+        "pnpm preview",
+        "bun dev",
+        "vite --host",
+        "vite preview",
+        "next dev",
+        "python -m http.server",
+        "python3 -m http.server",
+        "rails server",
+        "flask run",
+        "uvicorn ",
+    ]
+    if any(pattern in lowered for pattern in server_patterns) and not any(help_flag in lowered for help_flag in (" --help", " -h")):
+        return "bash command appears to start a long-running server; use start_process/read_process/stop_process instead"
+    return None
+
+
+def shell_backgrounds_process(command: str) -> bool:
+    for index, char in enumerate(command):
+        if char != "&":
+            continue
+        previous_char = command[index - 1] if index > 0 else ""
+        next_char = command[index + 1] if index + 1 < len(command) else ""
+        if previous_char == "&" or next_char == "&":
+            continue
+        if previous_char in {">", "<"}:
+            continue
+        return True
+    return False
 
 
 def write_tool_result_artifact(root: Path, category: str, content: str) -> str:
