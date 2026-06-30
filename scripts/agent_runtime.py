@@ -1467,7 +1467,57 @@ def run_tool_agent(
 
                 tool_calls = getattr(message, "tool_calls", None) or []
                 if not tool_calls:
-                    recovered_report = recover_text_final_report(runtime, assistant_message_text(message_payload))
+                    assistant_text = assistant_message_text(message_payload)
+                    text_actions = extract_text_tool_actions(assistant_text)
+                    if text_actions:
+                        recovered_results: list[dict[str, Any]] = []
+                        for action in text_actions:
+                            raw_name = str(action["name"])
+                            name = runtime.canonical_tool_name(raw_name)
+                            tool_started_at = utc_timestamp()
+                            tool_start = time.monotonic()
+                            args = dict(action["arguments"])
+                            result = runtime.run_tool(name, args)
+                            event = {
+                                "tool_call_id": f"text-tool-{len(tool_events) + 1}",
+                                "name": name,
+                                "arguments": args,
+                                "result": result,
+                                "started_at": tool_started_at,
+                                "ended_at": utc_timestamp(),
+                                "duration_ms": round((time.monotonic() - tool_start) * 1000, 2),
+                                "source": "assistant_text",
+                            }
+                            if raw_name != name:
+                                event["raw_name"] = raw_name
+                            tool_events.append(event)
+                            runtime.tool_events.append(event)
+                            transcript.append({"role": "tool", **event})
+                            append_live_event(runtime, format_runtime_event_line(transcript[-1]))
+                            recovered_results.append({"name": name, "result": result})
+                            if name == "final_report" and runtime.final_report is not None:
+                                break
+                        transcript.append(
+                            {
+                                "role": "runtime_notice",
+                                "kind": "recovered_text_tool_calls",
+                                "message": f"Recovered {len(recovered_results)} tool call(s) from assistant text.",
+                                "started_at": utc_timestamp(),
+                                "ended_at": utc_timestamp(),
+                            }
+                        )
+                        append_live_event(runtime, format_runtime_event_line(transcript[-1]))
+                        flush_live_log()
+                        if runtime.final_report is not None:
+                            break
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "Recovered text tool call results:\n" + json.dumps(recovered_results, sort_keys=True),
+                            }
+                        )
+                        continue
+                    recovered_report = recover_text_final_report(runtime, assistant_text)
                     if recovered_report is not None:
                         transcript.append(
                             {
@@ -1613,11 +1663,44 @@ def recover_text_final_report(runtime: ToolRuntime, text: str) -> dict[str, Any]
     payload = extract_json_object_from_text(text)
     if payload is None:
         return None
+    actions = text_tool_actions_from_payload(payload)
+    for action in actions:
+        if action.get("name") == "final_report" and isinstance(action.get("arguments"), dict):
+            payload = action["arguments"]
+            break
     try:
         runtime.finish(payload)
     except Exception:
         return None
     return payload
+
+
+def text_tool_actions_from_payload(payload: Any) -> list[dict[str, Any]]:
+    raw_actions: Any
+    if isinstance(payload, list):
+        raw_actions = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("content"), list):
+        raw_actions = payload["content"]
+    elif isinstance(payload, dict) and payload.get("name"):
+        raw_actions = [payload]
+    else:
+        return []
+    actions: list[dict[str, Any]] = []
+    for item in raw_actions:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        arguments = item.get("arguments")
+        if isinstance(name, str) and isinstance(arguments, dict):
+            actions.append({"name": name, "arguments": arguments})
+    return actions
+
+
+def extract_text_tool_actions(text: str) -> list[dict[str, Any]]:
+    payload = extract_json_object_from_text(text)
+    if payload is None:
+        return []
+    return text_tool_actions_from_payload(payload)
 
 
 def start_heartbeat_thread(

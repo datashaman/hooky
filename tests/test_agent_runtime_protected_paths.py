@@ -247,6 +247,30 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertIsNone(recovered)
             self.assertIsNone(runtime.final_report)
 
+    def test_extracts_text_declared_tool_actions(self) -> None:
+        actions = agent_runtime.extract_text_tool_actions(
+            '**assistant Action** ```json {"role":"assistant","content":[{"name":"final_report","arguments":{"status":"done"}}]} ```'
+        )
+
+        self.assertEqual(actions, [{"name": "final_report", "arguments": {"status": "done"}}])
+
+    def test_recovers_text_declared_final_report_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            recovered = agent_runtime.recover_text_final_report(
+                runtime,
+                '{"role":"assistant","content":[{"name":"final_report","arguments":{"status":"done"}}]}',
+            )
+
+            self.assertEqual(recovered, {"status": "done"})
+            self.assertEqual(runtime.final_report, {"status": "done"})
+
     def test_read_file_excerpt_and_many_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
