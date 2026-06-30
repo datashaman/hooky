@@ -47,12 +47,12 @@ See `docs/loop-model.md` for the loop model.
 
 ## Required Runtime Basics
 
-Each agent must receive:
+Each role must receive:
 
-- a working folder for the project/task
+- a working folder for the project
 - read/write file tools
 - list/find/grep file tools
 - bash
 - todo read/write tools
 
-Agents must use the todo list for substantive work.
+Roles must use the todo list for substantive work.

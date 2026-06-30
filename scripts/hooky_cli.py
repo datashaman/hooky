@@ -2207,7 +2207,7 @@ def trace(
 def report(ctx: typer.Context, output: Annotated[Path | None, typer.Option(help="HTML output path.")] = None) -> None:
     """Write a loop harness review report."""
     if output is not None:
-        raise typer.BadParameter("HTML eval reports were part of the removed stage pipeline. Use `hooky harness-review`.")
+        raise typer.BadParameter("HTML report output is not supported. Use `hooky report`.")
     loop_harness_review(ctx)
 
 

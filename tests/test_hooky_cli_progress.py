@@ -166,7 +166,7 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(seen["skills"], "visual-ui-review")
         self.assertEqual(last_run_path.read_text(encoding="utf-8").strip(), self.workspace.resolve().as_posix())
 
-    def test_removed_stage_pipeline_commands_are_not_registered(self) -> None:
+    def test_removed_pipeline_commands_are_not_registered(self) -> None:
         help_result = CliRunner().invoke(hooky_cli.app, ["--help"])
 
         self.assertEqual(help_result.exit_code, 0, help_result.output)
@@ -175,8 +175,8 @@ class HookyProgressTests(unittest.TestCase):
 
         loop_result = CliRunner().invoke(hooky_cli.app, ["loop"])
         self.assertNotEqual(loop_result.exit_code, 0)
-        stage_result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "pipeline"])
-        self.assertNotEqual(stage_result.exit_code, 0)
+        pipeline_result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "pipeline"])
+        self.assertNotEqual(pipeline_result.exit_code, 0)
 
     def test_skills_list_shows_workspace_skill(self) -> None:
         skill_path = self.workspace / ".agents/skills/example/SKILL.md"
