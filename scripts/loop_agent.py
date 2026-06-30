@@ -240,7 +240,12 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
     return result.final_report, result.usage
 
 
-def generate_generator_contract_artifacts(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def generate_generator_contract_artifacts(
+    *,
+    working_folder: Path,
+    attempt_id: str | None = None,
+    review_feedback: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise RuntimeError("OPENROUTER_API_KEY is required; loop generator has no non-AI path")
     working_folder = working_folder.resolve()
@@ -273,6 +278,7 @@ def generate_generator_contract_artifacts(*, working_folder: Path, attempt_id: s
             user=generator_contract_user_prompt(
                 (working_folder / ".workflow/loop/contract.md").read_text(encoding="utf-8"),
                 model_metadata,
+                review_feedback=review_feedback,
             ),
             runtime=runtime,
         )
@@ -523,7 +529,18 @@ Finish only with final_report.
 """
 
 
-def generator_contract_user_prompt(contract: str, model_metadata: dict[str, Any]) -> str:
+def generator_contract_user_prompt(contract: str, model_metadata: dict[str, Any], *, review_feedback: str = "") -> str:
+    feedback_section = ""
+    if review_feedback.strip():
+        feedback_section = f"""
+Evaluator rejected the previous contract. Required revision feedback:
+
+```markdown
+{review_feedback.strip()}
+```
+
+Address every required change before calling final_report.
+"""
     return f"""Current contract.md:
 
 ```markdown
@@ -534,6 +551,7 @@ Selected model:
 ```json
 {json.dumps(model_metadata, indent=2, sort_keys=True)}
 ```
+{feedback_section}
 
 Revise .workflow/loop/contract.md so the Done Criteria section contains a checklist of concrete, testable assertions.
 

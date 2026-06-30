@@ -753,7 +753,15 @@ class HookyProgressTests(unittest.TestCase):
             )
             return {"status": "done", "contract_path": ".workflow/loop/contract.md", "summary": "Proposal ready."}, {"cost": 0.01}
 
-        def fake_contract(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+        contract_feedback: list[str] = []
+
+        def fake_contract(
+            *,
+            working_folder: Path,
+            attempt_id: str | None = None,
+            review_feedback: str = "",
+        ) -> tuple[dict[str, object], dict[str, object]]:
+            contract_feedback.append(review_feedback)
             (working_folder / ".workflow/loop/contract.md").write_text(
                 "# Loop Contract\n\n## Done Criteria\n\n- Add todos\n",
                 encoding="utf-8",
@@ -769,7 +777,18 @@ class HookyProgressTests(unittest.TestCase):
                 "summary": "Contract ready.",
             }, {"cost": 0.02}
 
+        review_calls = 0
+
         def fake_contract_review(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
+            nonlocal review_calls
+            review_calls += 1
+            if review_calls == 1:
+                return {
+                    "status": "done",
+                    "accepted": False,
+                    "review": "Class names are wrong.",
+                    "required_changes": ["Use .new-todo exactly."],
+                }, {"cost": 0.03}
             return {"status": "done", "accepted": True, "review": "Good enough.", "required_changes": []}, {"cost": 0.03}
 
         def fake_implementation(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
@@ -811,6 +830,12 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(state["status"], "passed")
         self.assertEqual(state["attempts"][0]["status"], "passed")
         self.assertEqual(state["role_usage"]["evaluator_attempt"]["cost"], 0.05)
+        self.assertEqual(review_calls, 2)
+        self.assertEqual(contract_feedback[0], "")
+        self.assertIn("Use .new-todo exactly.", contract_feedback[1])
+        log = (self.workspace / ".workflow/loop/log.md").read_text(encoding="utf-8")
+        self.assertIn("contract rejected round 1", log)
+        self.assertIn("contract accepted round 2", log)
 
     def test_loop_restart_attempt_preserves_durable_files(self) -> None:
         runner = CliRunner()

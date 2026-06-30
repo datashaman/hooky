@@ -43,6 +43,12 @@ grading instrument. The `generator` may propose criteria, but cannot approve
 them. The `evaluator` may reject weak, vague, missing, or untestable criteria
 before any code is written.
 
+`loop run` repeats generator/evaluator contract negotiation automatically when
+the evaluator rejects the proposed contract. The evaluator feedback is passed
+back to the generator for the next proposal. The loop stops at
+`LOOP_CONTRACT_MAX_ROUNDS` rounds, defaulting to `3`, to avoid unbounded
+contract churn.
+
 ## Disk State
 
 The loop must be resumable from durable files, not conversation context. The

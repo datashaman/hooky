@@ -1636,36 +1636,50 @@ def run_model_loop_once(
     write_loop_progress(workspace, state, note=str(planner_report.get("summary") or "Planner wrote contract proposal."))
     append_loop_log(workspace, "planner", "planner wrote contract", str(planner_report.get("summary") or ""))
 
-    generator_contract_report, generator_contract_usage = loop_agent.generate_generator_contract_artifacts(
-        working_folder=workspace,
-        attempt_id=state.get("current_attempt"),
-    )
-    state = read_loop_state(workspace)
-    state["status"] = "contract-proposed"
-    state["contract_accepted"] = False
-    state["last_action"] = "run:generator-contract"
-    state.setdefault("role_usage", {})["generator_contract"] = generator_contract_usage
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(generator_contract_report.get("summary") or "Generator proposed contract."))
-    append_loop_log(workspace, "generator", "generator proposed contract", str(generator_contract_report.get("summary") or ""))
+    max_contract_rounds = int(os.environ.get("LOOP_CONTRACT_MAX_ROUNDS", "3"))
+    review_feedback = ""
+    accepted = False
+    review = ""
+    for round_number in range(1, max_contract_rounds + 1):
+        generator_contract_report, generator_contract_usage = loop_agent.generate_generator_contract_artifacts(
+            working_folder=workspace,
+            attempt_id=state.get("current_attempt"),
+            review_feedback=review_feedback,
+        )
+        state = read_loop_state(workspace)
+        state["status"] = "contract-proposed"
+        state["contract_accepted"] = False
+        state["last_action"] = f"run:generator-contract:{round_number}"
+        state.setdefault("role_usage", {})[f"generator_contract_round_{round_number}"] = generator_contract_usage
+        write_loop_state(workspace, state)
+        write_loop_progress(workspace, state, note=str(generator_contract_report.get("summary") or "Generator proposed contract."))
+        append_loop_log(workspace, "generator", f"generator proposed contract round {round_number}", str(generator_contract_report.get("summary") or ""))
 
-    evaluator_contract_report, evaluator_contract_usage = loop_agent.generate_evaluator_contract_artifacts(
-        working_folder=workspace,
-        attempt_id=state.get("current_attempt"),
-    )
-    state = read_loop_state(workspace)
-    accepted = bool(evaluator_contract_report.get("accepted"))
-    state["status"] = "contract-accepted" if accepted else "contract-rejected"
-    state["contract_accepted"] = accepted
-    state["last_action"] = "run:evaluator-contract"
-    state.setdefault("role_usage", {})["evaluator_contract"] = evaluator_contract_usage
-    write_loop_state(workspace, state)
-    review = str(evaluator_contract_report.get("review") or "")
-    write_loop_progress(workspace, state, note=f"Contract review {'accepted' if accepted else 'rejected'}. {review}")
-    append_loop_log(workspace, "evaluator", f"contract {'accepted' if accepted else 'rejected'}", review)
+        evaluator_contract_report, evaluator_contract_usage = loop_agent.generate_evaluator_contract_artifacts(
+            working_folder=workspace,
+            attempt_id=state.get("current_attempt"),
+        )
+        state = read_loop_state(workspace)
+        accepted = bool(evaluator_contract_report.get("accepted"))
+        state["status"] = "contract-accepted" if accepted else "contract-rejected"
+        state["contract_accepted"] = accepted
+        state["last_action"] = f"run:evaluator-contract:{round_number}"
+        state.setdefault("role_usage", {})[f"evaluator_contract_round_{round_number}"] = evaluator_contract_usage
+        write_loop_state(workspace, state)
+        review = str(evaluator_contract_report.get("review") or "")
+        required_changes = evaluator_contract_report.get("required_changes") if isinstance(evaluator_contract_report.get("required_changes"), list) else []
+        if required_changes:
+            review_feedback = review + "\n\nRequired changes:\n" + "\n".join(f"- {item}" for item in required_changes)
+        else:
+            review_feedback = review
+        write_loop_progress(workspace, state, note=f"Contract review {'accepted' if accepted else 'rejected'} round {round_number}. {review}")
+        append_loop_log(workspace, "evaluator", f"contract {'accepted' if accepted else 'rejected'} round {round_number}", review_feedback)
+        if accepted:
+            break
     if not accepted:
         write_last_run_workspace(last_run_path, workspace)
         typer.echo("status: contract-rejected")
+        typer.echo(f"rounds: {max_contract_rounds}")
         typer.echo(f"review: {review}")
         return
 
