@@ -798,7 +798,7 @@ class HookyProgressTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             result = runner.invoke(
                 hooky_cli.app,
-                ["-C", str(self.workspace), "loop", "run", "--models", "--proposal", "Build todos"],
+                ["-C", str(self.workspace), "loop", "run", "--proposal", "Build todos"],
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
@@ -957,6 +957,7 @@ class HookyProgressTests(unittest.TestCase):
                 str(self.workspace),
                 "loop",
                 "run",
+                "--dry-run",
                 "--title",
                 "Todo app",
                 "--proposal",
@@ -989,6 +990,7 @@ class HookyProgressTests(unittest.TestCase):
                 str(self.workspace),
                 "loop",
                 "run",
+                "--dry-run",
                 "--criteria",
                 "- Build the thing",
                 "--status",
@@ -1033,6 +1035,7 @@ class HookyProgressTests(unittest.TestCase):
                 str(self.workspace),
                 "loop",
                 "run",
+                "--dry-run",
                 "--title",
                 "Remember me",
                 "--last-run-path",

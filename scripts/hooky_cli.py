@@ -1541,18 +1541,18 @@ def loop_run(
     ctx: typer.Context,
     title: Annotated[str | None, typer.Option(help="Problem title used when initializing a new loop.")] = None,
     proposal: Annotated[str, typer.Option(help="Planner proposal text for contract.md.")] = "",
-    criteria: Annotated[str, typer.Option(help="Generator-proposed done criteria.")] = "- Define done criteria explicitly.",
-    review: Annotated[str, typer.Option(help="Evaluator contract review text.")] = "Contract criteria are accepted for this local run.",
-    status: Annotated[str, typer.Option(help="Evaluator status: pass or fail.")] = "pass",
-    recommendation: Annotated[str, typer.Option(help="Evaluator recommendation: continue, restart-attempt, restart-contract, or stop.")] = "continue",
-    bottleneck: Annotated[str | None, typer.Option(help="Evaluator bottleneck.")] = None,
-    models: Annotated[bool, typer.Option("--models", help="Run the real planner/generator/evaluator model roles.")] = False,
+    criteria: Annotated[str, typer.Option(help="Dry-run generator-proposed done criteria.")] = "- Define done criteria explicitly.",
+    review: Annotated[str, typer.Option(help="Dry-run evaluator contract review text.")] = "Contract criteria are accepted for this local run.",
+    status: Annotated[str, typer.Option(help="Dry-run evaluator status: pass or fail.")] = "pass",
+    recommendation: Annotated[str, typer.Option(help="Dry-run evaluator recommendation: continue, restart-attempt, restart-contract, or stop.")] = "continue",
+    bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
     last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
 ) -> None:
-    """Run the local Karpathy-style loop suite through one attempt."""
+    """Run the Karpathy-style loop suite through one attempt."""
     workspace = workspace_from_ctx(ctx)
-    if models:
+    if not dry_run:
         run_model_loop_once(workspace, title=title, proposal=proposal, force=force, last_run_path=last_run_path)
         return
     if not loop_state_path(workspace).exists() or force:
