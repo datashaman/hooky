@@ -353,7 +353,7 @@ class ToolRuntime:
             tool_schema("write_file", "Write a UTF-8 text file inside the working folder.", {"path": string_schema(), "content": string_schema()}, ["path", "content"]),
             tool_schema("list_files", "List direct children of a directory in the working folder.", {"path": string_schema(default=".")}, []),
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
-            tool_schema("grep_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
+            tool_schema("search_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema(
                 "detect_project_environment",
                 "Detect language/package manager hints, scripts, lockfiles, and likely test commands.",
@@ -557,7 +557,7 @@ class ToolRuntime:
             "write_file": self.write_file,
             "list_files": self.list_files,
             "find_files": self.find_files,
-            "grep_files": self.grep_files,
+            "search_files": self.search_files,
             "detect_project_environment": self.detect_project_environment,
             "run_tests": self.run_tests,
             "latest_test_failure_context": self.latest_test_failure_context,
@@ -859,7 +859,7 @@ class ToolRuntime:
                 matches.append(relative)
         return {"ok": True, "matches": matches[:500], "truncated": len(matches) > 500}
 
-    def grep_files(self, args: dict[str, Any]) -> dict[str, Any]:
+    def search_files(self, args: dict[str, Any]) -> dict[str, Any]:
         root = self.resolve_path(str(args.get("path") or "."))
         self.validate_read_path(root)
         pattern = str(args["pattern"])
@@ -2419,10 +2419,12 @@ def format_runtime_event_line(item: dict[str, Any]) -> str:
             for call in tool_calls
             if isinstance(call, dict) and isinstance(call.get("function"), dict) and call.get("function", {}).get("name")
         ]
+        assistant_text = assistant_message_text(message)
         return (
             f"{timestamp} assistant duration={duration} cost=${float(usage.get('cost') or 0):.8f} "
             f"tokens={int(usage.get('total_tokens') or 0)} tool_calls={len(tool_calls)}"
             + (f" tools={','.join(names)}" if names else "")
+            + (f" message={quote_value(single_line(assistant_text, 320), 320)}" if assistant_text else "")
         )
     if role == "tool":
         name = str(item.get("name") or "unknown")
@@ -2566,7 +2568,7 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         if pattern:
             parts.append(f"pattern={quote_value(str(pattern), 120)}")
         return " ".join(parts)
-    if name == "grep_files":
+    if name == "search_files":
         matches = result.get("matches") if isinstance(result.get("matches"), list) else []
         return f"matches={len(matches)} pattern={quote_value(str(arguments.get('pattern') or ''), 120)}"
     if name in {"todo_read", "todo_write"}:
@@ -2671,6 +2673,9 @@ def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
             if names:
                 details.append("tools requested: " + ", ".join(str(name) for name in names))
             lines.extend(f"- {detail}" for detail in details)
+            text = assistant_message_text(message).strip()
+            if text:
+                lines.extend(["", "Assistant message:", "", "```text", text, "```"])
             lines.append("")
         elif role == "tool":
             name = str(item.get("name") or "unknown")
@@ -2755,7 +2760,7 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append(f"matches: {len(matches)}")
         if matches:
             summary.append("sample: " + ", ".join(str(item) for item in matches[:12]))
-    elif name == "grep_files":
+    elif name == "search_files":
         matches = result.get("matches") if isinstance(result.get("matches"), list) else []
         summary.append(f"matches: {len(matches)}")
         if matches:
@@ -3056,7 +3061,7 @@ def available_tool_names() -> list[str]:
         "read_many_files",
         "write_file",
         "list_files",
-        "grep_files",
+        "search_files",
         "find_files",
         "detect_project_environment",
         "run_tests",

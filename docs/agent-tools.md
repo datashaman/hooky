@@ -41,7 +41,7 @@ Runtime files live under `.hooky/runs/<key>/`.
 - `find_files`
   Finds files by glob pattern.
 
-- `grep_files`
+- `search_files`
   Searches UTF-8 files for a literal string.
 
 ## Project And Test Tools

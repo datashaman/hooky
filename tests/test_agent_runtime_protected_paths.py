@@ -296,6 +296,34 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("no_tool_calls", rendered)
         self.assertIn("Runtime soft deadline", rendered)
 
+    def test_runtime_timeline_includes_assistant_messages(self) -> None:
+        rendered = agent_runtime.render_runtime_timeline_markdown(
+            [
+                {
+                    "role": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": "I am checking the contract before writing files.",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "usage": {"total_tokens": 321, "cost": 0.001},
+                    "duration_ms": 1200,
+                    "started_at": "2026-07-01T00:00:00+00:00",
+                    "ended_at": "2026-07-01T00:00:01+00:00",
+                }
+            ]
+        )
+
+        self.assertIn("Assistant message:", rendered)
+        self.assertIn("I am checking the contract", rendered)
+        self.assertIn("tools requested: read_file", rendered)
+
     def test_runtime_event_log_includes_user_prompts(self) -> None:
         rendered = agent_runtime.render_runtime_events_log(
             [
@@ -311,6 +339,52 @@ class ProtectedPathTests(unittest.TestCase):
 
         self.assertIn("user kind=no_tool_calls", rendered)
         self.assertIn("Continue by using the available tools", rendered)
+
+    def test_runtime_event_log_includes_no_tool_assistant_message(self) -> None:
+        rendered = agent_runtime.render_runtime_events_log(
+            [
+                {
+                    "role": "assistant",
+                    "message": {"role": "assistant", "content": "I should write the final report but forgot to call the tool."},
+                    "usage": {"total_tokens": 123, "cost": 0.001},
+                    "duration_ms": 1500,
+                    "started_at": "2026-07-01T00:00:00+00:00",
+                    "ended_at": "2026-07-01T00:00:01+00:00",
+                }
+            ]
+        )
+
+        self.assertIn("tool_calls=0", rendered)
+        self.assertIn("message=", rendered)
+        self.assertIn("forgot to call the tool", rendered)
+
+    def test_runtime_event_log_includes_assistant_message_with_tool_calls(self) -> None:
+        rendered = agent_runtime.render_runtime_events_log(
+            [
+                {
+                    "role": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect the workspace before editing.",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "list_files", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "usage": {"total_tokens": 456, "cost": 0.002},
+                    "duration_ms": 500,
+                    "started_at": "2026-07-01T00:00:00+00:00",
+                    "ended_at": "2026-07-01T00:00:01+00:00",
+                }
+            ]
+        )
+
+        self.assertIn("tool_calls=1", rendered)
+        self.assertIn("tools=list_files", rendered)
+        self.assertIn("I will inspect the workspace", rendered)
 
     def test_recovers_text_final_report_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -457,6 +531,18 @@ The contract is close but still underspecified.
             result = runtime.find_files({"pattern": "src/styles.css"})
 
             self.assertEqual(result["matches"], ["src/styles.css"])
+
+    def test_search_files_searches_file_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/app.js").write_text("class Mirror {}\nconst material = new Mirror();\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.search_files({"pattern": "Mirror"})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual([item["line"] for item in result["matches"]], [1, 2])
 
     def test_tool_result_artifacts_are_readable_without_exposing_workflow_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -697,6 +783,12 @@ The contract is close but still underspecified.
 
     def test_available_tools_include_time_extension_request(self) -> None:
         self.assertIn("request_time_extension", agent_runtime.available_tool_names())
+
+    def test_available_tools_use_search_files_not_grep_files(self) -> None:
+        names = agent_runtime.available_tool_names()
+
+        self.assertIn("search_files", names)
+        self.assertNotIn("grep_files", names)
 
     def test_evidence_tools_capture_notes_and_command_output_under_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

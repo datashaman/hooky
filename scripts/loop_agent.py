@@ -939,7 +939,7 @@ Selected model:
 {feedback_section}
 
 Implement the contract in this workspace. Do not edit .hooky. Do not declare the attempt passed.
-Use only the provided tools. To edit files, use write_file; do not call apply_patch or search_files.
+Use only the provided tools. To edit files, use write_file; use search_files to search file contents.
 Finish only with final_report describing changed_files, tests_run, and any failures.
 """
 
