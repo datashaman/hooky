@@ -1527,7 +1527,7 @@ class HookyProgressTests(unittest.TestCase):
                         "message": {
                             "role": "assistant",
                             "content": "I will inspect the contract.",
-                            "tool_calls": [{"function": {"name": "read_file"}}],
+                            "tool_calls": [{"function": {"name": "read_files"}}],
                         },
                     },
                 ]
@@ -1535,8 +1535,8 @@ class HookyProgressTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        (trace_root / "runtime_events.log").write_text("role=evaluator assistant tools=read_file\n", encoding="utf-8")
-        (trace_root / "tool_events.json").write_text(json.dumps([{"name": "read_file", "result": {"ok": True}}]), encoding="utf-8")
+        (trace_root / "runtime_events.log").write_text("role=evaluator assistant tools=read_files\n", encoding="utf-8")
+        (trace_root / "tool_events.json").write_text(json.dumps([{"name": "read_files", "result": {"ok": True}}]), encoding="utf-8")
 
         inspect = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "inspect", "--attempt", "001"])
         grep = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "trace-grep", "TodoMVC", "--attempt", "001"])
@@ -1544,7 +1544,7 @@ class HookyProgressTests(unittest.TestCase):
 
         self.assertEqual(inspect.exit_code, 0, inspect.output)
         self.assertIn("transcript_entries: 3", inspect.output)
-        self.assertIn("read_file: 1", inspect.output)
+        self.assertIn("read_files: 1", inspect.output)
         self.assertEqual(grep.exit_code, 0, grep.output)
         self.assertIn("TodoMVC", grep.output)
         self.assertEqual(review.exit_code, 0, review.output)

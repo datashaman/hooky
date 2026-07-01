@@ -735,7 +735,7 @@ You have one responsibility: turn vague user input into the problem proposal in 
 You must never edit production code, tests, attempt artifacts, or evaluator reports.
 You must not write the final grading contract. The generator proposes done criteria later and the evaluator reviews them.
 
-Use write_file only for {contract_path}. Preserve the loop vocabulary: planner, generator, evaluator, loop-runner, attempt.
+Use write_files only for {contract_path}. Preserve the loop vocabulary: planner, generator, evaluator, loop-runner, attempt.
 Finish only with final_report.
 """
 
@@ -772,7 +772,7 @@ This is contract negotiation only. You must not edit production code, tests, pac
 Your job is to propose concrete, testable done criteria in {contract_path} and project them into {feature_list_path}.
 The evaluator will accept or reject the contract. You cannot approve your own criteria.
 
-Use write_file only for {contract_path} and {feature_list_path}.
+Use write_files only for {contract_path} and {feature_list_path}.
 Finish only with final_report.
 """
 
@@ -939,7 +939,7 @@ Selected model:
 {feedback_section}
 
 Implement the contract in this workspace. Do not edit .hooky. Do not declare the attempt passed.
-Use only the provided tools. To edit files, use write_file; use search_files to search file contents.
+Use only the provided tools. To edit files, use write_files; use search_files to search file contents.
 Finish only with final_report describing changed_files, tests_run, and any failures.
 """
 

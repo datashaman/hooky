@@ -21,17 +21,14 @@ Runtime files live under `.hooky/runs/<key>/`.
 
 ## Filesystem Tools
 
-- `read_file`
-  Reads one UTF-8 file.
+- `read_files`
+  Reads one or more UTF-8 files with per-file truncation.
 
 - `read_file_excerpt`
   Reads selected line ranges from one UTF-8 file.
 
-- `read_many_files`
-  Reads several UTF-8 files with per-file truncation.
-
-- `write_file`
-  Writes one UTF-8 file. Existing files must be read in the current uncompacted
+- `write_files`
+  Writes one or more UTF-8 files. Existing files must be read in the current uncompacted
   context before they can be overwritten. If the file changed after the read, the
   write is rejected until the agent reads it again.
 

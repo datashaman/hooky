@@ -68,7 +68,7 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertIn("background process", background["error"])
             self.assertTrue(help_command["ok"])
 
-    def test_write_file_requires_current_uncompacted_read_of_existing_file(self) -> None:
+    def test_write_files_requires_current_uncompacted_read_of_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "src/App.jsx"
@@ -82,15 +82,15 @@ class ProtectedPathTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "was not read in the current uncompacted context"):
-                runtime.write_file({"path": "src/App.jsx", "content": "after"})
+                runtime.write_files({"files": [{"path": "src/App.jsx", "content": "after"}]})
 
-            runtime.read_file({"path": "src/App.jsx"})
-            result = runtime.write_file({"path": "src/App.jsx", "content": "after"})
+            runtime.read_files({"paths": ["src/App.jsx"]})
+            result = runtime.write_files({"files": [{"path": "src/App.jsx", "content": "after"}]})
 
             self.assertTrue(result["ok"])
             self.assertEqual(source.read_text(encoding="utf-8"), "after")
 
-    def test_write_file_records_agent_written_content_as_current(self) -> None:
+    def test_write_files_records_agent_written_content_as_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "src/App.jsx"
@@ -103,15 +103,15 @@ class ProtectedPathTests(unittest.TestCase):
                 max_seconds=30,
             )
 
-            runtime.read_file({"path": "src/App.jsx"})
-            first = runtime.write_file({"path": "src/App.jsx", "content": "after"})
-            second = runtime.write_file({"path": "src/App.jsx", "content": "after again"})
+            runtime.read_files({"paths": ["src/App.jsx"]})
+            first = runtime.write_files({"files": [{"path": "src/App.jsx", "content": "after"}]})
+            second = runtime.write_files({"files": [{"path": "src/App.jsx", "content": "after again"}]})
 
             self.assertTrue(first["ok"])
             self.assertTrue(second["ok"])
             self.assertEqual(source.read_text(encoding="utf-8"), "after again")
 
-    def test_write_file_requires_reread_when_existing_file_changed_after_read(self) -> None:
+    def test_write_files_requires_reread_when_existing_file_changed_after_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "src/App.jsx"
@@ -124,11 +124,41 @@ class ProtectedPathTests(unittest.TestCase):
                 max_seconds=30,
             )
 
-            runtime.read_file({"path": "src/App.jsx"})
+            runtime.read_files({"paths": ["src/App.jsx"]})
             source.write_text("changed elsewhere", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "changed since it was read"):
-                runtime.write_file({"path": "src/App.jsx", "content": "after"})
+                runtime.write_files({"files": [{"path": "src/App.jsx", "content": "after"}]})
+
+    def test_write_files_is_atomic_when_one_existing_file_is_not_currently_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "src/first.jsx"
+            second = root / "src/second.jsx"
+            first.parent.mkdir()
+            first.write_text("first-before", encoding="utf-8")
+            second.write_text("second-before", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            runtime.read_files({"paths": ["src/first.jsx"]})
+
+            with self.assertRaisesRegex(ValueError, "second.jsx was not read"):
+                runtime.write_files(
+                    {
+                        "files": [
+                            {"path": "src/first.jsx", "content": "first-after"},
+                            {"path": "src/second.jsx", "content": "second-after"},
+                        ]
+                    }
+                )
+
+            self.assertEqual(first.read_text(encoding="utf-8"), "first-before")
+            self.assertEqual(second.read_text(encoding="utf-8"), "second-before")
 
     def test_compaction_invalidates_read_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,11 +173,11 @@ class ProtectedPathTests(unittest.TestCase):
                 max_seconds=30,
             )
 
-            runtime.read_file({"path": "src/App.jsx"})
+            runtime.read_files({"paths": ["src/App.jsx"]})
             runtime.advance_read_generation()
 
             with self.assertRaisesRegex(ValueError, "current uncompacted context"):
-                runtime.write_file({"path": "src/App.jsx", "content": "after"})
+                runtime.write_files({"files": [{"path": "src/App.jsx", "content": "after"}]})
 
     def test_write_allowed_prefixes_remain_available_for_system_artifact_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -164,7 +194,7 @@ class ProtectedPathTests(unittest.TestCase):
                 write_blocked_prefixes=[],
             )
 
-            result = runtime.write_file({"path": ".hooky/runs/local/contract.md", "content": "after"})
+            result = runtime.write_files({"files": [{"path": ".hooky/runs/local/contract.md", "content": "after"}]})
 
             self.assertTrue(result["ok"])
             self.assertEqual(artifact.read_text(encoding="utf-8"), "after")
@@ -308,7 +338,7 @@ class ProtectedPathTests(unittest.TestCase):
                             {
                                 "id": "call-1",
                                 "type": "function",
-                                "function": {"name": "read_file", "arguments": "{}"},
+                                "function": {"name": "read_files", "arguments": "{}"},
                             }
                         ],
                     },
@@ -322,7 +352,7 @@ class ProtectedPathTests(unittest.TestCase):
 
         self.assertIn("Assistant message:", rendered)
         self.assertIn("I am checking the contract", rendered)
-        self.assertIn("tools requested: read_file", rendered)
+        self.assertIn("tools requested: read_files", rendered)
 
     def test_runtime_event_log_includes_user_prompts(self) -> None:
         rendered = agent_runtime.render_runtime_events_log(
@@ -489,12 +519,12 @@ The contract is close but still underspecified.
                 [tool["function"]["name"] for tool in runtime.tools()],
                 ["final_report"],
             )
-            result = runtime.run_tool("read_file", {"path": "README.md"})
+            result = runtime.run_tool("read_files", {"paths": ["README.md"]})
 
             self.assertFalse(result["ok"])
             self.assertIn("tool is disabled", result["error"])
 
-    def test_read_file_excerpt_and_many_files(self) -> None:
+    def test_read_file_excerpt_and_read_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "a.txt").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
@@ -502,19 +532,19 @@ The contract is close but still underspecified.
             runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             excerpt = runtime.read_file_excerpt({"path": "a.txt", "start_line": 2, "max_lines": 2})
-            many = runtime.read_many_files({"paths": ["a.txt", "b.txt"], "max_bytes_per_file": 20})
+            many = runtime.read_files({"paths": ["a.txt", "b.txt"], "max_bytes_per_file": 20})
 
             self.assertEqual(excerpt["content"], "two\nthree")
             self.assertEqual(excerpt["start_line"], 2)
             self.assertEqual(len(many["files"]), 2)
 
-    def test_read_many_files_reports_per_file_errors(self) -> None:
+    def test_read_files_reports_per_file_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "a.txt").write_text("one\n", encoding="utf-8")
             runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
-            result = runtime.read_many_files({"paths": ["a.txt", "missing.txt"]})
+            result = runtime.read_files({"paths": ["a.txt", "missing.txt"]})
 
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["files"][0]["content"], "one\n")
@@ -561,10 +591,10 @@ The contract is close but still underspecified.
 
             self.assertEqual(excerpt["content"], "line two")
             self.assertNotIn(".hooky", [item["path"] for item in root_listing["entries"]])
+            blocked_read = runtime.read_files({"paths": [".hooky/artifacts/state.json"]})
+            self.assertEqual(blocked_read["files"][0]["error"], "path not found: .hooky/artifacts/state.json")
             with self.assertRaises(FileNotFoundError):
-                runtime.read_file({"path": ".hooky/artifacts/state.json"})
-            with self.assertRaises(FileNotFoundError):
-                runtime.write_file({"path": ".hooky/runs/local/tool-results/test-runs/new.log", "content": "nope"})
+                runtime.write_files({"files": [{"path": ".hooky/runs/local/tool-results/test-runs/new.log", "content": "nope"}]})
 
     def test_todo_text_is_used_for_active_log_label(self) -> None:
         self.assertEqual(
@@ -573,10 +603,10 @@ The contract is close but still underspecified.
         )
 
     def test_malformed_tool_names_are_canonicalized(self) -> None:
-        valid = {"read_file", "write_file", "final_report"}
+        valid = {"read_files", "write_files", "final_report"}
 
-        self.assertEqual(agent_runtime.canonical_tool_name("write_file<|channel|>commentary", valid), "write_file")
-        self.assertEqual(agent_runtime.canonical_tool_name("read_file.json", valid), "read_file")
+        self.assertEqual(agent_runtime.canonical_tool_name("write_files<|channel|>commentary", valid), "write_files")
+        self.assertEqual(agent_runtime.canonical_tool_name("read_files.json", valid), "read_files")
         self.assertEqual(agent_runtime.canonical_tool_name("missing_tool.json", valid), "missing_tool.json")
 
     def test_runtime_event_line_displays_canonical_tool_name(self) -> None:
@@ -607,10 +637,10 @@ The contract is close but still underspecified.
             (root / "package.json").write_text("{}\n", encoding="utf-8")
             runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
-            result = runtime.run_tool("read_file.json", {"path": "package.json"})
+            result = runtime.run_tool("read_files.json", {"paths": ["package.json"]})
 
             self.assertTrue(result["ok"], result)
-            self.assertEqual(result["content"], "{}\n")
+            self.assertEqual(result["files"][0]["content"], "{}\n")
 
     def test_runtime_can_activate_skill_and_read_resource(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -784,11 +814,10 @@ The contract is close but still underspecified.
     def test_available_tools_include_time_extension_request(self) -> None:
         self.assertIn("request_time_extension", agent_runtime.available_tool_names())
 
-    def test_available_tools_use_search_files_not_grep_files(self) -> None:
+    def test_available_tools_include_search_files(self) -> None:
         names = agent_runtime.available_tool_names()
 
         self.assertIn("search_files", names)
-        self.assertNotIn("grep_files", names)
 
     def test_evidence_tools_capture_notes_and_command_output_under_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -844,7 +873,7 @@ The contract is close but still underspecified.
             self.assertIn("src", paths)
             self.assertNotIn("node_modules", paths)
 
-    def test_read_file_rejects_custom_read_blocked_prefixes(self) -> None:
+    def test_read_files_rejects_custom_read_blocked_prefixes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "node_modules").mkdir()
@@ -857,10 +886,10 @@ The contract is close but still underspecified.
                 read_blocked_prefixes=[".hooky", "node_modules"],
             )
 
-            result = runtime.run_tool("read_file", {"path": "node_modules/framework.js"})
+            result = runtime.run_tool("read_files", {"paths": ["node_modules/framework.js"]})
 
-            self.assertFalse(result["ok"])
-            self.assertIn("path not found", result["error"])
+            self.assertTrue(result["ok"])
+            self.assertIn("path not found", result["files"][0]["error"])
 
     def test_time_extension_is_granted_only_near_deadline_with_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -874,7 +903,7 @@ The contract is close but still underspecified.
                 max_extension_requests=1,
             )
             runtime.started_at = time.monotonic() - 26
-            runtime.tool_events.append({"name": "write_file", "result": {"ok": True}})
+            runtime.tool_events.append({"name": "write_files", "result": {"ok": True}})
             runtime.tool_events.append({"name": "run_tests", "result": {"ok": False}})
 
             result = runtime.request_time_extension(

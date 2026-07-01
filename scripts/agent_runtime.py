@@ -330,7 +330,15 @@ class ToolRuntime:
 
     def tools(self) -> list[dict[str, Any]]:
         tools = [
-            tool_schema("read_file", "Read a UTF-8 text file from the working folder.", {"path": string_schema()}, ["path"]),
+            tool_schema(
+                "read_files",
+                "Read one or more UTF-8 text files from the working folder with per-file truncation.",
+                {
+                    "paths": string_array_schema(),
+                    "max_bytes_per_file": integer_schema(default=12000, minimum=1, maximum=50000),
+                },
+                ["paths"],
+            ),
             tool_schema(
                 "read_file_excerpt",
                 "Read selected lines from a UTF-8 text file in the working folder.",
@@ -342,15 +350,26 @@ class ToolRuntime:
                 ["path"],
             ),
             tool_schema(
-                "read_many_files",
-                "Read multiple UTF-8 text files from the working folder with per-file truncation.",
+                "write_files",
+                "Write one or more UTF-8 text files inside the working folder. Existing files must be read first in the current uncompacted context.",
                 {
-                    "paths": string_array_schema(),
-                    "max_bytes_per_file": integer_schema(default=12000, minimum=1, maximum=50000),
+                    "files": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": string_schema(),
+                                "content": string_schema(),
+                            },
+                            "required": ["path", "content"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
-                ["paths"],
+                ["files"],
             ),
-            tool_schema("write_file", "Write a UTF-8 text file inside the working folder.", {"path": string_schema(), "content": string_schema()}, ["path", "content"]),
             tool_schema("list_files", "List direct children of a directory in the working folder.", {"path": string_schema(default=".")}, []),
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("search_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
@@ -551,10 +570,9 @@ class ToolRuntime:
 
     def tool_handlers(self) -> dict[str, ToolHandler]:
         return {
-            "read_file": self.read_file,
+            "read_files": self.read_files,
             "read_file_excerpt": self.read_file_excerpt,
-            "read_many_files": self.read_many_files,
-            "write_file": self.write_file,
+            "write_files": self.write_files,
             "list_files": self.list_files,
             "find_files": self.find_files,
             "search_files": self.search_files,
@@ -670,7 +688,7 @@ class ToolRuntime:
             result = event.get("result") or {}
             if result.get("ok"):
                 saw_successful_tool = True
-            if event.get("name") == "write_file" and result.get("ok"):
+            if event.get("name") == "write_files" and result.get("ok"):
                 saw_write = True
             if event.get("name") == "run_tests":
                 saw_test = True
@@ -705,13 +723,6 @@ class ToolRuntime:
             raise ValueError(f"path escapes working folder: {value}")
         return path
 
-    def read_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        path = self.resolve_path(str(args["path"]))
-        self.validate_read_path(path)
-        content = path.read_text(encoding="utf-8")
-        self.record_read_observation(path, content)
-        return {"ok": True, "path": relative_to(path, self.working_folder), "content": content}
-
     def read_file_excerpt(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args["path"]))
         self.validate_read_path(path)
@@ -730,14 +741,16 @@ class ToolRuntime:
             "truncated": start_index + max_lines < len(lines),
         }
 
-    def read_many_files(self, args: dict[str, Any]) -> dict[str, Any]:
+    def read_files(self, args: dict[str, Any]) -> dict[str, Any]:
         max_bytes = int(args.get("max_bytes_per_file") or 12000)
         files = []
         for raw_path in list(args.get("paths") or [])[:50]:
             try:
                 path = self.resolve_path(str(raw_path))
                 self.validate_read_path(path)
+                full_content = path.read_text(encoding="utf-8")
                 content = read_text_prefix(path, max_bytes)
+                self.record_read_observation(path, full_content)
                 files.append(
                     {
                         "path": relative_to(path, self.working_folder),
@@ -767,17 +780,35 @@ class ToolRuntime:
         if self.is_read_blocked(path):
             raise FileNotFoundError(f"path not found: {relative_to(path, self.working_folder)}")
 
-    def write_file(self, args: dict[str, Any]) -> dict[str, Any]:
-        path = self.resolve_path(str(args["path"]))
-        self.validate_write_path(path)
-        self.validate_write_has_current_read(path)
-        content = str(args["content"])
-        if self.write_validator:
-            self.write_validator(path, content)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        self.record_read_observation(path, content)
-        return {"ok": True, "path": relative_to(path, self.working_folder), "bytes": path.stat().st_size}
+    def write_files(self, args: dict[str, Any]) -> dict[str, Any]:
+        raw_files = list(args.get("files") or [])
+        if not raw_files:
+            raise ValueError("files is required")
+        if len(raw_files) > 50:
+            raise ValueError("write_files supports at most 50 files")
+        prepared: list[tuple[Path, str]] = []
+        for item in raw_files:
+            if not isinstance(item, dict):
+                raise ValueError("each file entry must be an object with path and content")
+            path = self.resolve_path(str(item["path"]))
+            content = str(item["content"])
+            self.validate_write_path(path)
+            self.validate_write_has_current_read(path)
+            if self.write_validator:
+                self.write_validator(path, content)
+            prepared.append((path, content))
+        for path, content in prepared:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            self.record_read_observation(path, content)
+        files = [
+            {
+                "path": relative_to(path, self.working_folder),
+                "bytes": path.stat().st_size,
+            }
+            for path, _content in prepared
+        ]
+        return {"ok": True, "files": files, "truncated": False}
 
     def record_read_observation(self, path: Path, content: str) -> None:
         relative = relative_to(path.resolve(), self.working_folder)
@@ -797,14 +828,14 @@ class ToolRuntime:
         relative = relative_to(path.resolve(), self.working_folder)
         observation = self.read_observations.get(relative)
         if not observation or observation.get("generation") != self.read_generation:
-            raise ValueError(f"write_file blocked: {relative} was not read in the current uncompacted context. Call read_file first.")
+            raise ValueError(f"write_files blocked: {relative} was not read in the current uncompacted context. Call read_files first.")
         current_hash = file_sha256(path)
         if current_hash != observation.get("sha256"):
-            raise ValueError(f"write_file blocked: {relative} changed since it was read. Call read_file again before writing.")
+            raise ValueError(f"write_files blocked: {relative} changed since it was read. Call read_files again before writing.")
 
     def validate_write_path(self, path: Path) -> None:
         if not self.write_enabled:
-            raise ValueError("write_file is disabled for this agent; finish with final_report instead")
+            raise ValueError("write_files is disabled for this agent; finish with final_report instead")
         relative = relative_to(path, self.working_folder)
         parts = Path(relative).parts
         if self.write_allowed_prefixes:
@@ -2442,11 +2473,12 @@ def format_runtime_event_line(item: dict[str, Any]) -> str:
 def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> str:
     if result.get("error"):
         return "error=" + quote_value(str(result["error"]), 220)
-    if name in {"read_file", "write_file"}:
-        path = result.get("path") or arguments.get("path")
-        size_key = "bytes_written" if name == "write_file" else "bytes_read"
-        size_value = result.get("bytes") if name == "write_file" else len(str(result.get("content") or "").encode("utf-8"))
-        return f"path={quote_value(str(path), 180)} {size_key}={size_value}"
+    if name in {"read_files", "write_files"}:
+        files = result.get("files") if isinstance(result.get("files"), list) else []
+        total_bytes = sum(int(item.get("bytes") or len(str(item.get("content") or "").encode("utf-8"))) for item in files if isinstance(item, dict))
+        paths = ",".join(str(item.get("path") or "") for item in files[:5] if isinstance(item, dict))
+        size_key = "bytes_written" if name == "write_files" else "bytes_read"
+        return f"files={len(files)} {size_key}={total_bytes}" + (f" paths={quote_value(paths, 180)}" if paths else "")
     if name == "bash":
         stdout = single_line(str(result.get("stdout") or ""), 180)
         stderr = single_line(str(result.get("stderr") or ""), 180)
@@ -2743,13 +2775,11 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append("args: " + compact_json(display_args, 300))
     if result.get("error"):
         summary.append("error: " + str(result["error"])[:500])
-    if name == "read_file":
-        content = str(result.get("content") or "")
-        summary.append(f"path: `{result.get('path') or arguments.get('path')}`")
-        summary.append(f"bytes read: {len(content.encode('utf-8'))}")
-    elif name == "write_file":
-        summary.append(f"path: `{result.get('path') or arguments.get('path')}`")
-        summary.append(f"bytes written: {result.get('bytes', len(str(arguments.get('content') or '').encode('utf-8')))}")
+    if name in {"read_files", "write_files"}:
+        files = result.get("files") if isinstance(result.get("files"), list) else []
+        summary.append(f"files: {len(files)}")
+        if files:
+            summary.append("sample: " + ", ".join(str(item.get("path")) for item in files[:12] if isinstance(item, dict)))
     elif name == "list_files":
         entries = result.get("entries") if isinstance(result.get("entries"), list) else []
         summary.append(f"entries: {len(entries)}")
@@ -2927,7 +2957,10 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
 
 
 def display_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if name in {"read_file", "write_file", "fetch_url", "read_skill_resource"}:
+    if name == "write_files":
+        files = arguments.get("files") if isinstance(arguments.get("files"), list) else []
+        return {"files": [{"path": item.get("path")} for item in files if isinstance(item, dict)]}
+    if name in {"read_files", "fetch_url", "read_skill_resource"}:
         return {key: value for key, value in arguments.items() if key != "content"}
     if name == "todo_write":
         return {}
@@ -3056,10 +3089,9 @@ def relative_or_name(path: Path) -> str:
 
 def available_tool_names() -> list[str]:
     return [
-        "read_file",
+        "read_files",
         "read_file_excerpt",
-        "read_many_files",
-        "write_file",
+        "write_files",
         "list_files",
         "search_files",
         "find_files",
