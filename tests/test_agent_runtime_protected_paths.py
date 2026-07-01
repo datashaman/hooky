@@ -672,6 +672,38 @@ The contract is close but still underspecified.
     def test_available_tools_include_time_extension_request(self) -> None:
         self.assertIn("request_time_extension", agent_runtime.available_tool_names())
 
+    def test_evidence_tools_capture_notes_and_command_output_under_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            traces = root / ".hooky/runs/local/attempts/001/traces"
+            traces.mkdir(parents=True)
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                live_log_root=traces,
+            )
+
+            note = runtime.append_evidence_note({"title": "Review note", "body": "Checked the contract."})
+            command = runtime.append_evidence_command({"title": "Command proof", "command": "printf evidence-ok"})
+            report = root / ".hooky/runs/local/attempts/001/evidence.md"
+
+            self.assertTrue(note["ok"])
+            self.assertTrue(command["ok"], command)
+            self.assertEqual(note["evidence_path"], ".hooky/runs/local/attempts/001/evidence.md")
+            self.assertEqual(command["evidence_path"], ".hooky/runs/local/attempts/001/evidence.md")
+            self.assertIn("evidence/command-output", command["output_path"])
+            self.assertIn("Review note", report.read_text(encoding="utf-8"))
+            self.assertIn("Command proof", report.read_text(encoding="utf-8"))
+            self.assertIn("evidence-ok", (root / command["output_path"]).read_text(encoding="utf-8"))
+
+    def test_available_tools_include_evidence_capture(self) -> None:
+        names = agent_runtime.available_tool_names()
+        self.assertIn("append_evidence_note", names)
+        self.assertIn("append_evidence_command", names)
+        self.assertIn("append_evidence_screenshot", names)
+
     def test_list_files_hides_custom_read_blocked_prefixes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

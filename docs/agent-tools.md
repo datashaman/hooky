@@ -65,6 +65,24 @@ Runtime files live under `.hooky/runs/<key>/`.
   this for UI evidence. Screenshots and metrics are saved under
   `.hooky/runs/<key>/tool-results/visual-snapshots/`.
 
+## Evidence Tools
+
+Evidence tools write a human-reviewable report owned by Hooky, not by the model.
+For attempts, the report lives at `.hooky/runs/<key>/attempts/<id>/evidence.md`.
+Before attempts exist, run-level evidence lives at `.hooky/runs/<key>/evidence.md`.
+
+- `append_evidence_note`
+  Appends a Markdown note section to `evidence.md`.
+
+- `append_evidence_command`
+  Runs a bounded shell command, saves the real output under
+  `evidence/command-output/`, and appends command metadata plus output tail to
+  `evidence.md`.
+
+- `append_evidence_screenshot`
+  Captures a browser screenshot using the visual snapshot tool and appends the
+  image link plus metrics to `evidence.md`.
+
 ## Git Tools
 
 These tools are read-only wrappers around git:

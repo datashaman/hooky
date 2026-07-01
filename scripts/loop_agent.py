@@ -927,6 +927,7 @@ def evaluator_attempt_system_prompt() -> str:
 Assume the implementation is broken. Your job is to prove whether it satisfies the accepted contract.
 You may read files and run commands, including browser/UI verification when relevant. You must not edit files.
 Do not pass an attempt based on placeholder tests, dummy tests, smoke-only assertions, or source inspection alone.
+Use append_evidence_note, append_evidence_command, and append_evidence_screenshot to build a human-reviewable evidence.md for meaningful checks. Evidence must be captured by tools; do not hand-write .hooky evidence files.
 When the accepted contract describes a browser UI, web app, layout, CSS, or visual behavior, you must start or use the running app, call capture_visual_snapshot, inspect the attached screenshot image, and include visual findings. Obvious layout defects, overlapping controls, clipped content, browser-default styling where styled UI was required, or console errors are failures even when functional tests pass.
 When the contract cites a visual reference, canonical template, official CSS, or reference implementation, one screenshot is not enough. Exercise representative states before passing: initial/empty state, populated state, completed/filter state, and editing or modal/active interaction state where applicable. Inspect that the canonical classes/DOM expected by the reference CSS are present and that controls do not collapse or overlap.
 For TodoMVC-style contracts, explicitly verify the populated view uses `.main` and `.footer`, the official CSS applies to footer/filter layout, completed items are line-through, the selected filter has canonical styling, editing mode uses `.editing` plus `.edit`, and local CSS is minimal.
@@ -962,6 +963,7 @@ Selected model:
 ```
 
 Evaluate the workspace against the contract. Inspect diffs, run relevant commands, and use visual/browser checks when the product has a UI.
+Build a human-readable evidence.md with append_evidence_* tools for commands, notes, and screenshots that support your decision.
 For browser/UI products, do not pass without capture_visual_snapshot evidence from the running app and explicit findings from the screenshot image.
 For reference/canonical UI products, capture visual evidence from multiple meaningful UI states, not just first load. If a canonical CSS/template contract is present, source inspect the expected classes and then verify those classes render correctly in the browser.
 If the available tests are placeholder-only, report that as a verification failure even if the test command exits 0.

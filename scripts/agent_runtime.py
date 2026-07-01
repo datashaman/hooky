@@ -246,6 +246,39 @@ class ToolRuntime:
                 },
                 ["url"],
             ),
+            tool_schema(
+                "append_evidence_note",
+                "Append a human-readable note to the system-owned evidence report for this run or attempt.",
+                {
+                    "title": string_schema(default="Evidence note"),
+                    "body": string_schema(default=""),
+                },
+                [],
+            ),
+            tool_schema(
+                "append_evidence_command",
+                "Run a bounded shell command, save its real output, and append it to the system-owned evidence report.",
+                {
+                    "command": string_schema(),
+                    "title": string_schema(default="Command evidence"),
+                    "timeout_seconds": integer_schema(default=120, minimum=1, maximum=600),
+                },
+                ["command"],
+            ),
+            tool_schema(
+                "append_evidence_screenshot",
+                "Capture a browser screenshot and append the image plus metrics to the system-owned evidence report.",
+                {
+                    "url": string_schema(default=""),
+                    "title": string_schema(default="Visual evidence"),
+                    "wait_selector": string_schema(default="body"),
+                    "viewport_width": integer_schema(default=1280, minimum=320, maximum=3840),
+                    "viewport_height": integer_schema(default=900, minimum=240, maximum=2160),
+                    "full_page": {"type": "boolean", "default": True},
+                    "timeout_seconds": integer_schema(default=30, minimum=1, maximum=120),
+                },
+                ["url"],
+            ),
             tool_schema("git_status", "Read git working-tree status without modifying files.", {}, []),
             tool_schema(
                 "git_diff",
@@ -377,6 +410,9 @@ class ToolRuntime:
             "run_tests": self.run_tests,
             "latest_test_failure_context": self.latest_test_failure_context,
             "capture_visual_snapshot": self.capture_visual_snapshot,
+            "append_evidence_note": self.append_evidence_note,
+            "append_evidence_command": self.append_evidence_command,
+            "append_evidence_screenshot": self.append_evidence_screenshot,
             "git_status": self.git_status,
             "git_diff": self.git_diff,
             "git_show": self.git_show,
@@ -845,6 +881,100 @@ class ToolRuntime:
         if stderr:
             payload["stderr"] = single_line(stderr, 1000)
         return payload
+
+    def evidence_base_dir(self) -> Path:
+        if self.live_log_root and self.live_log_root.name == "traces":
+            return self.live_log_root.resolve().parent
+        return runtime_path(self.working_folder)
+
+    def evidence_report_path(self) -> Path:
+        return self.evidence_base_dir() / "evidence.md"
+
+    def append_evidence_note(self, args: dict[str, Any]) -> dict[str, Any]:
+        title = str(args.get("title") or "Evidence note").strip() or "Evidence note"
+        body = str(args.get("body") or "").strip()
+        path = append_evidence_note_file(
+            self.working_folder,
+            self.evidence_base_dir(),
+            title=title,
+            body=body,
+        )
+        return {"ok": True, "evidence_path": relative_to(path, self.working_folder)}
+
+    def append_evidence_command(self, args: dict[str, Any]) -> dict[str, Any]:
+        command = str(args.get("command") or "").strip()
+        if not command:
+            raise ValueError("command is required")
+        long_running_violation = long_running_bash_violation(command)
+        if long_running_violation:
+            return {"ok": False, "captured": False, "error": long_running_violation, "command": command}
+        lowered = command.lower()
+        if ".hooky" in lowered and self.read_blocked_prefixes:
+            return {"ok": False, "captured": False, "error": "command references a path that is not available to this agent", "command": command}
+        for blocked in self.bash_blocked_substrings:
+            if blocked.lower() in lowered:
+                return {"ok": False, "captured": False, "error": f"command blocked by agent policy: {blocked}", "command": command}
+        if self.bash_command_validator:
+            violation = self.bash_command_validator(command)
+            if violation:
+                return {"ok": False, "error": f"command blocked by agent policy: {violation}", "command": command}
+        timeout_seconds = int(args.get("timeout_seconds") or self.bash_timeout_seconds)
+        title = str(args.get("title") or "Command evidence").strip() or "Command evidence"
+        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
+        started = utc_timestamp()
+        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=timeout_seconds)
+        ended = utc_timestamp()
+        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
+        output = normalize_subprocess_output(completed.stdout) + normalize_subprocess_output(completed.stderr)
+        command_output_path = write_evidence_command_output(
+            self.working_folder,
+            self.evidence_base_dir(),
+            command=command,
+            output=output,
+        )
+        evidence_path = append_evidence_command_file(
+            self.working_folder,
+            self.evidence_base_dir(),
+            title=title,
+            command=command,
+            returncode=completed.returncode,
+            timed_out=timed_out,
+            started_at=started,
+            ended_at=ended,
+            output_path=command_output_path,
+            output_tail=output[-4000:],
+            protected_changes=protected_changes,
+        )
+        if protected_changes:
+            restore_protected_paths(self.working_folder, before, protected_changes)
+        return {
+            "ok": completed.returncode == 0 and not timed_out and not protected_changes,
+            "captured": True,
+            "command": command,
+            "returncode": completed.returncode,
+            "timed_out": timed_out,
+            "started_at": started,
+            "ended_at": ended,
+            "evidence_path": relative_to(evidence_path, self.working_folder),
+            "output_path": relative_to(command_output_path, self.working_folder),
+            "output_tail": output[-4000:],
+            **({"error": "command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20])} if protected_changes else {}),
+        }
+
+    def append_evidence_screenshot(self, args: dict[str, Any]) -> dict[str, Any]:
+        title = str(args.get("title") or "Visual evidence").strip() or "Visual evidence"
+        snapshot = self.capture_visual_snapshot(args)
+        evidence_path = append_evidence_screenshot_file(
+            self.working_folder,
+            self.evidence_base_dir(),
+            title=title,
+            url=str(args.get("url") or ""),
+            snapshot=snapshot,
+        )
+        return {
+            **snapshot,
+            "evidence_path": relative_to(evidence_path, self.working_folder),
+        }
 
     def queue_image_input(self, path: Path, label: str) -> None:
         resolved = path if path.is_absolute() else self.working_folder / path
@@ -2159,6 +2289,15 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         if console_messages:
             detail += f" console_messages={len(console_messages)}"
         return detail
+    if name in {"append_evidence_note", "append_evidence_command", "append_evidence_screenshot"}:
+        detail = f"evidence_path={quote_value(str(result.get('evidence_path') or ''), 180)}"
+        if result.get("command"):
+            detail += f" command={quote_value(str(result.get('command') or ''), 180)} returncode={result.get('returncode')}"
+        if result.get("screenshot_path"):
+            detail += f" screenshot_path={quote_value(str(result.get('screenshot_path') or ''), 180)}"
+        if result.get("output_path"):
+            detail += f" output_path={quote_value(str(result.get('output_path') or ''), 180)}"
+        return detail
     if name == "detect_project_environment":
         return (
             f"package_manager={quote_value(str(result.get('package_manager') or ''), 80)} "
@@ -2466,6 +2605,17 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         console_messages = result.get("consoleMessages") if isinstance(result.get("consoleMessages"), list) else []
         if console_messages:
             summary.append("console messages: " + str(len(console_messages)))
+    elif name in {"append_evidence_note", "append_evidence_command", "append_evidence_screenshot"}:
+        summary.append(f"evidence path: `{result.get('evidence_path')}`")
+        if result.get("command"):
+            summary.append(f"command: `{result.get('command')}`")
+            summary.append(f"returncode: {result.get('returncode')}")
+            summary.append(f"output path: `{result.get('output_path')}`")
+        if result.get("screenshot_path"):
+            summary.append(f"screenshot path: `{result.get('screenshot_path')}`")
+        output_tail = str(result.get("output_tail") or "").strip()
+        if output_tail:
+            summary.append("output tail: " + single_line(output_tail, 500))
     elif name == "detect_project_environment":
         summary.append(f"package manager: {result.get('package_manager')}")
         summary.append("lockfiles: " + ", ".join(str(item) for item in result.get("lockfiles") or []))
@@ -2705,6 +2855,9 @@ def available_tool_names() -> list[str]:
         "run_tests",
         "latest_test_failure_context",
         "capture_visual_snapshot",
+        "append_evidence_note",
+        "append_evidence_command",
+        "append_evidence_screenshot",
         "git_status",
         "git_diff",
         "git_show",
@@ -2992,6 +3145,114 @@ def write_tool_result_artifact(root: Path, category: str, content: str) -> str:
     path = directory / filename
     path.write_text(content, encoding="utf-8")
     return relative_to(path, root)
+
+
+def evidence_assets_dir(evidence_base_dir: Path, category: str) -> Path:
+    path = evidence_base_dir / "evidence" / category
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def evidence_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ%f")[:22]
+
+
+def ensure_evidence_report(root: Path, evidence_base_dir: Path) -> Path:
+    path = evidence_base_dir / "evidence.md"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# Evidence\n\n"
+            "Generated by Hooky evidence tools. Command output and screenshots in this report are captured by tools, not hand-authored by the model.\n\n",
+            encoding="utf-8",
+        )
+    return path
+
+
+def append_evidence_section(root: Path, evidence_base_dir: Path, title: str, body: str) -> Path:
+    path = ensure_evidence_report(root, evidence_base_dir)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"## {title}\n\n")
+        handle.write(f"- captured_at: {utc_timestamp()}\n\n")
+        if body.strip():
+            handle.write(body.rstrip() + "\n\n")
+    return path
+
+
+def fenced(value: str, language: str = "") -> str:
+    fence = "```"
+    while fence in value:
+        fence += "`"
+    info = language.strip()
+    return f"{fence}{info}\n{value.rstrip()}\n{fence}"
+
+
+def append_evidence_note_file(root: Path, evidence_base_dir: Path, *, title: str, body: str) -> Path:
+    return append_evidence_section(root, evidence_base_dir, title, body)
+
+
+def write_evidence_command_output(root: Path, evidence_base_dir: Path, *, command: str, output: str) -> Path:
+    directory = evidence_assets_dir(evidence_base_dir, "command-output")
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", command.strip()).strip(".-").lower()[:48] or "command"
+    path = directory / f"{evidence_stamp()}-{slug}.log"
+    path.write_text(output, encoding="utf-8")
+    return path
+
+
+def append_evidence_command_file(
+    root: Path,
+    evidence_base_dir: Path,
+    *,
+    title: str,
+    command: str,
+    returncode: int,
+    timed_out: bool,
+    started_at: str,
+    ended_at: str,
+    output_path: Path,
+    output_tail: str,
+    protected_changes: list[str],
+) -> Path:
+    lines = [
+        f"- command: `{command}`",
+        f"- returncode: {returncode}",
+        f"- timed_out: {str(timed_out).lower()}",
+        f"- started_at: {started_at}",
+        f"- ended_at: {ended_at}",
+        f"- output: `{relative_to(output_path, root)}`",
+    ]
+    if protected_changes:
+        lines.append("- protected_changes_reverted: " + ", ".join(protected_changes[:20]))
+    if output_tail.strip():
+        lines.extend(["", fenced(output_tail[-4000:], "text")])
+    return append_evidence_section(root, evidence_base_dir, title, "\n".join(lines))
+
+
+def append_evidence_screenshot_file(root: Path, evidence_base_dir: Path, *, title: str, url: str, snapshot: dict[str, Any]) -> Path:
+    screenshot = str(snapshot.get("screenshot_path") or "")
+    lines = [
+        f"- url: `{url}`",
+        f"- ok: {str(bool(snapshot.get('ok'))).lower()}",
+    ]
+    if screenshot:
+        lines.append(f"- screenshot: `{screenshot}`")
+        lines.extend(["", f"![{title}]({screenshot})"])
+    if snapshot.get("error"):
+        lines.append(f"- error: {snapshot.get('error')}")
+    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+    if metrics:
+        lines.extend(
+            [
+                "",
+                "- metrics:",
+                f"  - viewportCoverage: {metrics.get('viewportCoverage')}",
+                f"  - topGapRatio: {metrics.get('topGapRatio')}",
+                f"  - leftGapRatio: {metrics.get('leftGapRatio')}",
+                f"  - visibleElementCount: {metrics.get('visibleElementCount')}",
+                f"  - headingInteractiveOverlapCount: {metrics.get('headingInteractiveOverlapCount')}",
+            ]
+        )
+    return append_evidence_section(root, evidence_base_dir, title, "\n".join(lines))
 
 
 def parse_test_output(output: str, returncode: int) -> dict[str, Any]:

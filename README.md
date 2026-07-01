@@ -97,6 +97,16 @@ hooky inspect
 hooky trace-grep TodoMVC
 ```
 
+Capture or review human-readable evidence:
+
+```bash
+hooky evidence init
+hooky evidence note "What was checked" --body "Contract, tests, and UI state were reviewed."
+hooky evidence exec "npm test" --title "Acceptance tests"
+hooky evidence screenshot http://127.0.0.1:5173 --title "TodoMVC initial state"
+hooky evidence show
+```
+
 Durable loop files:
 
 - `.hooky/runs/<key>/proposal.md`
@@ -104,7 +114,9 @@ Durable loop files:
 - `.hooky/runs/<key>/feature_list.json`
 - `.hooky/runs/<key>/progress.md`
 - `.hooky/runs/<key>/log.md`
+- `.hooky/runs/<key>/evidence.md` before an attempt exists
 - `.hooky/runs/<key>/attempts/<id>/`
+- `.hooky/runs/<key>/attempts/<id>/evidence.md`
 
 The default local run key is `local`. GitHub automation uses keys like
 `issue-12`, `pr-7`, or `manual-<run-id>`, so independent flows can persist state

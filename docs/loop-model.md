@@ -60,6 +60,8 @@ Example:
 ```
 
 Runtime logs, transcripts, tool events, OpenTelemetry-style spans, evaluator reports, and visual evidence live under the active attempt directory. Debug commands read those files directly instead of reconstructing what might have happened from model summaries.
+Human-readable proof artifacts live in `evidence.md`; command output and
+screenshots referenced by that report are captured by Hooky evidence tools.
 
 For typical run sequences, including auto-approve, human-in-the-loop, and GitHub
 event-triggered flows, see [`usage-sequences.md`](usage-sequences.md).
