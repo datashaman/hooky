@@ -140,8 +140,10 @@ class LoopAgentPolicyTests(unittest.TestCase):
 
         self.assertIn("Do not recommend stop merely because one or more acceptance tests fail", system)
         self.assertIn("stop only when automation is genuinely blocked", system)
+        self.assertIn("returned url/ports as authoritative", system)
         self.assertIn("If tests fail", user)
         self.assertIn("continue or restart-attempt", user)
+        self.assertIn("pass the returned url directly to capture_visual_snapshot", user)
 
     def test_evaluator_attempt_uses_multimodal_selected_model_over_global_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,6 +170,17 @@ class LoopAgentPolicyTests(unittest.TestCase):
             self.assertEqual(metadata["model"], "openai/gpt-4.1-mini")
             self.assertEqual(metadata["source"], "manual-multimodal-required")
 
+    def test_main_default_model_is_gpt_oss_20b(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(loop_agent, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+        ):
+            self.assertEqual(loop_agent.selected_model(), "openai/gpt-oss-20b")
+            metadata = loop_agent.selected_model_metadata()
+
+        self.assertEqual(metadata["model"], "openai/gpt-oss-20b")
+        self.assertEqual(metadata["source"], "fallback")
+
     def test_loop_evaluator_model_env_overrides_multimodal_default(self) -> None:
         with mock.patch.dict(os.environ, {"LOOP_EVALUATOR_MODEL": "openai/gpt-4.1"}, clear=False):
             self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1")
@@ -175,6 +188,36 @@ class LoopAgentPolicyTests(unittest.TestCase):
 
         self.assertEqual(metadata["model"], "openai/gpt-4.1")
         self.assertEqual(metadata["source"], "LOOP_EVALUATOR_MODEL")
+
+    def test_ollama_model_env_overrides_main_loop_model(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
+            mock.patch.object(loop_agent, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+        ):
+            self.assertEqual(loop_agent.selected_model(), "ollama/gpt-oss:20b")
+            metadata = loop_agent.selected_model_metadata()
+
+        self.assertEqual(metadata["model"], "ollama/gpt-oss:20b")
+        self.assertEqual(metadata["source"], "OLLAMA_MODEL")
+        self.assertEqual(metadata["base_url"], "http://localhost:11434")
+
+    def test_ollama_main_model_does_not_override_multimodal_evaluator_default(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
+            mock.patch.object(loop_agent, "EVALUATOR_SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-evaluator-model.json")),
+        ):
+            self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
+
+    def test_openrouter_reasoning_env_is_recorded_in_selected_model_metadata(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"OPENROUTER_MODEL": "openai/gpt-oss-20b", "OPENROUTER_REASONING": '{"effort":"high"}'},
+            clear=False,
+        ):
+            metadata = loop_agent.selected_model_metadata()
+
+        self.assertEqual(metadata["model"], "openai/gpt-oss-20b")
+        self.assertEqual(metadata["reasoning_request"], {"effort": "high"})
 
     def test_evaluator_requires_rubric_scores_when_taste_rubric_is_substantive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

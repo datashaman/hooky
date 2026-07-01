@@ -18,6 +18,7 @@ SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")
 DEFAULT_RUNTIME_DIR = ".hooky/runs/local"
 RUNTIME_DIR_ENV = "HOOKY_RUN_DIR"
+DEFAULT_MODEL = "openai/gpt-oss-20b"
 
 
 def runtime_dir() -> str:
@@ -49,21 +50,32 @@ def selected_model() -> str:
     env_model = os.environ.get("OPENROUTER_MODEL")
     if env_model:
         return env_model
+    ollama_model = os.environ.get("OLLAMA_MODEL")
+    if ollama_model:
+        return "ollama/" + ollama_model.removeprefix("ollama/")
     if SELECTED_MODEL_PATH.exists():
         data = read_selected_model(SELECTED_MODEL_PATH)
         model = data.get("model")
         if isinstance(model, str) and model:
             return model
-    return "openai/gpt-4.1-mini"
+    return DEFAULT_MODEL
 
 
 def selected_model_metadata() -> dict[str, Any]:
     env_model = os.environ.get("OPENROUTER_MODEL")
     if env_model:
-        return {"model": env_model, "source": "OPENROUTER_MODEL"}
+        return {"model": env_model, "source": "OPENROUTER_MODEL", "reasoning_request": env_reasoning_request()}
+    ollama_model = os.environ.get("OLLAMA_MODEL")
+    if ollama_model:
+        return {
+            "model": "ollama/" + ollama_model.removeprefix("ollama/"),
+            "source": "OLLAMA_MODEL",
+            "base_url": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            "reasoning_request": env_reasoning_request(),
+        }
     if SELECTED_MODEL_PATH.exists():
         return read_selected_model(SELECTED_MODEL_PATH)
-    return {"model": "openai/gpt-4.1-mini", "source": "fallback"}
+    return {"model": DEFAULT_MODEL, "source": "fallback"}
 
 
 def selected_evaluator_attempt_model() -> str:
@@ -81,7 +93,7 @@ def selected_evaluator_attempt_model() -> str:
 def selected_evaluator_attempt_model_metadata() -> dict[str, Any]:
     env_model = os.environ.get("LOOP_EVALUATOR_MODEL")
     if env_model:
-        return {"model": env_model, "variant_id": env_model, "source": "LOOP_EVALUATOR_MODEL", "reasoning_request": None}
+        return {"model": env_model, "variant_id": env_model, "source": "LOOP_EVALUATOR_MODEL", "reasoning_request": env_reasoning_request()}
     if EVALUATOR_SELECTED_MODEL_PATH.exists():
         return read_selected_model(EVALUATOR_SELECTED_MODEL_PATH)
     return {
@@ -90,6 +102,22 @@ def selected_evaluator_attempt_model_metadata() -> dict[str, Any]:
         "source": "fallback-multimodal-required",
         "reasoning_request": None,
     }
+
+
+def env_reasoning_request() -> dict[str, Any] | None:
+    raw = os.environ.get("OPENROUTER_REASONING")
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"invalid": raw}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def ensure_model_available(model: str, role_name: str) -> None:
+    if not agent_runtime.model_credentials_available(model):
+        raise RuntimeError(agent_runtime.model_credentials_error(model, role_name))
 
 
 def read_loop_proposal(working_folder: Path) -> str:
@@ -395,10 +423,9 @@ def reference_visual_rubric_required(text: str) -> bool:
 
 
 def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        raise RuntimeError("OPENROUTER_API_KEY is required; loop planner has no non-AI path")
     working_folder = working_folder.resolve()
     model = selected_model()
+    ensure_model_available(model, "loop planner")
     model_metadata = selected_model_metadata()
     live_root = runtime_path(working_folder)
     if attempt_id:
@@ -457,10 +484,9 @@ def generate_generator_contract_artifacts(
     attempt_id: str | None = None,
     review_feedback: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        raise RuntimeError("OPENROUTER_API_KEY is required; loop generator has no non-AI path")
     working_folder = working_folder.resolve()
     model = selected_model()
+    ensure_model_available(model, "loop generator")
     model_metadata = selected_model_metadata()
     live_root = runtime_path(working_folder)
     if attempt_id:
@@ -520,10 +546,9 @@ def generate_generator_contract_artifacts(
 
 
 def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        raise RuntimeError("OPENROUTER_API_KEY is required; loop evaluator has no non-AI path")
     working_folder = working_folder.resolve()
     model = selected_model()
+    ensure_model_available(model, "loop evaluator")
     model_metadata = selected_model_metadata()
     live_root = runtime_path(working_folder)
     if attempt_id:
@@ -586,10 +611,9 @@ def generate_generator_implementation_artifacts(
     attempt_id: str,
     evaluator_feedback: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        raise RuntimeError("OPENROUTER_API_KEY is required; loop generator has no non-AI path")
     working_folder = working_folder.resolve()
     model = selected_model()
+    ensure_model_available(model, "loop generator")
     model_metadata = selected_model_metadata()
     live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
@@ -646,10 +670,9 @@ def generate_generator_implementation_artifacts(
 
 
 def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        raise RuntimeError("OPENROUTER_API_KEY is required; loop evaluator has no non-AI path")
     working_folder = working_folder.resolve()
     model = selected_evaluator_attempt_model()
+    ensure_model_available(model, "loop evaluator")
     model_metadata = selected_evaluator_attempt_model_metadata()
     live_root = runtime_path(working_folder, "attempts", attempt_id, "traces")
     runtime = ToolRuntime(
@@ -929,6 +952,7 @@ You may read files and run commands, including browser/UI verification when rele
 Do not pass an attempt based on placeholder tests, dummy tests, smoke-only assertions, or source inspection alone.
 Use append_evidence_note, append_evidence_command, and append_evidence_screenshot to build a human-reviewable evidence.md for meaningful checks. Evidence must be captured by tools; do not hand-write .hooky evidence files.
 When the accepted contract describes a browser UI, web app, layout, CSS, or visual behavior, you must start or use the running app, call capture_visual_snapshot, inspect the attached screenshot image, and include visual findings. Obvious layout defects, overlapping controls, clipped content, browser-default styling where styled UI was required, or console errors are failures even when functional tests pass.
+After start_process or list_processes, treat the returned url/ports as authoritative. Requested ports are only hints; if the runner binds a different port, use the returned url or build http://127.0.0.1:<returned-port> for browser and curl checks.
 When the contract cites a visual reference, canonical template, official CSS, or reference implementation, one screenshot is not enough. Exercise representative states before passing: initial/empty state, populated state, completed/filter state, and editing or modal/active interaction state where applicable. Inspect that the canonical classes/DOM expected by the reference CSS are present and that controls do not collapse or overlap.
 For TodoMVC-style contracts, explicitly verify the populated view uses `.main` and `.footer`, the official CSS applies to footer/filter layout, completed items are line-through, the selected filter has canonical styling, editing mode uses `.editing` plus `.edit`, and local CSS is minimal.
 When the accepted contract defines a Taste Rubric, grade it explicitly with rubric_scores for design, originality, craft, and functionality plus score_explanation. When the task asks for subjective taste, polish, aesthetics, originality, brand fit, or craft but the contract lacks a substantive Taste Rubric, do not invent criteria after the fact; fail with recommendation=restart-contract.
@@ -965,6 +989,7 @@ Selected model:
 Evaluate the workspace against the contract. Inspect diffs, run relevant commands, and use visual/browser checks when the product has a UI.
 Build a human-readable evidence.md with append_evidence_* tools for commands, notes, and screenshots that support your decision.
 For browser/UI products, do not pass without capture_visual_snapshot evidence from the running app and explicit findings from the screenshot image.
+When using start_process, pass the returned url directly to capture_visual_snapshot and other browser checks. Do not keep using a requested port if start_process reports a different listening port.
 For reference/canonical UI products, capture visual evidence from multiple meaningful UI states, not just first load. If a canonical CSS/template contract is present, source inspect the expected classes and then verify those classes render correctly in the browser.
 If the available tests are placeholder-only, report that as a verification failure even if the test command exits 0.
 If tests fail, report the failing criteria and choose continue or restart-attempt unless there is a true automation blocker.

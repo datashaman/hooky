@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import unittest
@@ -88,6 +89,27 @@ class ProtectedPathTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertEqual(source.read_text(encoding="utf-8"), "after")
+
+    def test_write_file_records_agent_written_content_as_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/App.jsx"
+            source.parent.mkdir()
+            source.write_text("before", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            runtime.read_file({"path": "src/App.jsx"})
+            first = runtime.write_file({"path": "src/App.jsx", "content": "after"})
+            second = runtime.write_file({"path": "src/App.jsx", "content": "after again"})
+
+            self.assertTrue(first["ok"])
+            self.assertTrue(second["ok"])
+            self.assertEqual(source.read_text(encoding="utf-8"), "after again")
 
     def test_write_file_requires_reread_when_existing_file_changed_after_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,9 +239,13 @@ class ProtectedPathTests(unittest.TestCase):
                 self.assertTrue(result["ok"], result)
                 self.assertIn(port, result["requested_ports"])
                 self.assertIn(port, result["ports"])
+                self.assertEqual(result["url"], f"http://127.0.0.1:{port}")
                 listed = runtime.list_processes({})["processes"]
                 self.assertEqual(len(listed), 1)
                 self.assertIn(port, listed[0]["ports"])
+                self.assertEqual(listed[0]["url"], f"http://127.0.0.1:{port}")
+                read = runtime.read_process({"process_id": result["process_id"]})
+                self.assertEqual(read["url"], f"http://127.0.0.1:{port}")
             finally:
                 runtime.cleanup_processes()
 
@@ -773,6 +799,32 @@ The contract is close but still underspecified.
             self.assertEqual(result["added_seconds"], 90)
             self.assertEqual(runtime.max_seconds, 120)
 
+    def test_runtime_log_preserves_invocation_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            transcript = [
+                {
+                    "role": "assistant",
+                    "message": {"content": "plain text response", "tool_calls": []},
+                    "started_at": "2026-07-01T00:00:00+00:00",
+                    "ended_at": "2026-07-01T00:00:01+00:00",
+                    "duration_ms": 1000,
+                }
+            ]
+            metadata = {
+                "schema_version": 1,
+                "agent_name": "loop-generator-contract",
+                "started_at": "2026-07-01T00:00:00+00:00",
+                "written_at": "2026-07-01T00:00:02+00:00",
+            }
+
+            agent_runtime.write_runtime_log(root, transcript, [], [], [], metadata=metadata)
+
+            archive = root / "invocations" / "2026-07-01T00-00-00-00-00-loop-generator-contract"
+            self.assertTrue((archive / "runtime_transcript.json").exists())
+            archived = json.loads((archive / "runtime_transcript.json").read_text(encoding="utf-8"))
+            self.assertEqual(archived[0]["message"]["content"], "plain text response")
+
     def test_time_extension_requires_recent_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = agent_runtime.ToolRuntime(
@@ -865,6 +917,23 @@ The contract is close but still underspecified.
             self.assertEqual(head.returncode, 0)
             self.assertEqual(show.stdout, "baseline\n")
             self.assertEqual(status.stdout, "")
+
+    def test_model_provider_routes_ollama_and_openrouter_credentials(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(agent_runtime.model_provider("ollama/gpt-oss:20b"), "ollama")
+            self.assertEqual(agent_runtime.provider_model_name("ollama/gpt-oss:20b"), "gpt-oss:20b")
+            self.assertTrue(agent_runtime.model_credentials_available("ollama/gpt-oss:20b"))
+            self.assertFalse(agent_runtime.model_credentials_available("openai/gpt-oss-20b"))
+
+    def test_ollama_chat_url_accepts_root_or_v1_base_url(self) -> None:
+        self.assertEqual(
+            agent_runtime.OllamaChat("http://localhost:11434").chat_completions_url(),
+            "http://localhost:11434/v1/chat/completions",
+        )
+        self.assertEqual(
+            agent_runtime.OllamaChat("http://localhost:11434/v1").chat_completions_url(),
+            "http://localhost:11434/v1/chat/completions",
+        )
 
 
 def json_dumps(value: object) -> str:

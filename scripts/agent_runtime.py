@@ -59,6 +59,28 @@ def openrouter_request_options() -> dict[str, Any]:
     return options
 
 
+def model_provider(model: str) -> str:
+    return "ollama" if model.startswith("ollama/") else "openrouter"
+
+
+def provider_model_name(model: str) -> str:
+    return model.removeprefix("ollama/")
+
+
+def model_request_options(model: str) -> dict[str, Any]:
+    if model_provider(model) == "ollama":
+        return ollama_request_options()
+    return openrouter_request_options()
+
+
+def ollama_request_options() -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    reasoning = os.environ.get("OLLAMA_THINK")
+    if reasoning:
+        options["think"] = reasoning
+    return options
+
+
 def structured_response_format(name: str, schema: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "json_schema",
@@ -68,6 +90,133 @@ def structured_response_format(name: str, schema: dict[str, Any]) -> dict[str, A
             "schema": schema,
         },
     }
+
+
+class ModelFunctionCall:
+    def __init__(self, payload: dict[str, Any]):
+        self.name = str(payload.get("name") or "")
+        self.arguments = payload.get("arguments") if isinstance(payload.get("arguments"), str) else json.dumps(payload.get("arguments") or {})
+
+    def model_dump(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"name": self.name, "arguments": self.arguments}
+
+
+class ModelToolCall:
+    def __init__(self, payload: dict[str, Any], index: int):
+        self.id = str(payload.get("id") or f"tool-{index}")
+        self.type = str(payload.get("type") or "function")
+        function_payload = payload.get("function") if isinstance(payload.get("function"), dict) else {}
+        self.function = ModelFunctionCall(function_payload)
+
+    def model_dump(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"id": self.id, "type": self.type, "function": self.function.model_dump()}
+
+
+class ModelMessage:
+    def __init__(self, payload: dict[str, Any]):
+        self.role = str(payload.get("role") or "assistant")
+        self.content = payload.get("content")
+        tool_calls = payload.get("tool_calls") if isinstance(payload.get("tool_calls"), list) else []
+        self.tool_calls = [ModelToolCall(item, index) for index, item in enumerate(tool_calls, 1) if isinstance(item, dict)]
+
+    def model_dump(self, **_kwargs: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {"role": self.role}
+        if self.content is not None:
+            payload["content"] = self.content
+        if self.tool_calls:
+            payload["tool_calls"] = [call.model_dump() for call in self.tool_calls]
+        return payload
+
+
+class ModelChoice:
+    def __init__(self, payload: dict[str, Any]):
+        message_payload = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        self.message = ModelMessage(message_payload)
+
+
+class ModelCompletion:
+    def __init__(self, payload: dict[str, Any]):
+        choices = payload.get("choices") if isinstance(payload.get("choices"), list) else []
+        self.choices = [ModelChoice(item) for item in choices if isinstance(item, dict)]
+        self.usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        if not self.choices:
+            self.choices = [ModelChoice({"message": {"role": "assistant", "content": ""}})]
+
+
+class OllamaChat:
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+
+    def chat_completions_url(self) -> str:
+        if self.base_url.endswith("/v1"):
+            return self.base_url + "/chat/completions"
+        return self.base_url + "/v1/chat/completions"
+
+    def send(self, **kwargs: Any) -> ModelCompletion:
+        model = provider_model_name(str(kwargs["model"]))
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": kwargs.get("messages") or [],
+            "stream": False,
+        }
+        if kwargs.get("tools"):
+            payload["tools"] = kwargs["tools"]
+        if kwargs.get("tool_choice"):
+            payload["tool_choice"] = kwargs["tool_choice"]
+        if kwargs.get("response_format"):
+            payload["response_format"] = kwargs["response_format"]
+        for option in ("max_tokens", "temperature", "top_p", "seed", "stop"):
+            if kwargs.get(option) is not None:
+                payload[option] = kwargs[option]
+        request = urllib.request.Request(
+            self.chat_completions_url(),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        timeout = max(1, openrouter_timeout_ms() // 1000)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Ollama chat request failed HTTP {exc.code}: {detail[:2000]}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Ollama chat request failed: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(f"Ollama chat request timed out after {timeout}s") from exc
+        return ModelCompletion(data)
+
+
+class OllamaClient:
+    def __init__(self, base_url: str):
+        self.chat = OllamaChat(base_url)
+
+    def __enter__(self) -> "OllamaClient":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+
+def model_client(model: str) -> Any:
+    if model_provider(model) == "ollama":
+        return OllamaClient(os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"))
+    from openrouter import OpenRouter
+
+    return OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms())
+
+
+def model_credentials_available(model: str) -> bool:
+    if model_provider(model) == "ollama":
+        return True
+    return bool(os.environ.get("OPENROUTER_API_KEY"))
+
+
+def model_credentials_error(model: str, role_name: str) -> str:
+    if model_provider(model) == "ollama":
+        return f"Ollama is required for {role_name}; ensure `ollama serve` is running and OLLAMA_MODEL is installed"
+    return f"OPENROUTER_API_KEY is required; {role_name} has no non-AI path"
 
 
 def response_usage(response: Any) -> dict[str, Any]:
@@ -295,7 +444,10 @@ class ToolRuntime:
             tool_schema("bash", "Run a shell command in the working folder with a timeout.", {"command": string_schema()}, ["command"]),
             tool_schema(
                 "start_process",
-                "Start a long-running local process in the working folder, such as a development server.",
+                (
+                    "Start a long-running local process in the working folder, such as a development server. "
+                    "Use the returned url/ports fields for follow-up browser calls; requested_ports are only the ports requested by the command."
+                ),
                 {
                     "command": string_schema(),
                     "name": string_schema(default="process"),
@@ -624,6 +776,7 @@ class ToolRuntime:
             self.write_validator(path, content)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        self.record_read_observation(path, content)
         return {"ok": True, "path": relative_to(path, self.working_folder), "bytes": path.stat().st_size}
 
     def record_read_observation(self, path: Path, content: str) -> None:
@@ -1117,6 +1270,7 @@ class ToolRuntime:
             time.sleep(wait_seconds)
         listeners = process_listeners(process.pid)
         ports = sorted({int(item["port"]) for item in listeners})
+        url = process_url_from_ports(ports)
         return {
             "ok": process.poll() is None,
             "process_id": process_id,
@@ -1126,6 +1280,7 @@ class ToolRuntime:
             "requested_ports": requested_ports_list,
             "allocated_port": allocated_port,
             "ports": ports,
+            "url": url,
             "listeners": listeners,
             "log_path": relative_to(log_path, self.working_folder),
             "ready": ready if wait_for_url else None,
@@ -1137,12 +1292,14 @@ class ToolRuntime:
         process = self.require_process(str(args["process_id"]))
         log_path = process._hooky_log_path  # type: ignore[attr-defined]
         listeners = process_listeners(process.pid)
+        ports = sorted({int(item["port"]) for item in listeners})
         return {
             "ok": True,
             "process_id": str(args["process_id"]),
             "running": process.poll() is None,
             "returncode": process.poll(),
-            "ports": sorted({int(item["port"]) for item in listeners}),
+            "ports": ports,
+            "url": process_url_from_ports(ports),
             "listeners": listeners,
             "output": read_tail(log_path, int(args.get("max_bytes") or 8000)),
         }
@@ -1164,6 +1321,7 @@ class ToolRuntime:
         processes = []
         for process_id, process in self.managed_processes.items():
             listeners = process_listeners(process.pid)
+            ports = sorted({int(item["port"]) for item in listeners})
             processes.append(
                 {
                     "process_id": process_id,
@@ -1174,7 +1332,8 @@ class ToolRuntime:
                     "returncode": process.poll(),
                     "requested_ports": list(getattr(process, "_hooky_requested_ports", requested_ports_from_command(process._hooky_command))),  # type: ignore[attr-defined]
                     "allocated_port": getattr(process, "_hooky_allocated_port", None),
-                    "ports": sorted({int(item["port"]) for item in listeners}),
+                    "ports": ports,
+                    "url": process_url_from_ports(ports),
                     "listeners": listeners,
                     "log_path": relative_to(process._hooky_log_path, self.working_folder),  # type: ignore[attr-defined]
                 }
@@ -1442,8 +1601,6 @@ def run_tool_agent(
     user: str,
     runtime: ToolRuntime,
 ) -> AgentRunResult:
-    from openrouter import OpenRouter
-
     transcript: list[dict[str, Any]] = []
     tool_events: list[dict[str, Any]] = []
     compaction_events: list[dict[str, Any]] = []
@@ -1544,7 +1701,7 @@ def run_tool_agent(
     stop_heartbeat = threading.Event()
     heartbeat_thread = start_heartbeat_thread(runtime, model, total_usage, stop_heartbeat)
     try:
-        with OpenRouter(api_key=os.environ["OPENROUTER_API_KEY"], timeout_ms=openrouter_timeout_ms()) as client:
+        with model_client(model) as client:
             while runtime.final_report is None:
                 elapsed_seconds = time.monotonic() - runtime.started_at
                 if elapsed_seconds > runtime.max_seconds:
@@ -1621,7 +1778,7 @@ def run_tool_agent(
                             messages=messages,
                             tools=runtime.tools(),
                             tool_choice="auto",
-                            **openrouter_request_options(),
+                            **model_request_options(model),
                         )
                 except TimeoutError as exc:
                     raise AgentRunError(str(exc), current_result()) from exc
@@ -2037,15 +2194,22 @@ def maybe_compact_messages(
 
     previous_summary = runtime.anchored_summary
     prompt = compaction_user_prompt(previous_summary, older)
-    completion = client.chat.send(
-        model=os.environ.get("COMPACTION_MODEL", model),
-        messages=[
-            {"role": "system", "content": compaction_system_prompt(runtime)},
-            {"role": "user", "content": prompt},
-        ],
-        response_format=structured_response_format("context_compaction", compaction_schema()),
-        **openrouter_request_options(),
-    )
+    compaction_model = os.environ.get("COMPACTION_MODEL", model)
+    compaction_messages = [
+        {"role": "system", "content": compaction_system_prompt(runtime)},
+        {"role": "user", "content": prompt},
+    ]
+    compaction_kwargs = {
+        "model": compaction_model,
+        "messages": compaction_messages,
+        "response_format": structured_response_format("context_compaction", compaction_schema()),
+        **model_request_options(compaction_model),
+    }
+    if model_provider(compaction_model) == model_provider(model):
+        completion = client.chat.send(**compaction_kwargs)
+    else:
+        with model_client(compaction_model) as compaction_client:
+            completion = compaction_client.chat.send(**compaction_kwargs)
     content = completion.choices[0].message.content
     if not content:
         return messages, None, archive
@@ -2175,6 +2339,41 @@ def write_runtime_log(
         json.dumps(metadata or {"schema_version": 1, "written_at": utc_timestamp()}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    write_runtime_invocation_archive(
+        report_root,
+        transcript,
+        tool_events,
+        compaction_events,
+        pre_compaction_archives,
+        metadata or {"schema_version": 1, "written_at": utc_timestamp()},
+    )
+
+
+def write_runtime_invocation_archive(
+    report_root: Path,
+    transcript: list[dict[str, Any]],
+    tool_events: list[dict[str, Any]],
+    compaction_events: list[dict[str, Any]],
+    pre_compaction_archives: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> None:
+    agent_name = safe_path_segment(str(metadata.get("agent_name") or "agent"))
+    timestamp = safe_path_segment(str(metadata.get("started_at") or metadata.get("written_at") or utc_timestamp()))
+    archive_root = report_root / "invocations" / f"{timestamp}-{agent_name}"
+    archive_root.mkdir(parents=True, exist_ok=True)
+    (archive_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (archive_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (archive_root / "tool_calls.md").write_text(render_tool_calls_markdown(tool_events), encoding="utf-8")
+    (archive_root / "runtime_timeline.md").write_text(render_runtime_timeline_markdown(transcript), encoding="utf-8")
+    (archive_root / "runtime_events.snapshot.log").write_text(render_runtime_events_log(transcript), encoding="utf-8")
+    (archive_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (archive_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (archive_root / "runtime_metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def safe_path_segment(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
+    return cleaned.strip("-") or "unknown"
 
 
 def append_live_event(runtime: ToolRuntime, line: str) -> None:
@@ -2323,6 +2522,8 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
             detail += f" allocated_port={result.get('allocated_port')}"
         if ports:
             detail += f" ports={quote_value(ports, 80)}"
+        if result.get("url"):
+            detail += f" url={quote_value(str(result.get('url')), 120)}"
         output = single_line(str(result.get("output") or ""), 180)
         if output:
             detail += f" output={quote_value(output, 180)}"
@@ -2640,6 +2841,8 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
             summary.append(f"allocated port: {result.get('allocated_port')}")
         if result.get("ports"):
             summary.append("listening ports: " + ", ".join(str(port) for port in result.get("ports") or []))
+        if result.get("url"):
+            summary.append(f"url: {result.get('url')}")
         summary.append(f"log path: `{result.get('log_path')}`")
         output = str(result.get("output") or "").strip()
         if output:
@@ -2650,6 +2853,8 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append(f"returncode: {result.get('returncode')}")
         if result.get("ports"):
             summary.append("listening ports: " + ", ".join(str(port) for port in result.get("ports") or []))
+        if result.get("url"):
+            summary.append(f"url: {result.get('url')}")
         output = str(result.get("output") or "").strip()
         if output:
             summary.append("output: " + single_line(output, 500))
@@ -2673,6 +2878,8 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
                     summary.append("ports: " + ", ".join(str(port) for port in process.get("ports") or []))
                 if process.get("allocated_port"):
                     summary.append(f"allocated port: {process.get('allocated_port')}")
+                if process.get("url"):
+                    summary.append(f"url: {process.get('url')}")
     elif name == "todo_read":
         items = result.get("items") if isinstance(result.get("items"), list) else []
         summary.append(f"todo items: {len(items)}")
@@ -3470,6 +3677,12 @@ def requested_ports_from_command(command: str) -> list[int]:
     for match in re.finditer(r"(?<![\w.:-]):(\d{2,5})(?!\d)", command):
         add_port(ports, match.group(1))
     return sorted(ports)
+
+
+def process_url_from_ports(ports: list[int]) -> str | None:
+    if not ports:
+        return None
+    return f"http://127.0.0.1:{ports[0]}"
 
 
 def shell_tokens_for_ports(command: str) -> list[str]:
