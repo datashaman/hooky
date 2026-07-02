@@ -32,6 +32,49 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(changes, [])
             self.assertTrue(report.exists())
 
+    def test_model_message_preserves_provider_reasoning_fields(self) -> None:
+        message = agent_runtime.ModelMessage(
+            {
+                "role": "assistant",
+                "content": "visible",
+                "thinking": "private thinking",
+                "reasoning": "private reasoning",
+            }
+        )
+
+        payload = message.model_dump()
+
+        self.assertEqual(payload["content"], "visible")
+        self.assertEqual(payload["thinking"], "private thinking")
+        self.assertEqual(payload["reasoning"], "private reasoning")
+
+    def test_ollama_chat_sends_think_option(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request: object, timeout: int) -> FakeResponse:
+            captured["timeout"] = timeout
+            captured["payload"] = json.loads(getattr(request, "data").decode("utf-8"))
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            agent_runtime.OllamaChat("http://localhost:11434").send(
+                model="ollama/gpt-oss:20b",
+                messages=[],
+                think="high",
+            )
+
+        self.assertEqual(captured["payload"]["think"], "high")
+
     def test_source_change_under_protected_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

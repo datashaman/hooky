@@ -116,6 +116,11 @@ class ModelMessage:
     def __init__(self, payload: dict[str, Any]):
         self.role = str(payload.get("role") or "assistant")
         self.content = payload.get("content")
+        self.extra = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"role", "content", "tool_calls"} and value is not None
+        }
         tool_calls = payload.get("tool_calls") if isinstance(payload.get("tool_calls"), list) else []
         self.tool_calls = [ModelToolCall(item, index) for index, item in enumerate(tool_calls, 1) if isinstance(item, dict)]
 
@@ -125,6 +130,7 @@ class ModelMessage:
             payload["content"] = self.content
         if self.tool_calls:
             payload["tool_calls"] = [call.model_dump() for call in self.tool_calls]
+        payload.update(self.extra)
         return payload
 
 
@@ -165,6 +171,8 @@ class OllamaChat:
             payload["tool_choice"] = kwargs["tool_choice"]
         if kwargs.get("response_format"):
             payload["response_format"] = kwargs["response_format"]
+        if kwargs.get("think") is not None:
+            payload["think"] = kwargs["think"]
         for option in ("max_tokens", "temperature", "top_p", "seed", "stop"):
             if kwargs.get(option) is not None:
                 payload[option] = kwargs[option]

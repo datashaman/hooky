@@ -71,7 +71,7 @@ def selected_model_metadata() -> dict[str, Any]:
             "model": "ollama/" + ollama_model.removeprefix("ollama/"),
             "source": "OLLAMA_MODEL",
             "base_url": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-            "reasoning_request": env_reasoning_request(),
+            "reasoning_request": env_ollama_reasoning_request(),
         }
     if SELECTED_MODEL_PATH.exists():
         return read_selected_model(SELECTED_MODEL_PATH)
@@ -113,6 +113,13 @@ def env_reasoning_request() -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return {"invalid": raw}
     return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def env_ollama_reasoning_request() -> dict[str, Any] | None:
+    raw = os.environ.get("OLLAMA_THINK")
+    if not raw:
+        return None
+    return {"think": raw}
 
 
 def ensure_model_available(model: str, role_name: str) -> None:

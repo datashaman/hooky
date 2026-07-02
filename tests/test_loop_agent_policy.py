@@ -201,6 +201,16 @@ class LoopAgentPolicyTests(unittest.TestCase):
         self.assertEqual(metadata["source"], "OLLAMA_MODEL")
         self.assertEqual(metadata["base_url"], "http://localhost:11434")
 
+    def test_ollama_think_env_is_recorded_in_selected_model_metadata(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b", "OLLAMA_THINK": "high"}, clear=True),
+            mock.patch.object(loop_agent, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+        ):
+            metadata = loop_agent.selected_model_metadata()
+
+        self.assertEqual(metadata["model"], "ollama/gpt-oss:20b")
+        self.assertEqual(metadata["reasoning_request"], {"think": "high"})
+
     def test_ollama_main_model_does_not_override_multimodal_evaluator_default(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
