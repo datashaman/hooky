@@ -26,6 +26,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import agent_runtime
 import agent_skills
 import loop_agent
+import loop_executor
 
 
 app = typer.Typer(help="Run the Hooky loop pipeline.", no_args_is_help=True)
@@ -119,6 +120,23 @@ def in_workspace(workspace: Path):
         yield
     finally:
         os.chdir(previous)
+
+
+@contextmanager
+def temporary_executor(executor: str | None):
+    if executor is None:
+        yield
+        return
+    selected = loop_executor.selected_executor(executor)
+    previous = os.environ.get(loop_executor.EXECUTOR_ENV)
+    os.environ[loop_executor.EXECUTOR_ENV] = selected
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(loop_executor.EXECUTOR_ENV, None)
+        else:
+            os.environ[loop_executor.EXECUTOR_ENV] = previous
 
 
 def loop_dir(workspace: Path) -> Path:
@@ -1663,6 +1681,19 @@ def run_model_loop_once(
     proposal: str,
     force: bool,
     last_run_path: Path,
+    executor: str | None = None,
+) -> None:
+    with temporary_executor(executor):
+        _run_model_loop_once(workspace, title=title, proposal=proposal, force=force, last_run_path=last_run_path)
+
+
+def _run_model_loop_once(
+    workspace: Path,
+    *,
+    title: str | None,
+    proposal: str,
+    force: bool,
+    last_run_path: Path,
 ) -> None:
     ensure_workspace_ready(workspace)
     if not loop_state_path(workspace).exists() or force:
@@ -1852,6 +1883,7 @@ def loop_run(
     recommendation: Annotated[str, typer.Option(help="Dry-run evaluator recommendation: continue, restart-attempt, restart-contract, or stop.", hidden=True)] = "continue",
     bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.", hidden=True)] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
+    executor: Annotated[str | None, typer.Option(help="Role executor: native, shell, codex, or claude. Defaults to HOOKY_EXECUTOR or native.")] = None,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
     run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
@@ -1867,7 +1899,7 @@ def loop_run(
         proposal = sys.stdin.read().strip()
     title = title or title_from_body(proposal)
     if not dry_run:
-        run_model_loop_once(workspace, title=title, proposal=proposal, force=force, last_run_path=last_run_path)
+        run_model_loop_once(workspace, title=title, proposal=proposal, force=force, last_run_path=last_run_path, executor=executor)
         return
     if not loop_state_path(workspace).exists() or force:
         initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
@@ -1990,6 +2022,7 @@ def run_default(
     recommendation: Annotated[str, typer.Option(help="Dry-run evaluator recommendation: continue, restart-attempt, restart-contract, or stop.", hidden=True)] = "continue",
     bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.", hidden=True)] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
+    executor: Annotated[str | None, typer.Option(help="Role executor: native, shell, codex, or claude. Defaults to HOOKY_EXECUTOR or native.")] = None,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
     run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
@@ -2006,6 +2039,7 @@ def run_default(
         recommendation=recommendation,
         bottleneck=bottleneck,
         dry_run=dry_run,
+        executor=executor,
         force=force,
         run_key=run_key,
         last_run_path=last_run_path,
@@ -2456,6 +2490,7 @@ def start(
     proposal: Annotated[str, typer.Option(help="Planner proposal text for contract.md.")] = "",
     proposal_file: Annotated[Path | None, typer.Option(help="Problem proposal Markdown file.")] = None,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
+    executor: Annotated[str | None, typer.Option(help="Role executor: native, shell, codex, or claude. Defaults to HOOKY_EXECUTOR or native.")] = None,
     skill: Annotated[list[str] | None, typer.Option("--skill", help="Preselect an agent skill by name for this run. Repeat for multiple skills.")] = None,
     run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
     last_run_path: Annotated[Path, typer.Option(help="Path used by `hooky watch` to find the latest workspace.")] = DEFAULT_LAST_RUN_PATH,
@@ -2473,8 +2508,10 @@ def start(
     typer.echo(f"workspace: {workspace}")
     if skill:
         typer.echo(f"skills: {', '.join(skill)}")
+    if executor:
+        typer.echo(f"executor: {loop_executor.selected_executor(executor)}")
     typer.echo("watch: hooky watch")
-    run_model_loop_once(workspace, title=title, proposal=proposal_text, force=force, last_run_path=last_run_path)
+    run_model_loop_once(workspace, title=title, proposal=proposal_text, force=force, last_run_path=last_run_path, executor=executor)
 
 
 @app.command()

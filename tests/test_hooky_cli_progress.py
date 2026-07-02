@@ -174,6 +174,41 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(last_run["workspace"], self.workspace.resolve().as_posix())
         self.assertEqual(last_run["run_key"], "local")
 
+    def test_start_executor_option_is_passed_to_model_loop(self) -> None:
+        seen: dict[str, object] = {}
+        last_run_path = self.workspace / "last-run-path"
+
+        def stop_after_recording(*_args: object, **kwargs: object) -> None:
+            seen.update(kwargs)
+            raise RuntimeError("stop")
+
+        with mock.patch.object(hooky_cli, "run_model_loop_once", side_effect=stop_after_recording):
+            result = CliRunner().invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "start", "--executor", "codex", "--last-run-path", str(last_run_path)],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(seen["executor"], "codex")
+        self.assertIn("executor: codex", result.output)
+
+    def test_run_executor_option_is_passed_to_model_loop(self) -> None:
+        seen: dict[str, object] = {}
+        last_run_path = self.workspace / "last-run-path"
+
+        def stop_after_recording(*_args: object, **kwargs: object) -> None:
+            seen.update(kwargs)
+            raise RuntimeError("stop")
+
+        with mock.patch.object(hooky_cli, "run_model_loop_once", side_effect=stop_after_recording):
+            result = CliRunner().invoke(
+                hooky_cli.app,
+                ["-C", str(self.workspace), "run", "--executor", "claude", "--last-run-path", str(last_run_path)],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertEqual(seen["executor"], "claude")
+
     def test_removed_pipeline_commands_are_not_registered(self) -> None:
         help_result = CliRunner().invoke(hooky_cli.app, ["--help"])
 

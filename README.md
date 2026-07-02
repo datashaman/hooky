@@ -128,6 +128,9 @@ usage, see [`docs/usage-sequences.md`](docs/usage-sequences.md).
 For the model-role tool surface, permissions, and guardrails, see
 [`docs/agent-tools.md`](docs/agent-tools.md).
 
+For running roles through Hooky's native runtime, Codex CLI, Claude Code CLI, or
+a custom shell executor, see [`docs/agent-executors.md`](docs/agent-executors.md).
+
 ## Agent Skills
 
 Hooky supports agent skills using progressive disclosure. At run start, agents see only a catalog of available skill names and descriptions. They can call `activate_skill` to load a selected `SKILL.md`, and `read_skill_resource` to read specific referenced files from that skill directory.

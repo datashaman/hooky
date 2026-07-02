@@ -11,7 +11,8 @@ from typing import Any
 
 import agent_runtime
 import agent_skills
-from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, run_tool_agent, write_runtime_log
+import loop_executor
+from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, write_runtime_log
 
 
 SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
@@ -123,8 +124,33 @@ def env_ollama_reasoning_request() -> dict[str, Any] | None:
 
 
 def ensure_model_available(model: str, role_name: str) -> None:
+    if loop_executor.selected_executor() != "native":
+        return
     if not agent_runtime.model_credentials_available(model):
         raise RuntimeError(agent_runtime.model_credentials_error(model, role_name))
+
+
+def run_role_agent(
+    *,
+    role: str,
+    agent_name: str,
+    model: str,
+    model_metadata: dict[str, Any],
+    system: str,
+    user: str,
+    runtime: ToolRuntime,
+) -> agent_runtime.AgentRunResult:
+    return loop_executor.run_role(
+        loop_executor.RoleInvocation(
+            role=role,
+            agent_name=agent_name,
+            model=model,
+            model_metadata=model_metadata,
+            system=system,
+            user=user,
+            runtime=runtime,
+        )
+    )
 
 
 def read_loop_proposal(working_folder: Path) -> str:
@@ -455,8 +481,11 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
         live_event_prefix="role=planner ",
     )
     try:
-        result = run_tool_agent(
+        result = run_role_agent(
+            role="planner",
+            agent_name="loop-planner",
             model=model,
+            model_metadata=model_metadata,
             system=planner_system_prompt(),
             user=planner_user_prompt(proposal, model_metadata),
             runtime=runtime,
@@ -517,8 +546,11 @@ def generate_generator_contract_artifacts(
         live_event_prefix="role=generator ",
     )
     try:
-        result = run_tool_agent(
+        result = run_role_agent(
+            role="generator",
+            agent_name="loop-generator-contract",
             model=model,
+            model_metadata=model_metadata,
             system=generator_contract_system_prompt(),
             user=generator_contract_user_prompt(
                 runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
@@ -577,8 +609,11 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
         live_event_prefix="role=evaluator ",
     )
     try:
-        result = run_tool_agent(
+        result = run_role_agent(
+            role="evaluator",
+            agent_name="loop-evaluator-contract",
             model=model,
+            model_metadata=model_metadata,
             system=evaluator_contract_system_prompt(),
             user=evaluator_contract_user_prompt(
                 runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
@@ -640,8 +675,11 @@ def generate_generator_implementation_artifacts(
         live_event_prefix="role=generator ",
     )
     try:
-        result = run_tool_agent(
+        result = run_role_agent(
+            role="generator",
+            agent_name="loop-generator-implementation",
             model=model,
+            model_metadata=model_metadata,
             system=generator_implementation_system_prompt(),
             user=generator_implementation_user_prompt(
                 runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
@@ -698,8 +736,11 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
         live_event_prefix="role=evaluator ",
     )
     try:
-        result = run_tool_agent(
+        result = run_role_agent(
+            role="evaluator",
+            agent_name="loop-evaluator-attempt",
             model=model,
+            model_metadata=model_metadata,
             system=evaluator_attempt_system_prompt(),
             user=evaluator_attempt_user_prompt(
                 runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
