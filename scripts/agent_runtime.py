@@ -370,6 +370,41 @@ class ToolRuntime:
                 },
                 ["files"],
             ),
+            tool_schema(
+                "edit_files",
+                "Apply line-oriented edits to one or more existing UTF-8 text files. Existing files must be read first in the current uncompacted context. Edits are validated as a batch before any file is written.",
+                {
+                    "files": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": string_schema(),
+                                "edits": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 100,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "start_line": integer_schema(minimum=1),
+                                            "end_line": integer_schema(minimum=0),
+                                            "replacement": string_schema(),
+                                        },
+                                        "required": ["start_line", "end_line", "replacement"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            },
+                            "required": ["path", "edits"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                ["files"],
+            ),
             tool_schema("list_files", "List direct children of a directory in the working folder.", {"path": string_schema(default=".")}, []),
             tool_schema("find_files", "Find files by glob pattern inside the working folder.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
             tool_schema("search_files", "Search UTF-8 files for a literal string.", {"pattern": string_schema(), "path": string_schema(default=".")}, ["pattern"]),
@@ -573,6 +608,7 @@ class ToolRuntime:
             "read_files": self.read_files,
             "read_file_excerpt": self.read_file_excerpt,
             "write_files": self.write_files,
+            "edit_files": self.edit_files,
             "list_files": self.list_files,
             "find_files": self.find_files,
             "search_files": self.search_files,
@@ -688,7 +724,7 @@ class ToolRuntime:
             result = event.get("result") or {}
             if result.get("ok"):
                 saw_successful_tool = True
-            if event.get("name") == "write_files" and result.get("ok"):
+            if event.get("name") in {"write_files", "edit_files"} and result.get("ok"):
                 saw_write = True
             if event.get("name") == "run_tests":
                 saw_test = True
@@ -792,8 +828,8 @@ class ToolRuntime:
                 raise ValueError("each file entry must be an object with path and content")
             path = self.resolve_path(str(item["path"]))
             content = str(item["content"])
-            self.validate_write_path(path)
-            self.validate_write_has_current_read(path)
+            self.validate_write_path(path, "write_files")
+            self.validate_write_has_current_read(path, "write_files")
             if self.write_validator:
                 self.write_validator(path, content)
             prepared.append((path, content))
@@ -810,6 +846,43 @@ class ToolRuntime:
         ]
         return {"ok": True, "files": files, "truncated": False}
 
+    def edit_files(self, args: dict[str, Any]) -> dict[str, Any]:
+        raw_files = list(args.get("files") or [])
+        if not raw_files:
+            raise ValueError("files is required")
+        if len(raw_files) > 50:
+            raise ValueError("edit_files supports at most 50 files")
+        prepared: list[tuple[Path, str, int]] = []
+        for item in raw_files:
+            if not isinstance(item, dict):
+                raise ValueError("each file entry must be an object with path and edits")
+            path = self.resolve_path(str(item["path"]))
+            edits = list(item.get("edits") or [])
+            if not edits:
+                raise ValueError(f"edits are required: {relative_to(path, self.working_folder)}")
+            self.validate_read_path(path)
+            self.validate_write_path(path, "edit_files")
+            if not path.exists():
+                raise FileNotFoundError(f"path not found: {relative_to(path, self.working_folder)}")
+            self.validate_write_has_current_read(path, "edit_files")
+            original = path.read_text(encoding="utf-8")
+            content = apply_line_edits(original, edits, relative_to(path, self.working_folder))
+            if self.write_validator:
+                self.write_validator(path, content)
+            prepared.append((path, content, len(edits)))
+        for path, content, _edit_count in prepared:
+            path.write_text(content, encoding="utf-8")
+            self.record_read_observation(path, content)
+        files = [
+            {
+                "path": relative_to(path, self.working_folder),
+                "bytes": path.stat().st_size,
+                "edits": edit_count,
+            }
+            for path, _content, edit_count in prepared
+        ]
+        return {"ok": True, "files": files}
+
     def record_read_observation(self, path: Path, content: str) -> None:
         relative = relative_to(path.resolve(), self.working_folder)
         self.read_observations[relative] = {
@@ -822,20 +895,20 @@ class ToolRuntime:
         self.read_generation += 1
         self.read_observations.clear()
 
-    def validate_write_has_current_read(self, path: Path) -> None:
+    def validate_write_has_current_read(self, path: Path, tool_name: str = "write_files") -> None:
         if not path.exists() or self.is_write_allowed_prefix_path(path):
             return
         relative = relative_to(path.resolve(), self.working_folder)
         observation = self.read_observations.get(relative)
         if not observation or observation.get("generation") != self.read_generation:
-            raise ValueError(f"write_files blocked: {relative} was not read in the current uncompacted context. Call read_files first.")
+            raise ValueError(f"{tool_name} blocked: {relative} was not read in the current uncompacted context. Call read_files first.")
         current_hash = file_sha256(path)
         if current_hash != observation.get("sha256"):
-            raise ValueError(f"write_files blocked: {relative} changed since it was read. Call read_files again before writing.")
+            raise ValueError(f"{tool_name} blocked: {relative} changed since it was read. Call read_files again before writing.")
 
-    def validate_write_path(self, path: Path) -> None:
+    def validate_write_path(self, path: Path, tool_name: str = "write_files") -> None:
         if not self.write_enabled:
-            raise ValueError("write_files is disabled for this agent; finish with final_report instead")
+            raise ValueError(f"{tool_name} is disabled for this agent; finish with final_report instead")
         relative = relative_to(path, self.working_folder)
         parts = Path(relative).parts
         if self.write_allowed_prefixes:
@@ -2473,12 +2546,14 @@ def format_runtime_event_line(item: dict[str, Any]) -> str:
 def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) -> str:
     if result.get("error"):
         return "error=" + quote_value(str(result["error"]), 220)
-    if name in {"read_files", "write_files"}:
+    if name in {"read_files", "write_files", "edit_files"}:
         files = result.get("files") if isinstance(result.get("files"), list) else []
         total_bytes = sum(int(item.get("bytes") or len(str(item.get("content") or "").encode("utf-8"))) for item in files if isinstance(item, dict))
         paths = ",".join(str(item.get("path") or "") for item in files[:5] if isinstance(item, dict))
-        size_key = "bytes_written" if name == "write_files" else "bytes_read"
-        return f"files={len(files)} {size_key}={total_bytes}" + (f" paths={quote_value(paths, 180)}" if paths else "")
+        size_key = "bytes_read" if name == "read_files" else "bytes_written"
+        edits = sum(int(item.get("edits") or 0) for item in files if isinstance(item, dict))
+        edit_detail = f" edits={edits}" if name == "edit_files" else ""
+        return f"files={len(files)} {size_key}={total_bytes}{edit_detail}" + (f" paths={quote_value(paths, 180)}" if paths else "")
     if name == "bash":
         stdout = single_line(str(result.get("stdout") or ""), 180)
         stderr = single_line(str(result.get("stderr") or ""), 180)
@@ -2775,9 +2850,11 @@ def summarize_tool_event(name: str, arguments: dict[str, Any], result: dict[str,
         summary.append("args: " + compact_json(display_args, 300))
     if result.get("error"):
         summary.append("error: " + str(result["error"])[:500])
-    if name in {"read_files", "write_files"}:
+    if name in {"read_files", "write_files", "edit_files"}:
         files = result.get("files") if isinstance(result.get("files"), list) else []
         summary.append(f"files: {len(files)}")
+        if name == "edit_files":
+            summary.append(f"edits: {sum(int(item.get('edits') or 0) for item in files if isinstance(item, dict))}")
         if files:
             summary.append("sample: " + ", ".join(str(item.get("path")) for item in files[:12] if isinstance(item, dict)))
     elif name == "list_files":
@@ -2960,6 +3037,18 @@ def display_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, An
     if name == "write_files":
         files = arguments.get("files") if isinstance(arguments.get("files"), list) else []
         return {"files": [{"path": item.get("path")} for item in files if isinstance(item, dict)]}
+    if name == "edit_files":
+        files = arguments.get("files") if isinstance(arguments.get("files"), list) else []
+        return {
+            "files": [
+                {
+                    "path": item.get("path"),
+                    "edits": len(item.get("edits") or []) if isinstance(item, dict) else 0,
+                }
+                for item in files
+                if isinstance(item, dict)
+            ]
+        }
     if name in {"read_files", "fetch_url", "read_skill_resource"}:
         return {key: value for key, value in arguments.items() if key != "content"}
     if name == "todo_write":
@@ -3092,6 +3181,7 @@ def available_tool_names() -> list[str]:
         "read_files",
         "read_file_excerpt",
         "write_files",
+        "edit_files",
         "list_files",
         "search_files",
         "find_files",
@@ -3162,6 +3252,47 @@ def read_tail(path: Path, max_bytes: int) -> str:
 def read_text_prefix(path: Path, max_bytes: int) -> str:
     with path.open("rb") as handle:
         return handle.read(max(1, max_bytes)).decode("utf-8", errors="replace")
+
+
+def apply_line_edits(content: str, edits: list[Any], label: str) -> str:
+    lines = content.splitlines(keepends=True)
+    line_count = len(lines)
+    normalized: list[tuple[int, int, str, int, int]] = []
+    insertion_points: set[int] = set()
+    for index, edit in enumerate(edits, start=1):
+        if not isinstance(edit, dict):
+            raise ValueError(f"edit {index} for {label} must be an object")
+        start_line = int(edit["start_line"])
+        end_line = int(edit["end_line"])
+        replacement = str(edit.get("replacement", ""))
+        if end_line < start_line - 1:
+            raise ValueError(f"edit {index} for {label} has end_line before insertion point")
+        if start_line > line_count + 1:
+            raise ValueError(f"edit {index} for {label} starts after end of file")
+        if end_line > line_count:
+            raise ValueError(f"edit {index} for {label} ends after end of file")
+        start_index = start_line - 1
+        end_index = end_line
+        if start_index == end_index:
+            if start_index in insertion_points:
+                raise ValueError(f"edit {index} for {label} duplicates insertion point")
+            insertion_points.add(start_index)
+        normalized.append((start_index, end_index, replacement, start_line, end_line))
+
+    previous_start: int | None = None
+    previous_end: int | None = None
+    for start_index, end_index, _replacement, start_line, end_line in sorted(normalized, key=lambda item: (item[0], item[1])):
+        if previous_start is not None and start_index < int(previous_end):
+            raise ValueError(f"line edits overlap in {label} near lines {start_line}-{end_line}")
+        if previous_start is not None and start_index == previous_start and end_index != start_index:
+            raise ValueError(f"line edits overlap in {label} near lines {start_line}-{end_line}")
+        previous_start = start_index
+        previous_end = end_index
+
+    updated = list(lines)
+    for start_index, end_index, replacement, _start_line, _end_line in sorted(normalized, key=lambda item: (item[0], item[1]), reverse=True):
+        updated[start_index:end_index] = replacement.splitlines(keepends=True)
+    return "".join(updated)
 
 
 def detect_project_environment(root: Path) -> dict[str, Any]:

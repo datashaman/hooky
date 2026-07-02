@@ -32,6 +32,12 @@ Runtime files live under `.hooky/runs/<key>/`.
   context before they can be overwritten. If the file changed after the read, the
   write is rejected until the agent reads it again.
 
+- `edit_files`
+  Applies line-oriented edits to one or more existing UTF-8 files. Each edit
+  replaces an inclusive line range with exact replacement text; an edit where
+  `end_line` is `start_line - 1` inserts text before `start_line`. The full batch
+  is validated before any file is written.
+
 - `list_files`
   Lists direct children of a directory.
 

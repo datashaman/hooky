@@ -160,6 +160,115 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertEqual(first.read_text(encoding="utf-8"), "first-before")
             self.assertEqual(second.read_text(encoding="utf-8"), "second-before")
 
+    def test_edit_files_requires_current_uncompacted_read_of_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/App.jsx"
+            source.parent.mkdir()
+            source.write_text("one\ntwo\nthree\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            with self.assertRaisesRegex(ValueError, "was not read in the current uncompacted context"):
+                runtime.edit_files(
+                    {
+                        "files": [
+                            {
+                                "path": "src/App.jsx",
+                                "edits": [{"start_line": 2, "end_line": 2, "replacement": "TWO\n"}],
+                            }
+                        ]
+                    }
+                )
+
+            runtime.read_files({"paths": ["src/App.jsx"]})
+            result = runtime.edit_files(
+                {
+                    "files": [
+                        {
+                            "path": "src/App.jsx",
+                            "edits": [
+                                {"start_line": 2, "end_line": 2, "replacement": "TWO\n"},
+                                {"start_line": 4, "end_line": 3, "replacement": "four\n"},
+                            ],
+                        }
+                    ]
+                }
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(source.read_text(encoding="utf-8"), "one\nTWO\nthree\nfour\n")
+
+    def test_edit_files_is_atomic_when_one_edit_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "src/first.txt"
+            second = root / "src/second.txt"
+            first.parent.mkdir()
+            first.write_text("one\n", encoding="utf-8")
+            second.write_text("alpha\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            runtime.read_files({"paths": ["src/first.txt", "src/second.txt"]})
+
+            with self.assertRaisesRegex(ValueError, "ends after end of file"):
+                runtime.edit_files(
+                    {
+                        "files": [
+                            {
+                                "path": "src/first.txt",
+                                "edits": [{"start_line": 1, "end_line": 1, "replacement": "ONE\n"}],
+                            },
+                            {
+                                "path": "src/second.txt",
+                                "edits": [{"start_line": 2, "end_line": 2, "replacement": "beta\n"}],
+                            },
+                        ]
+                    }
+                )
+
+            self.assertEqual(first.read_text(encoding="utf-8"), "one\n")
+            self.assertEqual(second.read_text(encoding="utf-8"), "alpha\n")
+
+    def test_edit_files_rejects_overlapping_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/App.jsx"
+            source.parent.mkdir()
+            source.write_text("one\ntwo\nthree\n", encoding="utf-8")
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            runtime.read_files({"paths": ["src/App.jsx"]})
+
+            with self.assertRaisesRegex(ValueError, "overlap"):
+                runtime.edit_files(
+                    {
+                        "files": [
+                            {
+                                "path": "src/App.jsx",
+                                "edits": [
+                                    {"start_line": 1, "end_line": 2, "replacement": "changed\n"},
+                                    {"start_line": 2, "end_line": 3, "replacement": "also changed\n"},
+                                ],
+                            }
+                        ]
+                    }
+                )
+
     def test_compaction_invalidates_read_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -810,6 +919,9 @@ The contract is close but still underspecified.
 
     def test_available_tools_include_latest_test_failure_context(self) -> None:
         self.assertIn("latest_test_failure_context", agent_runtime.available_tool_names())
+
+    def test_available_tools_include_edit_files(self) -> None:
+        self.assertIn("edit_files", agent_runtime.available_tool_names())
 
     def test_available_tools_include_time_extension_request(self) -> None:
         self.assertIn("request_time_extension", agent_runtime.available_tool_names())
