@@ -1143,6 +1143,51 @@ def transcript_tool_calls(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return calls if isinstance(calls, list) else []
 
 
+def load_json_list(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def loop_context_stats(root: Path) -> dict[str, Any]:
+    transcript = load_json_list(root / "runtime_transcript.json")
+    tool_events = load_json_list(root / "tool_events.json")
+    compactions = load_json_list(root / "compaction_events.json")
+    archives = load_json_list(root / "pre_compaction_archives.json")
+    assistants = [entry for entry in transcript if transcript_role(entry) == "assistant"]
+    no_tool = [entry for entry in assistants if not transcript_tool_calls(entry)]
+    trailing_no_tool = 0
+    for entry in reversed(assistants):
+        if transcript_tool_calls(entry):
+            break
+        trailing_no_tool += 1
+    archived_messages = 0
+    for archive in archives:
+        older = archive.get("older_messages")
+        if isinstance(older, list):
+            archived_messages += len(older)
+    return {
+        "transcript_entries": len(transcript),
+        "assistant_entries": len(assistants),
+        "no_tool_assistant_entries": len(no_tool),
+        "trailing_no_tool_assistant_entries": trailing_no_tool,
+        "tool_events": len(tool_events),
+        "compactions": len(compactions),
+        "pre_compaction_archives": len(archives),
+        "archived_older_messages": archived_messages,
+        "tool_schema_order": agent_runtime.available_tool_names(),
+        "files": {
+            "runtime_transcript": root / "runtime_transcript.json",
+            "tool_events": root / "tool_events.json",
+            "compaction_events": root / "compaction_events.json",
+            "pre_compaction_archives": root / "pre_compaction_archives.json",
+        },
+    }
+
+
 @evidence_app.command("path")
 def evidence_path(
     ctx: typer.Context,
@@ -1362,6 +1407,33 @@ def loop_stall(
             typer.echo("- " + (agent_runtime.single_line(text, 500) if text else "[empty]"))
 
 
+@app.command("context")
+def loop_context(
+    ctx: typer.Context,
+    attempt: Annotated[str | None, typer.Option(help="Attempt id. Defaults to active/latest attempt, or contract-level runtime if none exists.")] = None,
+) -> None:
+    """Show live-context hygiene signals beside persisted transcript artifacts."""
+    workspace = workspace_from_ctx(ctx)
+    ensure_loop_initialized(workspace)
+    state = read_loop_state(workspace)
+    root = loop_debug_root(workspace, state, attempt)
+    stats = loop_context_stats(root)
+    typer.echo(f"debug_root: {root}")
+    typer.echo(f"runtime_transcript: {stats['files']['runtime_transcript']}")
+    typer.echo(f"tool_events_file: {stats['files']['tool_events']}")
+    typer.echo(f"compaction_events_file: {stats['files']['compaction_events']}")
+    typer.echo(f"pre_compaction_archives_file: {stats['files']['pre_compaction_archives']}")
+    typer.echo(f"transcript_entries: {stats['transcript_entries']}")
+    typer.echo(f"assistant_entries: {stats['assistant_entries']}")
+    typer.echo(f"no_tool_assistant_entries: {stats['no_tool_assistant_entries']}")
+    typer.echo(f"trailing_no_tool_assistant_entries: {stats['trailing_no_tool_assistant_entries']}")
+    typer.echo(f"tool_events: {stats['tool_events']}")
+    typer.echo(f"compactions: {stats['compactions']}")
+    typer.echo(f"pre_compaction_archives: {stats['pre_compaction_archives']}")
+    typer.echo(f"archived_older_messages: {stats['archived_older_messages']}")
+    typer.echo("tool_schema_order: " + ", ".join(stats["tool_schema_order"]))
+
+
 @app.command("inspect")
 def loop_inspect(
     ctx: typer.Context,
@@ -1393,17 +1465,11 @@ def loop_inspect(
     except typer.BadParameter:
         entries = []
     if entries:
-        assistants = [entry for entry in entries if transcript_role(entry) == "assistant"]
-        no_tool = [entry for entry in assistants if not transcript_tool_calls(entry)]
-        trailing_no_tool = 0
-        for entry in reversed(assistants):
-            if transcript_tool_calls(entry):
-                break
-            trailing_no_tool += 1
-        typer.echo(f"transcript_entries: {len(entries)}")
-        typer.echo(f"assistant_entries: {len(assistants)}")
-        typer.echo(f"no_tool_assistant_entries: {len(no_tool)}")
-        typer.echo(f"trailing_no_tool_assistant_entries: {trailing_no_tool}")
+        stats = loop_context_stats(root)
+        typer.echo(f"transcript_entries: {stats['transcript_entries']}")
+        typer.echo(f"assistant_entries: {stats['assistant_entries']}")
+        typer.echo(f"no_tool_assistant_entries: {stats['no_tool_assistant_entries']}")
+        typer.echo(f"trailing_no_tool_assistant_entries: {stats['trailing_no_tool_assistant_entries']}")
         typer.echo("")
         typer.echo("recent:")
         for entry in entries[-last:]:
@@ -1488,6 +1554,11 @@ def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(
     taste_rubric_present = loop_agent.taste_rubric_is_substantive(contract_text)
     reference_visual_required = loop_attempt_requires_reference_visual_evidence(workspace)
     reference_visual_count = loop_attempt_visual_snapshot_count(workspace, latest) if latest else 0
+    context_stats = loop_context_stats(trace_root)
+    has_transcript = bool(context_stats["transcript_entries"])
+    no_tool_entries = int(context_stats["no_tool_assistant_entries"])
+    compactions = int(context_stats["compactions"])
+    archives = int(context_stats["pre_compaction_archives"])
     checks = [
         ("loop_procedure", True, "loop run drives planner, generator, evaluator, and control flow"),
         ("role_separation", True, "planner/generator/evaluator are separate model roles"),
@@ -1501,6 +1572,26 @@ def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(
             f"snapshots={reference_visual_count}" if reference_visual_required else "not required",
         ),
         ("trace_reading", any(path.exists() for path in trace_files), f"trace_root={trace_root}"),
+        (
+            "context_transcript",
+            has_transcript,
+            f"transcript_entries={context_stats['transcript_entries']}",
+        ),
+        (
+            "context_no_tool_drift",
+            no_tool_entries <= 5,
+            f"no_tool_assistant_entries={no_tool_entries} trailing={context_stats['trailing_no_tool_assistant_entries']}",
+        ),
+        (
+            "context_compaction_archives",
+            compactions == 0 or archives >= compactions,
+            f"compactions={compactions} pre_compaction_archives={archives}",
+        ),
+        (
+            "tool_prefix_stability",
+            bool(context_stats["tool_schema_order"]),
+            "tool_schema_order=" + ",".join(context_stats["tool_schema_order"][:6]) + ",...",
+        ),
         ("bottleneck_visible", bool(visible_bottleneck), f"bottleneck={visible_bottleneck or 'none'}"),
         ("harness_restraint", True, "manual review required; delete rules whose failure mode no longer exists"),
     ]

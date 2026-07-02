@@ -3183,8 +3183,8 @@ def available_tool_names() -> list[str]:
         "write_files",
         "edit_files",
         "list_files",
-        "search_files",
         "find_files",
+        "search_files",
         "detect_project_environment",
         "run_tests",
         "latest_test_failure_context",
@@ -3203,10 +3203,9 @@ def available_tool_names() -> list[str]:
         "web_search",
         "fetch_url",
         "request_time_extension",
-        "activate_skill",
-        "read_skill_resource",
         "todo_read",
         "todo_write",
+        "final_report",
     ]
 
 

@@ -135,12 +135,15 @@ Useful local inspection commands:
 hooky -C <workspace> runtime-log --attempt 002 --follow
 hooky -C <workspace> transcript --attempt 002 --role assistant --last 10
 hooky -C <workspace> stall --attempt 002
+hooky -C <workspace> context --attempt 002
 ```
 
 `runtime-log` shows the live model/tool event stream. `transcript` shows the
 persisted conversation entries, including system and user prompts. `stall`
 summarizes repeated assistant turns with no tool calls and detects Markdown
-`final_report` text that was not submitted through the required tool.
+`final_report` text that was not submitted through the required tool. `context`
+shows transcript counts, no-tool assistant drift, compaction/archive counts, and
+the stable base tool schema order.
 
 ## OpenTelemetry
 

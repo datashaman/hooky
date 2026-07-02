@@ -931,6 +931,35 @@ The contract is close but still underspecified.
 
         self.assertIn("search_files", names)
 
+    def test_tool_schema_order_matches_available_tool_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+            )
+
+            schema_names = [tool["function"]["name"] for tool in runtime.tools()]
+
+            self.assertEqual(schema_names, agent_runtime.available_tool_names())
+
+    def test_compaction_prompt_preserves_required_survival_checklist(self) -> None:
+        prompt = agent_runtime.compaction_user_prompt(
+            "Previous state.",
+            [{"role": "assistant", "content": "I read src/App.jsx and saw a failing test."}],
+        )
+
+        self.assertIn("Objective", prompt)
+        self.assertIn("Current state", prompt)
+        self.assertIn("Decisions and constraints", prompt)
+        self.assertIn("Files and artifacts", prompt)
+        self.assertIn("Tool results and failures", prompt)
+        self.assertIn("Todo state", prompt)
+        self.assertIn("Next relevant actions", prompt)
+        self.assertIn("Previous state.", prompt)
+        self.assertIn("src/App.jsx", prompt)
+
     def test_evidence_tools_capture_notes_and_command_output_under_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

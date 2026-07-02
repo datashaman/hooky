@@ -63,5 +63,40 @@ Runtime logs, transcripts, tool events, OpenTelemetry-style spans, evaluator rep
 Human-readable proof artifacts live in `evidence.md`; command output and
 screenshots referenced by that report are captured by Hooky evidence tools.
 
+## Context Architecture
+
+Hooky keeps three related records with different jobs:
+
+- Live model context is the message list sent to the current model role. It
+  includes the role system prompt, the user task, assistant messages, tool calls,
+  tool results, runtime nudges, activated skill instructions, and any attached
+  visual evidence. It is performance-sensitive and may be compacted.
+- Runtime transcripts are append-only audit records written under the active
+  trace directory. They include assistant messages even when `tool_calls=0`.
+  They are never treated as a source of truth for continuing the model session;
+  they exist for debugging, harness review, and post-run inspection.
+- Durable loop files under `.hooky/runs/<key>/` hold proposal, contract,
+  feature list, progress, log, state, attempts, evidence, and reports. These are
+  the resumable state of the loop.
+
+To preserve prompt-cache behavior and make traces comparable, a role run should
+keep its stable prefix stable: same model, same current working directory, same
+role system prompt shape, same tool schema ordering, and same sandbox/policy
+surface. New runtime facts should be appended as later messages or durable files,
+not by rewriting earlier context.
+
+Compaction is allowed only for live model context. A compaction pass must retain:
+
+- the original system/user prefix;
+- an anchored summary with objective, current state, decisions, files/artifacts,
+  tool failures, todo state, and next actions;
+- active skill instructions;
+- recent assistant/tool exchanges;
+- all append-only transcript and tool-event artifacts on disk.
+
+After compaction, read-before-write observations are intentionally invalidated.
+Agents must call `read_files` again before overwriting or line-editing existing
+files.
+
 For typical run sequences, including auto-approve, human-in-the-loop, and GitHub
 event-triggered flows, see [`usage-sequences.md`](usage-sequences.md).

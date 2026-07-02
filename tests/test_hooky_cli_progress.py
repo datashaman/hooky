@@ -1498,9 +1498,16 @@ class HookyProgressTests(unittest.TestCase):
             encoding="utf-8",
         )
         (trace_root / "runtime_events.log").write_text("2026-06-30T00:00:01+00:00 assistant tool_calls=0\n", encoding="utf-8")
+        (trace_root / "tool_events.json").write_text("[]\n", encoding="utf-8")
+        (trace_root / "compaction_events.json").write_text(json.dumps([{"reason": "context_threshold"}]) + "\n", encoding="utf-8")
+        (trace_root / "pre_compaction_archives.json").write_text(
+            json.dumps([{"older_messages": [{"role": "assistant", "content": "older"}]}]) + "\n",
+            encoding="utf-8",
+        )
 
         transcript = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001"])
         stall = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "stall", "--attempt", "001"])
+        context = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "context", "--attempt", "001"])
         runtime_log = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "runtime-log", "--attempt", "001"])
 
         self.assertEqual(transcript.exit_code, 0, transcript.output)
@@ -1508,6 +1515,10 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("final_report", transcript.output)
         self.assertEqual(stall.exit_code, 0, stall.output)
         self.assertIn("fake_final_report_text_entries: 1", stall.output)
+        self.assertEqual(context.exit_code, 0, context.output)
+        self.assertIn("compactions: 1", context.output)
+        self.assertIn("archived_older_messages: 1", context.output)
+        self.assertIn("tool_schema_order: read_files, read_file_excerpt, write_files, edit_files", context.output)
         self.assertEqual(runtime_log.exit_code, 0, runtime_log.output)
         self.assertIn("tool_calls=0", runtime_log.output)
 
@@ -1537,6 +1548,8 @@ class HookyProgressTests(unittest.TestCase):
         )
         (trace_root / "runtime_events.log").write_text("role=evaluator assistant tools=read_files\n", encoding="utf-8")
         (trace_root / "tool_events.json").write_text(json.dumps([{"name": "read_files", "result": {"ok": True}}]), encoding="utf-8")
+        (trace_root / "compaction_events.json").write_text("[]\n", encoding="utf-8")
+        (trace_root / "pre_compaction_archives.json").write_text("[]\n", encoding="utf-8")
 
         inspect = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "inspect", "--attempt", "001"])
         grep = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "trace-grep", "TodoMVC", "--attempt", "001"])
@@ -1550,6 +1563,8 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(review.exit_code, 0, review.output)
         self.assertIn("Loop Harness Review", review.output)
         self.assertIn("missing substantive Taste Rubric in contract.md", review.output)
+        self.assertIn("context_transcript", review.output)
+        self.assertIn("tool_prefix_stability", review.output)
         self.assertTrue((hooky_cli.loop_dir(self.workspace) / "harness_review.md").exists())
 
     def test_loop_status_uses_last_run_workspace_when_current_directory_has_no_loop(self) -> None:
