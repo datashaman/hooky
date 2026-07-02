@@ -883,6 +883,38 @@ The contract is close but still underspecified.
             with self.assertRaisesRegex(ValueError, "activate skill before reading resources"):
                 runtime.read_skill_resource({"name": "example", "path": "details.md"})
 
+    def test_skill_catalog_message_lists_available_skills_by_name_and_description(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_path = root / ".agents/skills/example/SKILL.md"
+            skill_path.parent.mkdir(parents=True)
+            skill_path.write_text(
+                "---\nname: example\ndescription: Example skill.\n---\n\n# Example\n",
+                encoding="utf-8",
+            )
+            runtime = agent_runtime.ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                skills=agent_skills.discover_skills(root),
+            )
+
+            message = agent_runtime.skill_catalog_message(runtime)
+
+            self.assertIsNotNone(message)
+            self.assertEqual(message["role"], "user")
+            self.assertIn("example", message["content"])
+            self.assertIn("Example skill.", message["content"])
+            self.assertIn("activate_skill", message["content"])
+
+    def test_skill_catalog_message_is_none_without_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            self.assertIsNone(agent_runtime.skill_catalog_message(runtime))
+
     def test_detect_project_environment_finds_package_manager_and_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

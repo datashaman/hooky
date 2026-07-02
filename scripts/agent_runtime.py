@@ -792,15 +792,16 @@ class ToolRuntime:
             try:
                 path = self.resolve_path(str(raw_path))
                 self.validate_read_path(path)
-                full_content = path.read_text(encoding="utf-8")
-                content = read_text_prefix(path, max_bytes)
+                raw_bytes = path.read_bytes()
+                full_content = raw_bytes.decode("utf-8")
                 self.record_read_observation(path, full_content)
+                content = raw_bytes[: max(1, max_bytes)].decode("utf-8", errors="replace")
                 files.append(
                     {
                         "path": relative_to(path, self.working_folder),
                         "content": content,
-                        "bytes": path.stat().st_size,
-                        "truncated": path.stat().st_size > len(content.encode("utf-8")),
+                        "bytes": len(raw_bytes),
+                        "truncated": len(raw_bytes) > len(content.encode("utf-8")),
                     }
                 )
             except Exception as exc:  # noqa: BLE001 - preserve batch reads when one file is absent.
@@ -810,15 +811,9 @@ class ToolRuntime:
     def is_read_blocked(self, path: Path) -> bool:
         relative = relative_to(path.resolve(), self.working_folder)
         parts = Path(relative).parts
-        for prefix in self.read_allowed_prefixes:
-            prefix_parts = Path(prefix).parts
-            if parts[: len(prefix_parts)] == prefix_parts:
-                return False
-        for prefix in self.read_blocked_prefixes:
-            prefix_parts = Path(prefix).parts
-            if parts[: len(prefix_parts)] == prefix_parts:
-                return True
-        return False
+        if matches_any_prefix(parts, self.read_allowed_prefixes):
+            return False
+        return matches_any_prefix(parts, self.read_blocked_prefixes)
 
     def validate_read_path(self, path: Path) -> None:
         if self.is_read_blocked(path):
@@ -919,19 +914,10 @@ class ToolRuntime:
             raise ValueError(f"{tool_name} is disabled for this agent; finish with final_report instead")
         relative = relative_to(path, self.working_folder)
         parts = Path(relative).parts
-        if self.write_allowed_prefixes:
-            allowed = False
-            for prefix in self.write_allowed_prefixes:
-                prefix_parts = Path(prefix).parts
-                if parts[: len(prefix_parts)] == prefix_parts:
-                    allowed = True
-                    break
-            if not allowed:
-                raise ValueError(f"agent is not allowed to write outside allowed paths: {relative}")
-        for prefix in self.write_blocked_prefixes:
-            prefix_parts = Path(prefix).parts
-            if parts[: len(prefix_parts)] == prefix_parts:
-                raise FileNotFoundError(f"path not found: {relative}")
+        if self.write_allowed_prefixes and not matches_any_prefix(parts, self.write_allowed_prefixes):
+            raise ValueError(f"agent is not allowed to write outside allowed paths: {relative}")
+        if matches_any_prefix(parts, self.write_blocked_prefixes):
+            raise FileNotFoundError(f"path not found: {relative}")
         if path.name in set(self.write_blocked_names):
             raise ValueError(f"agent is not allowed to write system-managed file: {relative}")
 
@@ -940,11 +926,7 @@ class ToolRuntime:
             return False
         relative = relative_to(path.resolve(), self.working_folder)
         parts = Path(relative).parts
-        for prefix in self.write_allowed_prefixes:
-            prefix_parts = Path(prefix).parts
-            if parts[: len(prefix_parts)] == prefix_parts:
-                return True
-        return False
+        return matches_any_prefix(parts, self.write_allowed_prefixes)
 
     def list_files(self, args: dict[str, Any]) -> dict[str, Any]:
         path = self.resolve_path(str(args.get("path") or "."))
@@ -1011,12 +993,10 @@ class ToolRuntime:
             violation = self.bash_command_validator(command)
             if violation:
                 return {"ok": False, "error": f"test command blocked by agent policy: {violation}", "command": command}
-        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
         timeout_seconds = int(args.get("timeout_seconds") or self.bash_timeout_seconds)
         started = utc_timestamp()
-        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=timeout_seconds)
+        completed, timed_out, protected_changes = self.run_guarded_shell_command(command, timeout_seconds=timeout_seconds)
         ended = utc_timestamp()
-        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
         output = normalize_subprocess_output(completed.stdout) + normalize_subprocess_output(completed.stderr)
         output_path = write_tool_result_artifact(self.working_folder, "test-runs", output)
         result = {
@@ -1031,7 +1011,6 @@ class ToolRuntime:
             "summary": parse_test_output(output, completed.returncode),
         }
         if protected_changes:
-            restore_protected_paths(self.working_folder, before, protected_changes)
             result["ok"] = False
             result["error"] = "test command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20])
         return result
@@ -1166,30 +1145,42 @@ class ToolRuntime:
         )
         return {"ok": True, "evidence_path": relative_to(path, self.working_folder)}
 
+    def command_policy_violation(self, command: str, *, label: str = "command") -> str | None:
+        long_running_violation = long_running_bash_violation(command)
+        if long_running_violation:
+            return long_running_violation
+        lowered = command.lower()
+        if ".hooky" in lowered and self.read_blocked_prefixes:
+            return f"{label} references a path that is not available to this agent"
+        for blocked in self.bash_blocked_substrings:
+            if blocked.lower() in lowered:
+                return f"{label} blocked by agent policy: {blocked}"
+        if self.bash_command_validator:
+            violation = self.bash_command_validator(command)
+            if violation:
+                return f"{label} blocked by agent policy: {violation}"
+        return None
+
+    def run_guarded_shell_command(self, command: str, *, timeout_seconds: int) -> tuple[subprocess.CompletedProcess[str], bool, list[str]]:
+        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
+        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=timeout_seconds)
+        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
+        if protected_changes:
+            restore_protected_paths(self.working_folder, before, protected_changes)
+        return completed, timed_out, protected_changes
+
     def append_evidence_command(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args.get("command") or "").strip()
         if not command:
             raise ValueError("command is required")
-        long_running_violation = long_running_bash_violation(command)
-        if long_running_violation:
-            return {"ok": False, "captured": False, "error": long_running_violation, "command": command}
-        lowered = command.lower()
-        if ".hooky" in lowered and self.read_blocked_prefixes:
-            return {"ok": False, "captured": False, "error": "command references a path that is not available to this agent", "command": command}
-        for blocked in self.bash_blocked_substrings:
-            if blocked.lower() in lowered:
-                return {"ok": False, "captured": False, "error": f"command blocked by agent policy: {blocked}", "command": command}
-        if self.bash_command_validator:
-            violation = self.bash_command_validator(command)
-            if violation:
-                return {"ok": False, "error": f"command blocked by agent policy: {violation}", "command": command}
+        violation = self.command_policy_violation(command)
+        if violation:
+            return {"ok": False, "captured": False, "error": violation, "command": command}
         timeout_seconds = int(args.get("timeout_seconds") or self.bash_timeout_seconds)
         title = str(args.get("title") or "Command evidence").strip() or "Command evidence"
-        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
         started = utc_timestamp()
-        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=timeout_seconds)
+        completed, timed_out, protected_changes = self.run_guarded_shell_command(command, timeout_seconds=timeout_seconds)
         ended = utc_timestamp()
-        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
         output = normalize_subprocess_output(completed.stdout) + normalize_subprocess_output(completed.stderr)
         command_output_path = write_evidence_command_output(
             self.working_folder,
@@ -1210,8 +1201,6 @@ class ToolRuntime:
             output_tail=output[-4000:],
             protected_changes=protected_changes,
         )
-        if protected_changes:
-            restore_protected_paths(self.working_folder, before, protected_changes)
         return {
             "ok": completed.returncode == 0 and not timed_out and not protected_changes,
             "captured": True,
@@ -1291,24 +1280,11 @@ class ToolRuntime:
 
     def bash(self, args: dict[str, Any]) -> dict[str, Any]:
         command = str(args["command"])
-        lowered = command.lower()
-        long_running_violation = long_running_bash_violation(command)
-        if long_running_violation:
-            return {"ok": False, "error": long_running_violation}
-        if ".hooky" in lowered and self.read_blocked_prefixes:
-            return {"ok": False, "error": "bash command references a path that is not available to this agent"}
-        for blocked in self.bash_blocked_substrings:
-            if blocked.lower() in lowered:
-                return {"ok": False, "error": f"bash command blocked by agent policy: {blocked}"}
-        if self.bash_command_validator:
-            violation = self.bash_command_validator(command)
-            if violation:
-                return {"ok": False, "error": f"bash command blocked by agent policy: {violation}"}
-        before = snapshot_protected_paths(self.working_folder, self.bash_protected_prefixes)
-        completed, timed_out = run_shell_command(command, cwd=self.working_folder, timeout_seconds=self.bash_timeout_seconds)
-        protected_changes = protected_path_changes(self.working_folder, self.bash_protected_prefixes, before)
+        violation = self.command_policy_violation(command, label="bash command")
+        if violation:
+            return {"ok": False, "error": violation}
+        completed, timed_out, protected_changes = self.run_guarded_shell_command(command, timeout_seconds=self.bash_timeout_seconds)
         if protected_changes:
-            restore_protected_paths(self.working_folder, before, protected_changes)
             return {
                 "ok": False,
                 "returncode": completed.returncode,
@@ -1739,6 +1715,17 @@ def run_tool_agent(
             },
         ]
     )
+    catalog_message = skill_catalog_message(runtime)
+    if catalog_message:
+        messages.append(catalog_message)
+        transcript.append(
+            {
+                "role": "skill_catalog",
+                "message": catalog_message["content"],
+                "started_at": utc_timestamp(),
+                "ended_at": utc_timestamp(),
+            }
+        )
     preselected_skill_message = preselected_skills_message(runtime)
     if preselected_skill_message:
         messages.append(preselected_skill_message)
@@ -2306,6 +2293,12 @@ def start_heartbeat_thread(
     return thread
 
 
+def skill_catalog_message(runtime: ToolRuntime) -> dict[str, Any] | None:
+    if not runtime.skills:
+        return None
+    return {"role": "user", "content": agent_skills.skill_catalog(runtime.skills)}
+
+
 def preselected_skills_message(runtime: ToolRuntime) -> dict[str, Any] | None:
     if not runtime.preselected_skill_names:
         return None
@@ -2495,6 +2488,25 @@ def accumulate_usage(total: dict[str, Any], usage: dict[str, Any]) -> None:
     total["cost"] = round(float(total.get("cost") or 0) + float(usage.get("cost") or 0), 8)
 
 
+def write_runtime_artifact_files(
+    root: Path,
+    transcript: list[dict[str, Any]],
+    tool_events: list[dict[str, Any]],
+    compaction_events: list[dict[str, Any]],
+    pre_compaction_archives: list[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "tool_calls.md").write_text(render_tool_calls_markdown(tool_events), encoding="utf-8")
+    (root / "runtime_timeline.md").write_text(render_runtime_timeline_markdown(transcript), encoding="utf-8")
+    (root / "runtime_events.snapshot.log").write_text(render_runtime_events_log(transcript), encoding="utf-8")
+    (root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (root / "runtime_metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def write_runtime_log(
     report_root: Path,
     transcript: list[dict[str, Any]],
@@ -2504,25 +2516,15 @@ def write_runtime_log(
     *,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    report_root.mkdir(parents=True, exist_ok=True)
-    (report_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "tool_calls.md").write_text(render_tool_calls_markdown(tool_events), encoding="utf-8")
-    (report_root / "runtime_timeline.md").write_text(render_runtime_timeline_markdown(transcript), encoding="utf-8")
-    (report_root / "runtime_events.snapshot.log").write_text(render_runtime_events_log(transcript), encoding="utf-8")
-    (report_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (report_root / "runtime_metadata.json").write_text(
-        json.dumps(metadata or {"schema_version": 1, "written_at": utc_timestamp()}, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    resolved_metadata = metadata or {"schema_version": 1, "written_at": utc_timestamp()}
+    write_runtime_artifact_files(report_root, transcript, tool_events, compaction_events, pre_compaction_archives, resolved_metadata)
     write_runtime_invocation_archive(
         report_root,
         transcript,
         tool_events,
         compaction_events,
         pre_compaction_archives,
-        metadata or {"schema_version": 1, "written_at": utc_timestamp()},
+        resolved_metadata,
     )
 
 
@@ -2537,15 +2539,7 @@ def write_runtime_invocation_archive(
     agent_name = safe_path_segment(str(metadata.get("agent_name") or "agent"))
     timestamp = safe_path_segment(str(metadata.get("started_at") or metadata.get("written_at") or utc_timestamp()))
     archive_root = report_root / "invocations" / f"{timestamp}-{agent_name}"
-    archive_root.mkdir(parents=True, exist_ok=True)
-    (archive_root / "runtime_transcript.json").write_text(json.dumps(transcript, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (archive_root / "tool_events.json").write_text(json.dumps(tool_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (archive_root / "tool_calls.md").write_text(render_tool_calls_markdown(tool_events), encoding="utf-8")
-    (archive_root / "runtime_timeline.md").write_text(render_runtime_timeline_markdown(transcript), encoding="utf-8")
-    (archive_root / "runtime_events.snapshot.log").write_text(render_runtime_events_log(transcript), encoding="utf-8")
-    (archive_root / "compaction_events.json").write_text(json.dumps(compaction_events, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (archive_root / "pre_compaction_archives.json").write_text(json.dumps(pre_compaction_archives, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (archive_root / "runtime_metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_runtime_artifact_files(archive_root, transcript, tool_events, compaction_events, pre_compaction_archives, metadata)
 
 
 def safe_path_segment(value: str) -> str:
@@ -4196,3 +4190,11 @@ def string_array_schema() -> dict[str, Any]:
 
 def relative_to(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
+
+
+def matches_any_prefix(parts: tuple[str, ...], prefixes: list[str]) -> bool:
+    for prefix in prefixes:
+        prefix_parts = Path(prefix).parts
+        if parts[: len(prefix_parts)] == prefix_parts:
+            return True
+    return False

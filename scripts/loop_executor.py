@@ -419,14 +419,6 @@ def external_assistant_event(timestamp: str, executor: str, event: dict[str, Any
     return f"{timestamp} assistant executor={executor} model={json.dumps(str(model))}"
 
 
-def normalize_output(value: str | bytes | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
-
-
 def extract_executor_error(stdout: str | None, stderr: str | None) -> str | None:
     stderr_text = (stderr or "").strip()
     if stderr_text:

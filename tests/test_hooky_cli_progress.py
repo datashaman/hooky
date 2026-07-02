@@ -127,9 +127,9 @@ class HookyProgressTests(unittest.TestCase):
             result = CliRunner().invoke(hooky_cli.app, ["-C", str(workspace), "init"])
 
             self.assertEqual(result.exit_code, 0, result.output)
-            head = hooky_cli.git_command(workspace, ["rev-parse", "--verify", "HEAD"], check=False)
-            show = hooky_cli.git_command(workspace, ["show", "HEAD:package.json"], check=False)
-            status = hooky_cli.git_command(workspace, ["status", "--short", "--", ".", ":!.hooky"], check=False)
+            head = hooky_cli.agent_runtime.git_run(workspace, ["rev-parse", "--verify", "HEAD"], check=False)
+            show = hooky_cli.agent_runtime.git_run(workspace, ["show", "HEAD:package.json"], check=False)
+            status = hooky_cli.agent_runtime.git_run(workspace, ["status", "--short", "--", ".", ":!.hooky"], check=False)
             self.assertEqual(head.returncode, 0)
             self.assertEqual(show.stdout, '{"scripts":{}}\n')
             self.assertEqual(status.stdout, "")

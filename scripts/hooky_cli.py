@@ -282,6 +282,12 @@ def write_loop_progress(workspace: Path, state: dict[str, Any], *, note: str | N
     loop_progress_path(workspace).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def record_loop_transition(workspace: Path, state: dict[str, Any], *, note: str, log_op: str, log_title: str, log_body: str = "") -> None:
+    write_loop_state(workspace, state)
+    write_loop_progress(workspace, state, note=note)
+    append_loop_log(workspace, log_op, log_title, log_body)
+
+
 def next_loop_attempt_id(state: dict[str, Any]) -> str:
     attempts = state.get("attempts") if isinstance(state.get("attempts"), list) else []
     numbers: list[int] = []
@@ -426,9 +432,7 @@ def apply_loop_evaluator_report(
         note += f" Bottleneck: {bottleneck}."
     if findings:
         note += " Findings: " + "; ".join(str(item) for item in findings)
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=note)
-    append_loop_log(workspace, "evaluator", f"attempt {attempt_id} report", note)
+    record_loop_transition(workspace, state, note=note, log_op="evaluator", log_title=f"attempt {attempt_id} report", log_body=note)
     return state
 
 
@@ -446,15 +450,16 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
         evidence_failures.append(
             "Evaluator cannot pass this attempt: the executable test suite appears to contain only placeholder tests."
         )
-    test_failures = loop_attempt_test_evidence_failures(workspace, attempt_id)
+    events = loop_attempt_tool_events(workspace, attempt_id)
+    test_failures = loop_attempt_test_evidence_failures(events)
     evidence_failures.extend(test_failures)
-    if loop_attempt_requires_visual_evidence(workspace) and not loop_attempt_captured_visual_snapshot(workspace, attempt_id):
+    if loop_attempt_requires_visual_evidence(workspace) and not loop_attempt_captured_visual_snapshot(events):
         evidence_failures.append(
             "Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app."
         )
-    reference_visual_failures = loop_attempt_reference_visual_evidence_failures(workspace, attempt_id)
+    reference_visual_failures = loop_attempt_reference_visual_evidence_failures(workspace, events)
     evidence_failures.extend(reference_visual_failures)
-    visual_failures = loop_attempt_blocking_visual_failures(workspace, attempt_id, report)
+    visual_failures = loop_attempt_blocking_visual_failures(workspace, events, report)
     evidence_failures.extend(visual_failures)
     if not evidence_failures:
         return report
@@ -475,8 +480,7 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
     return amended
 
 
-def loop_attempt_test_evidence_failures(workspace: Path, attempt_id: str) -> list[str]:
-    events = loop_attempt_tool_events(workspace, attempt_id)
+def loop_attempt_test_evidence_failures(events: list[dict[str, Any]]) -> list[str]:
     test_events = [event for event in events if tool_event_is_test_execution(event)]
     if not test_events:
         return []
@@ -526,11 +530,11 @@ def tool_result_passed(result: dict[str, Any]) -> bool:
     return False
 
 
-def loop_attempt_blocking_visual_failures(workspace: Path, attempt_id: str, report: dict[str, Any]) -> list[str]:
+def loop_attempt_blocking_visual_failures(workspace: Path, events: list[dict[str, Any]], report: dict[str, Any]) -> list[str]:
     if not loop_attempt_requires_visual_evidence(workspace):
         return []
     failures: list[str] = []
-    failures.extend(blocking_visual_failures_from_snapshot_events(loop_attempt_tool_events(workspace, attempt_id)))
+    failures.extend(blocking_visual_failures_from_snapshot_events(events))
     findings_text = " ".join(str(item) for item in report.get("findings", []) if isinstance(item, str)).lower()
     bottleneck_text = str(report.get("bottleneck") or "").lower()
     report_text = f"{findings_text} {bottleneck_text}"
@@ -538,13 +542,13 @@ def loop_attempt_blocking_visual_failures(workspace: Path, attempt_id: str, repo
         failures.append(
             "Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content."
         )
-    return unique_lines(failures)
+    return agent_runtime.dedupe_strings(failures)
 
 
-def loop_attempt_reference_visual_evidence_failures(workspace: Path, attempt_id: str) -> list[str]:
+def loop_attempt_reference_visual_evidence_failures(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
     if not loop_attempt_requires_reference_visual_evidence(workspace):
         return []
-    count = loop_attempt_visual_snapshot_count(workspace, attempt_id)
+    count = loop_attempt_visual_snapshot_count(events)
     if count >= 2:
         return []
     return [
@@ -590,7 +594,7 @@ def blocking_visual_failures_from_snapshot_events(events: list[dict[str, Any]]) 
                 if clipped_item_is_blocking(item):
                     failures.append("Evaluator cannot pass this attempt: visual snapshot has clipped visible text or controls.")
                     break
-    return unique_lines(failures)
+    return agent_runtime.dedupe_strings(failures)
 
 
 def numeric_less_than(value: object, limit: float) -> bool:
@@ -641,17 +645,6 @@ def report_mentions_blocking_visual_defect(text: str) -> bool:
     if any(term in text for term in decorative_terms) and not any(term in text for term in primary_terms):
         return False
     return any(term in text for term in visual_terms) and any(term in text for term in primary_terms)
-
-
-def unique_lines(lines: list[str]) -> list[str]:
-    seen: set[str] = set()
-    unique: list[str] = []
-    for line in lines:
-        if line in seen:
-            continue
-        seen.add(line)
-        unique.append(line)
-    return unique
 
 
 def has_placeholder_only_tests(workspace: Path) -> bool:
@@ -721,13 +714,13 @@ def loop_attempt_requires_reference_visual_evidence(workspace: Path) -> bool:
     )
 
 
-def loop_attempt_captured_visual_snapshot(workspace: Path, attempt_id: str) -> bool:
-    return loop_attempt_visual_snapshot_count(workspace, attempt_id) > 0
+def loop_attempt_captured_visual_snapshot(events: list[dict[str, Any]]) -> bool:
+    return loop_attempt_visual_snapshot_count(events) > 0
 
 
-def loop_attempt_visual_snapshot_count(workspace: Path, attempt_id: str) -> int:
+def loop_attempt_visual_snapshot_count(events: list[dict[str, Any]]) -> int:
     count = 0
-    for event in loop_attempt_tool_events(workspace, attempt_id):
+    for event in events:
         if event.get("name") != "capture_visual_snapshot":
             continue
         result = event.get("result")
@@ -921,24 +914,9 @@ def resolve_workspace_path(workspace: Path, path: Path) -> Path:
     return workspace_path if workspace_path.exists() else path
 
 
-def git_command(workspace: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=workspace,
-        check=check,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-
 def is_git_worktree(workspace: Path) -> bool:
-    result = git_command(workspace, ["rev-parse", "--is-inside-work-tree"], check=False)
+    result = agent_runtime.git_run(workspace, ["rev-parse", "--is-inside-work-tree"], check=False)
     return result.returncode == 0 and result.stdout.strip() == "true"
-
-
-def git_has_head(workspace: Path) -> bool:
-    return git_command(workspace, ["rev-parse", "--verify", "HEAD"], check=False).returncode == 0
 
 
 def ensure_workspace_ready(workspace: Path, *, git: bool = True) -> None:
@@ -947,8 +925,8 @@ def ensure_workspace_ready(workspace: Path, *, git: bool = True) -> None:
         return
     was_worktree = is_git_worktree(workspace)
     if not was_worktree:
-        git_command(workspace, ["init"], check=True)
-    if not was_worktree or not git_has_head(workspace):
+        agent_runtime.git_run(workspace, ["init"], check=True)
+    if not was_worktree or not agent_runtime.git_has_head(workspace):
         agent_runtime.ensure_git_baseline(workspace)
 
 
@@ -1587,7 +1565,7 @@ def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(
     contract_text = loop_contract_path(workspace).read_text(encoding="utf-8", errors="ignore") if loop_contract_path(workspace).exists() else ""
     taste_rubric_present = loop_agent.taste_rubric_is_substantive(contract_text)
     reference_visual_required = loop_attempt_requires_reference_visual_evidence(workspace)
-    reference_visual_count = loop_attempt_visual_snapshot_count(workspace, latest) if latest else 0
+    reference_visual_count = loop_attempt_visual_snapshot_count(loop_attempt_tool_events(workspace, latest)) if latest else 0
     context_stats = loop_context_stats(trace_root)
     has_transcript = bool(context_stats["transcript_entries"])
     no_tool_entries = int(context_stats["no_tool_assistant_entries"])
@@ -1716,9 +1694,14 @@ def _run_model_loop_once(
     state["contract_accepted"] = False
     state["last_action"] = "run:planner"
     state.setdefault("role_usage", {})["planner"] = planner_usage
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(planner_report.get("summary") or "Planner wrote contract proposal."))
-    append_loop_log(workspace, "planner", "planner wrote contract", str(planner_report.get("summary") or ""))
+    record_loop_transition(
+        workspace,
+        state,
+        note=str(planner_report.get("summary") or "Planner wrote contract proposal."),
+        log_op="planner",
+        log_title="planner wrote contract",
+        log_body=str(planner_report.get("summary") or ""),
+    )
 
     max_contract_rounds = int(os.environ.get("LOOP_CONTRACT_MAX_ROUNDS", "5"))
     review_feedback = ""
@@ -1739,9 +1722,14 @@ def _run_model_loop_once(
         state["contract_accepted"] = False
         state["last_action"] = f"run:generator-contract:{round_number}"
         state.setdefault("role_usage", {})[f"generator_contract_round_{round_number}"] = generator_contract_usage
-        write_loop_state(workspace, state)
-        write_loop_progress(workspace, state, note=str(generator_contract_report.get("summary") or "Generator proposed contract."))
-        append_loop_log(workspace, "generator", f"generator proposed contract round {round_number}", str(generator_contract_report.get("summary") or ""))
+        record_loop_transition(
+            workspace,
+            state,
+            note=str(generator_contract_report.get("summary") or "Generator proposed contract."),
+            log_op="generator",
+            log_title=f"generator proposed contract round {round_number}",
+            log_body=str(generator_contract_report.get("summary") or ""),
+        )
 
         evaluator_contract_report, evaluator_contract_usage = run_model_role_with_retries(
             workspace,
@@ -1784,9 +1772,7 @@ def _run_model_loop_once(
         attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
         final_attempt_id = attempt_id
         state["last_action"] = "run:start-attempt"
-        write_loop_state(workspace, state)
-        write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
-        append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
+        record_loop_transition(workspace, state, note=f"Attempt {attempt_id} started.", log_op="attempt", log_title=f"attempt {attempt_id} started")
 
         generator_report, generator_usage = run_model_role_with_retries(
             workspace,
@@ -1808,9 +1794,14 @@ def _run_model_loop_once(
         state.setdefault("role_usage", {})["generator_implementation"] = generator_usage
         state.setdefault("role_usage", {})[f"generator_implementation_{attempt_id}"] = generator_usage
         state["last_action"] = "run:generator-implement"
-        write_loop_state(workspace, state)
-        write_loop_progress(workspace, state, note=str(generator_report.get("summary") or "Generator completed implementation pass."))
-        append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(generator_report.get("summary") or ""))
+        record_loop_transition(
+            workspace,
+            state,
+            note=str(generator_report.get("summary") or "Generator completed implementation pass."),
+            log_op="generator",
+            log_title=f"attempt {attempt_id} implementation",
+            log_body=str(generator_report.get("summary") or ""),
+        )
 
         try:
             evaluator_report, evaluator_usage = run_model_role_with_retries(
@@ -1921,9 +1912,7 @@ def loop_run(
     state["status"] = "contract-accepted"
     state["contract_accepted"] = True
     state["last_action"] = "run:contract-accepted"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=f"Contract accepted. {review}")
-    append_loop_log(workspace, "evaluator", "contract accepted", review)
+    record_loop_transition(workspace, state, note=f"Contract accepted. {review}", log_op="evaluator", log_title="contract accepted", log_body=review)
 
     attempt_id = next_loop_attempt_id(state)
     attempt_dir = loop_attempt_dir(workspace, attempt_id)
@@ -2001,49 +1990,21 @@ def loop_run(
     state["last_action"] = f"run:evaluator-report:{recommendation}"
     if bottleneck:
         state["bottleneck"] = bottleneck
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=f"Run completed with status={status}, recommendation={recommendation}.")
-    append_loop_log(workspace, "evaluator", f"attempt {attempt_id} {status}", f"recommendation: {recommendation}")
+    record_loop_transition(
+        workspace,
+        state,
+        note=f"Run completed with status={status}, recommendation={recommendation}.",
+        log_op="evaluator",
+        log_title=f"attempt {attempt_id} {status}",
+        log_body=f"recommendation: {recommendation}",
+    )
     write_last_run_workspace(last_run_path, workspace)
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"status: {state['status']}")
     typer.echo(f"report: {report_path}")
 
 
-@app.command("run")
-def run_default(
-    ctx: typer.Context,
-    title: Annotated[str | None, typer.Option(help="Problem title used when initializing a new loop.")] = None,
-    proposal: Annotated[str, typer.Option(help="Planner proposal text for contract.md.")] = "",
-    proposal_file: Annotated[Path | None, typer.Option(help="Problem proposal Markdown file.")] = None,
-    criteria: Annotated[str, typer.Option(help="Dry-run generator-proposed done criteria.", hidden=True)] = "- Define done criteria explicitly.",
-    review: Annotated[str, typer.Option(help="Dry-run evaluator contract review text.", hidden=True)] = "Contract criteria are accepted for this local run.",
-    status: Annotated[str, typer.Option(help="Dry-run evaluator status: pass or fail.", hidden=True)] = "pass",
-    recommendation: Annotated[str, typer.Option(help="Dry-run evaluator recommendation: continue, restart-attempt, restart-contract, or stop.", hidden=True)] = "continue",
-    bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.", hidden=True)] = None,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
-    executor: Annotated[str | None, typer.Option(help="Role executor: native, shell, codex, or claude. Defaults to HOOKY_EXECUTOR or native.")] = None,
-    force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
-    run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
-    last_run_path: Annotated[Path, typer.Option(help="Path used by status/watch to find the latest loop workspace.")] = DEFAULT_LAST_RUN_PATH,
-) -> None:
-    """Run the loop pipeline."""
-    loop_run(
-        ctx,
-        title=title,
-        proposal=proposal,
-        proposal_file=proposal_file,
-        criteria=criteria,
-        review=review,
-        status=status,
-        recommendation=recommendation,
-        bottleneck=bottleneck,
-        dry_run=dry_run,
-        executor=executor,
-        force=force,
-        run_key=run_key,
-        last_run_path=last_run_path,
-    )
+run_default = app.command("run")(loop_run)
 
 
 @app.command("log", hidden=True)
@@ -2056,11 +2017,9 @@ def loop_log(
     """Append an entry to the selected run's log.md."""
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
-    append_loop_log(workspace, op, title, body)
     state = read_loop_state(workspace)
     state["last_action"] = op
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=title)
+    record_loop_transition(workspace, state, note=title, log_op=op, log_title=title, log_body=body)
     typer.echo(f"log: {loop_log_path(workspace)}")
 
 
@@ -2081,9 +2040,7 @@ def loop_proposal(
     state["status"] = "proposal-written"
     state["contract_accepted"] = False
     state["last_action"] = "proposal"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note="Problem proposal updated.")
-    append_loop_log(workspace, "planner", "proposal updated")
+    record_loop_transition(workspace, state, note="Problem proposal updated.", log_op="planner", log_title="proposal updated")
     typer.echo(f"contract: {path}")
 
 
@@ -2105,9 +2062,14 @@ def loop_planner(
     state["contract_accepted"] = False
     state["last_action"] = "planner"
     state.setdefault("role_usage", {})["planner"] = usage
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(report.get("summary") or "Planner wrote contract proposal."))
-    append_loop_log(workspace, "planner", "planner wrote contract", str(report.get("summary") or ""))
+    record_loop_transition(
+        workspace,
+        state,
+        note=str(report.get("summary") or "Planner wrote contract proposal."),
+        log_op="planner",
+        log_title="planner wrote contract",
+        log_body=str(report.get("summary") or ""),
+    )
     typer.echo(f"contract: {loop_contract_path(workspace)}")
     typer.echo(f"summary: {report.get('summary')}")
 
@@ -2128,9 +2090,7 @@ def loop_propose_contract(
     state["status"] = "contract-proposed"
     state["contract_accepted"] = False
     state["last_action"] = "propose-contract"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note="Done criteria proposed.")
-    append_loop_log(workspace, "generator", "contract proposed")
+    record_loop_transition(workspace, state, note="Done criteria proposed.", log_op="generator", log_title="contract proposed")
     typer.echo(f"contract: {path}")
 
 
@@ -2148,9 +2108,14 @@ def loop_generator_contract(ctx: typer.Context) -> None:
     state["contract_accepted"] = False
     state["last_action"] = "generator-contract"
     state.setdefault("role_usage", {})["generator_contract"] = usage
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(report.get("summary") or "Generator proposed contract criteria."))
-    append_loop_log(workspace, "generator", "generator proposed contract", str(report.get("summary") or ""))
+    record_loop_transition(
+        workspace,
+        state,
+        note=str(report.get("summary") or "Generator proposed contract criteria."),
+        log_op="generator",
+        log_title="generator proposed contract",
+        log_body=str(report.get("summary") or ""),
+    )
     typer.echo(f"contract: {loop_contract_path(workspace)}")
     typer.echo(f"feature_list: {loop_feature_list_path(workspace)}")
     typer.echo(f"summary: {report.get('summary')}")
@@ -2173,9 +2138,14 @@ def loop_review_contract(
     state["status"] = "contract-accepted" if status == "accepted" else "contract-rejected"
     state["contract_accepted"] = status == "accepted"
     state["last_action"] = f"review-contract:{status}"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=f"Contract review {status}. {review.strip()}")
-    append_loop_log(workspace, "evaluator", f"contract {status}", review)
+    record_loop_transition(
+        workspace,
+        state,
+        note=f"Contract review {status}. {review.strip()}",
+        log_op="evaluator",
+        log_title=f"contract {status}",
+        log_body=review,
+    )
     typer.echo(f"contract_review: {status}")
 
 
@@ -2215,9 +2185,7 @@ def loop_accept_contract(ctx: typer.Context) -> None:
     state["status"] = "contract-accepted"
     state["contract_accepted"] = True
     state["last_action"] = "accept-contract"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note="Contract accepted.")
-    append_loop_log(workspace, "contract", "contract accepted")
+    record_loop_transition(workspace, state, note="Contract accepted.", log_op="contract", log_title="contract accepted")
     typer.echo("contract_accepted: true")
 
 
@@ -2229,9 +2197,7 @@ def loop_start_attempt(ctx: typer.Context) -> None:
     state = read_loop_state(workspace)
     attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
     state["last_action"] = "start-attempt"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=f"Attempt {attempt_id} started.")
-    append_loop_log(workspace, "attempt", f"attempt {attempt_id} started")
+    record_loop_transition(workspace, state, note=f"Attempt {attempt_id} started.", log_op="attempt", log_title=f"attempt {attempt_id} started")
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"path: {attempt_dir}")
 
@@ -2251,9 +2217,14 @@ def loop_generator_implement(ctx: typer.Context) -> None:
     write_json(report_path, report)
     state.setdefault("role_usage", {})["generator_implementation"] = usage
     state["last_action"] = "generator-implement"
-    write_loop_state(workspace, state)
-    write_loop_progress(workspace, state, note=str(report.get("summary") or "Generator completed implementation pass."))
-    append_loop_log(workspace, "generator", f"attempt {attempt_id} implementation", str(report.get("summary") or ""))
+    record_loop_transition(
+        workspace,
+        state,
+        note=str(report.get("summary") or "Generator completed implementation pass."),
+        log_op="generator",
+        log_title=f"attempt {attempt_id} implementation",
+        log_body=str(report.get("summary") or ""),
+    )
     typer.echo(f"report: {report_path}")
     typer.echo(f"summary: {report.get('summary')}")
 
@@ -2283,12 +2254,10 @@ def loop_complete_attempt(
     state["last_action"] = f"complete-attempt:{result}"
     if bottleneck:
         state["bottleneck"] = bottleneck
-    write_loop_state(workspace, state)
     note = f"Attempt {attempt_id} completed with result={result}."
     if bottleneck:
         note += f" Bottleneck: {bottleneck}."
-    write_loop_progress(workspace, state, note=note)
-    append_loop_log(workspace, "evaluation", f"attempt {attempt_id} {result}", note)
+    record_loop_transition(workspace, state, note=note, log_op="evaluation", log_title=f"attempt {attempt_id} {result}", log_body=note)
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"result: {result}")
 
@@ -2455,10 +2424,8 @@ def loop_restart_attempt(
     state["status"] = "restart-attempt"
     state["last_action"] = "restart-attempt"
     state["bottleneck"] = "bad_attempt"
-    write_loop_state(workspace, state)
     note = f"Restart attempt requested. Reason: {reason}"
-    write_loop_progress(workspace, state, note=note)
-    append_loop_log(workspace, "restart-attempt", "attempt restart", note)
+    record_loop_transition(workspace, state, note=note, log_op="restart-attempt", log_title="attempt restart", log_body=note)
     typer.echo("restart-attempt: recorded")
 
 
@@ -2476,10 +2443,8 @@ def loop_restart_contract(
     state["contract_accepted"] = False
     state["last_action"] = "restart-contract"
     state["bottleneck"] = "contract"
-    write_loop_state(workspace, state)
     note = f"Restart contract requested. Reason: {reason}"
-    write_loop_progress(workspace, state, note=note)
-    append_loop_log(workspace, "restart-contract", "contract restart", note)
+    record_loop_transition(workspace, state, note=note, log_op="restart-contract", log_title="contract restart", log_body=note)
     typer.echo("restart-contract: recorded")
 
 

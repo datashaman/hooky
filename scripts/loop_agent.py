@@ -17,14 +17,9 @@ from agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, wr
 
 SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")
-DEFAULT_RUNTIME_DIR = ".hooky/runs/local"
-RUNTIME_DIR_ENV = "HOOKY_RUN_DIR"
 DEFAULT_MODEL = "openai/gpt-oss-20b"
 
-
-def runtime_dir() -> str:
-    raw = os.environ.get(RUNTIME_DIR_ENV, DEFAULT_RUNTIME_DIR).strip().strip("/")
-    return raw or DEFAULT_RUNTIME_DIR
+runtime_dir = agent_runtime.runtime_dir
 
 
 def runtime_rel(*parts: str) -> str:
@@ -151,6 +146,52 @@ def run_role_agent(
             runtime=runtime,
         )
     )
+
+
+def run_loop_role(
+    *,
+    role: str,
+    agent_name: str,
+    model: str,
+    model_metadata: dict[str, Any],
+    system: str,
+    user: str,
+    runtime: ToolRuntime,
+    live_root: Path,
+    missing_report_error: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        result = run_role_agent(
+            role=role,
+            agent_name=agent_name,
+            model=model,
+            model_metadata=model_metadata,
+            system=system,
+            user=user,
+            runtime=runtime,
+        )
+    except AgentRunError as exc:
+        result = exc.result
+        write_runtime_log(
+            live_root,
+            result.transcript,
+            result.tool_events,
+            result.compaction_events,
+            result.pre_compaction_archives,
+            metadata=build_runtime_metadata(agent_name, model, model_metadata, result, status="error", error=str(exc)),
+        )
+        raise
+    write_runtime_log(
+        live_root,
+        result.transcript,
+        result.tool_events,
+        result.compaction_events,
+        result.pre_compaction_archives,
+        metadata=build_runtime_metadata(agent_name, model, model_metadata, result),
+    )
+    if result.final_report is None:
+        raise RuntimeError(missing_report_error)
+    return result.final_report, result.usage
 
 
 def read_loop_proposal(working_folder: Path) -> str:
@@ -366,39 +407,37 @@ def validate_evaluator_attempt_report(report: dict[str, Any], working_folder: Pa
             raise ValueError("evaluator report must include score_explanation when grading a Taste Rubric")
 
 
-def markdown_section(text: str, heading: str) -> str:
-    lines = text.splitlines()
-    start: int | None = None
-    marker = f"## {heading}"
+def find_markdown_heading_line(lines: list[str], heading: str) -> int | None:
+    marker = f"## {heading}".lower()
     for index, line in enumerate(lines):
-        if line.strip().lower() == marker.lower():
-            start = index + 1
-            break
-    if start is None:
-        return ""
-    end = len(lines)
+        if line.strip().lower() == marker:
+            return index
+    return None
+
+
+def find_markdown_section_end(lines: list[str], start: int) -> int:
     for index in range(start, len(lines)):
         if lines[index].startswith("## "):
-            end = index
-            break
+            return index
+    return len(lines)
+
+
+def markdown_section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    heading_line = find_markdown_heading_line(lines, heading)
+    if heading_line is None:
+        return ""
+    start = heading_line + 1
+    end = find_markdown_section_end(lines, start)
     return "\n".join(lines[start:end]).strip()
 
 
 def markdown_without_section(text: str, heading: str) -> str:
     lines = text.splitlines()
-    marker = f"## {heading}"
-    start: int | None = None
-    for index, line in enumerate(lines):
-        if line.strip().lower() == marker.lower():
-            start = index
-            break
+    start = find_markdown_heading_line(lines, heading)
     if start is None:
         return text
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        if lines[index].startswith("## "):
-            end = index
-            break
+    end = find_markdown_section_end(lines, start + 1)
     return "\n".join(lines[:start] + lines[end:])
 
 
@@ -480,38 +519,17 @@ def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_i
         live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=planner ",
     )
-    try:
-        result = run_role_agent(
-            role="planner",
-            agent_name="loop-planner",
-            model=model,
-            model_metadata=model_metadata,
-            system=planner_system_prompt(),
-            user=planner_user_prompt(proposal, model_metadata),
-            runtime=runtime,
-        )
-    except AgentRunError as exc:
-        result = exc.result
-        write_runtime_log(
-            live_root,
-            result.transcript,
-            result.tool_events,
-            result.compaction_events,
-            result.pre_compaction_archives,
-            metadata=build_runtime_metadata("loop-planner", model, model_metadata, result, status="error", error=str(exc)),
-        )
-        raise
-    write_runtime_log(
-        live_root,
-        result.transcript,
-        result.tool_events,
-        result.compaction_events,
-        result.pre_compaction_archives,
-        metadata=build_runtime_metadata("loop-planner", model, model_metadata, result),
+    return run_loop_role(
+        role="planner",
+        agent_name="loop-planner",
+        model=model,
+        model_metadata=model_metadata,
+        system=planner_system_prompt(),
+        user=planner_user_prompt(proposal, model_metadata),
+        runtime=runtime,
+        live_root=live_root,
+        missing_report_error="Loop planner finished without final_report",
     )
-    if result.final_report is None:
-        raise RuntimeError("Loop planner finished without final_report")
-    return result.final_report, result.usage
 
 
 def generate_generator_contract_artifacts(
@@ -545,43 +563,22 @@ def generate_generator_contract_artifacts(
         live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=generator ",
     )
-    try:
-        result = run_role_agent(
-            role="generator",
-            agent_name="loop-generator-contract",
-            model=model,
-            model_metadata=model_metadata,
-            system=generator_contract_system_prompt(),
-            user=generator_contract_user_prompt(
-                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
-                read_loop_proposal(working_folder),
-                model_metadata,
-                review_feedback=review_feedback,
-            ),
-            runtime=runtime,
-        )
-    except AgentRunError as exc:
-        result = exc.result
-        write_runtime_log(
-            live_root,
-            result.transcript,
-            result.tool_events,
-            result.compaction_events,
-            result.pre_compaction_archives,
-            metadata=build_runtime_metadata("loop-generator-contract", model, model_metadata, result, status="error", error=str(exc)),
-        )
-        raise
-    write_runtime_log(
-        live_root,
-        result.transcript,
-        result.tool_events,
-        result.compaction_events,
-        result.pre_compaction_archives,
-        metadata=build_runtime_metadata("loop-generator-contract", model, model_metadata, result),
+    return run_loop_role(
+        role="generator",
+        agent_name="loop-generator-contract",
+        model=model,
+        model_metadata=model_metadata,
+        system=generator_contract_system_prompt(),
+        user=generator_contract_user_prompt(
+            runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+            read_loop_proposal(working_folder),
+            model_metadata,
+            review_feedback=review_feedback,
+        ),
+        runtime=runtime,
+        live_root=live_root,
+        missing_report_error="Loop generator finished without final_report",
     )
-    if result.final_report is None:
-        raise RuntimeError("Loop generator finished without final_report")
-    return result.final_report, result.usage
 
 
 def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -608,43 +605,22 @@ def generate_evaluator_contract_artifacts(*, working_folder: Path, attempt_id: s
         live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=evaluator ",
     )
-    try:
-        result = run_role_agent(
-            role="evaluator",
-            agent_name="loop-evaluator-contract",
-            model=model,
-            model_metadata=model_metadata,
-            system=evaluator_contract_system_prompt(),
-            user=evaluator_contract_user_prompt(
-                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
-                runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
-                read_loop_proposal(working_folder),
-                model_metadata,
-            ),
-            runtime=runtime,
-        )
-    except AgentRunError as exc:
-        result = exc.result
-        write_runtime_log(
-            live_root,
-            result.transcript,
-            result.tool_events,
-            result.compaction_events,
-            result.pre_compaction_archives,
-            metadata=build_runtime_metadata("loop-evaluator-contract", model, model_metadata, result, status="error", error=str(exc)),
-        )
-        raise
-    write_runtime_log(
-        live_root,
-        result.transcript,
-        result.tool_events,
-        result.compaction_events,
-        result.pre_compaction_archives,
-        metadata=build_runtime_metadata("loop-evaluator-contract", model, model_metadata, result),
+    return run_loop_role(
+        role="evaluator",
+        agent_name="loop-evaluator-contract",
+        model=model,
+        model_metadata=model_metadata,
+        system=evaluator_contract_system_prompt(),
+        user=evaluator_contract_user_prompt(
+            runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+            runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
+            read_loop_proposal(working_folder),
+            model_metadata,
+        ),
+        runtime=runtime,
+        live_root=live_root,
+        missing_report_error="Loop evaluator finished without final_report",
     )
-    if result.final_report is None:
-        raise RuntimeError("Loop evaluator finished without final_report")
-    return result.final_report, result.usage
 
 
 def generate_generator_implementation_artifacts(
@@ -674,44 +650,23 @@ def generate_generator_implementation_artifacts(
         live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=generator ",
     )
-    try:
-        result = run_role_agent(
-            role="generator",
-            agent_name="loop-generator-implementation",
-            model=model,
-            model_metadata=model_metadata,
-            system=generator_implementation_system_prompt(),
-            user=generator_implementation_user_prompt(
-                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
-                runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
-                attempt_id,
-                model_metadata,
-                evaluator_feedback=evaluator_feedback,
-            ),
-            runtime=runtime,
-        )
-    except AgentRunError as exc:
-        result = exc.result
-        write_runtime_log(
-            live_root,
-            result.transcript,
-            result.tool_events,
-            result.compaction_events,
-            result.pre_compaction_archives,
-            metadata=build_runtime_metadata("loop-generator-implementation", model, model_metadata, result, status="error", error=str(exc)),
-        )
-        raise
-    write_runtime_log(
-        live_root,
-        result.transcript,
-        result.tool_events,
-        result.compaction_events,
-        result.pre_compaction_archives,
-        metadata=build_runtime_metadata("loop-generator-implementation", model, model_metadata, result),
+    return run_loop_role(
+        role="generator",
+        agent_name="loop-generator-implementation",
+        model=model,
+        model_metadata=model_metadata,
+        system=generator_implementation_system_prompt(),
+        user=generator_implementation_user_prompt(
+            runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+            runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
+            attempt_id,
+            model_metadata,
+            evaluator_feedback=evaluator_feedback,
+        ),
+        runtime=runtime,
+        live_root=live_root,
+        missing_report_error="Loop generator finished without final_report",
     )
-    if result.final_report is None:
-        raise RuntimeError("Loop generator finished without final_report")
-    return result.final_report, result.usage
 
 
 def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -735,43 +690,22 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
         live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
         live_event_prefix="role=evaluator ",
     )
-    try:
-        result = run_role_agent(
-            role="evaluator",
-            agent_name="loop-evaluator-attempt",
-            model=model,
-            model_metadata=model_metadata,
-            system=evaluator_attempt_system_prompt(),
-            user=evaluator_attempt_user_prompt(
-                runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
-                runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
-                attempt_id,
-                model_metadata,
-            ),
-            runtime=runtime,
-        )
-    except AgentRunError as exc:
-        result = exc.result
-        write_runtime_log(
-            live_root,
-            result.transcript,
-            result.tool_events,
-            result.compaction_events,
-            result.pre_compaction_archives,
-            metadata=build_runtime_metadata("loop-evaluator-attempt", model, model_metadata, result, status="error", error=str(exc)),
-        )
-        raise
-    write_runtime_log(
-        live_root,
-        result.transcript,
-        result.tool_events,
-        result.compaction_events,
-        result.pre_compaction_archives,
-        metadata=build_runtime_metadata("loop-evaluator-attempt", model, model_metadata, result),
+    return run_loop_role(
+        role="evaluator",
+        agent_name="loop-evaluator-attempt",
+        model=model,
+        model_metadata=model_metadata,
+        system=evaluator_attempt_system_prompt(),
+        user=evaluator_attempt_user_prompt(
+            runtime_path(working_folder, "contract.md").read_text(encoding="utf-8"),
+            runtime_path(working_folder, "feature_list.json").read_text(encoding="utf-8"),
+            attempt_id,
+            model_metadata,
+        ),
+        runtime=runtime,
+        live_root=live_root,
+        missing_report_error="Loop evaluator finished without final_report",
     )
-    if result.final_report is None:
-        raise RuntimeError("Loop evaluator finished without final_report")
-    return result.final_report, result.usage
 
 
 def planner_system_prompt() -> str:
