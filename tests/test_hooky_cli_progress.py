@@ -1489,6 +1489,11 @@ class HookyProgressTests(unittest.TestCase):
                             "role": "assistant",
                             "content": "**final_report** {\"status\":\"done\"}",
                         },
+                        "reasoning": {
+                            "entries": [{"source": "message.reasoning", "content": "private diagnostic reasoning"}],
+                            "chars": 28,
+                            "visible_by_default": False,
+                        },
                         "started_at": "2026-06-30T00:00:01+00:00",
                         "ended_at": "2026-06-30T00:00:01+00:00",
                     },
@@ -1506,6 +1511,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         transcript = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001"])
+        transcript_reasoning = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001", "--reasoning"])
         stall = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "stall", "--attempt", "001"])
         context = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "context", "--attempt", "001"])
         runtime_log = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "runtime-log", "--attempt", "001"])
@@ -1513,6 +1519,10 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(transcript.exit_code, 0, transcript.output)
         self.assertIn("Implement TodoMVC.", transcript.output)
         self.assertIn("final_report", transcript.output)
+        self.assertIn("reasoning_chars=28", transcript.output)
+        self.assertNotIn("private diagnostic reasoning", transcript.output)
+        self.assertEqual(transcript_reasoning.exit_code, 0, transcript_reasoning.output)
+        self.assertIn("private diagnostic reasoning", transcript_reasoning.output)
         self.assertEqual(stall.exit_code, 0, stall.output)
         self.assertIn("fake_final_report_text_entries: 1", stall.output)
         self.assertEqual(context.exit_code, 0, context.output)

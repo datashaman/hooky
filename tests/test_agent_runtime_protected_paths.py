@@ -525,6 +525,51 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("tools=list_files", rendered)
         self.assertIn("I will inspect the workspace", rendered)
 
+    def test_assistant_reasoning_is_attached_and_previewed_but_not_visible_text(self) -> None:
+        message = {
+            "role": "assistant",
+            "content": [
+                {"type": "reasoning", "text": "private chain of thought"},
+                {"type": "text", "text": "Visible response"},
+            ],
+            "reasoning": "provider reasoning",
+        }
+        reasoning = agent_runtime.assistant_reasoning_trace(message)
+        rendered = agent_runtime.render_runtime_events_log(
+            [
+                {
+                    "role": "assistant",
+                    "message": message,
+                    "reasoning": reasoning,
+                    "usage": {"total_tokens": 123, "cost": 0.001},
+                    "duration_ms": 1500,
+                    "started_at": "2026-07-01T00:00:00+00:00",
+                    "ended_at": "2026-07-01T00:00:01+00:00",
+                }
+            ]
+        )
+        timeline = agent_runtime.render_runtime_timeline_markdown(
+            [
+                {
+                    "role": "assistant",
+                    "message": message,
+                    "reasoning": reasoning,
+                    "usage": {"total_tokens": 123, "cost": 0.001},
+                    "duration_ms": 1500,
+                    "started_at": "2026-07-01T00:00:00+00:00",
+                    "ended_at": "2026-07-01T00:00:01+00:00",
+                }
+            ]
+        )
+
+        self.assertIsNotNone(reasoning)
+        self.assertEqual(agent_runtime.assistant_message_text(message), "Visible response")
+        self.assertIn("reasoning=", rendered)
+        self.assertIn("provider reasoning", rendered)
+        self.assertIn("private chain of thought", rendered)
+        self.assertIn("reasoning: present", timeline)
+        self.assertNotIn("private chain of thought", timeline)
+
     def test_recovers_text_final_report_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = agent_runtime.ToolRuntime(

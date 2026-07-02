@@ -1892,17 +1892,19 @@ def run_tool_agent(
                 accumulate_usage(total_usage, usage)
                 message = completion.choices[0].message
                 message_payload = message.model_dump(exclude_none=True) if hasattr(message, "model_dump") else message
+                reasoning_trace = assistant_reasoning_trace(message_payload)
                 messages.append(message_payload)
-                transcript.append(
-                    {
-                        "role": "assistant",
-                        "message": message_payload,
-                        "usage": usage,
-                        "started_at": assistant_started_at,
-                        "ended_at": assistant_ended_at,
-                        "duration_ms": assistant_duration_ms,
-                    }
-                )
+                assistant_entry = {
+                    "role": "assistant",
+                    "message": message_payload,
+                    "usage": usage,
+                    "started_at": assistant_started_at,
+                    "ended_at": assistant_ended_at,
+                    "duration_ms": assistant_duration_ms,
+                }
+                if reasoning_trace:
+                    assistant_entry["reasoning"] = reasoning_trace
+                transcript.append(assistant_entry)
                 append_live_event(runtime, format_runtime_event_line(transcript[-1]))
                 flush_live_log()
 
@@ -2079,10 +2081,73 @@ def assistant_message_text(message_payload: dict[str, Any]) -> str:
         parts: list[str] = []
         for item in content:
             if isinstance(item, dict):
+                if content_part_is_reasoning(item):
+                    continue
                 parts.append(str(item.get("text") or item.get("content") or ""))
             else:
                 parts.append(str(item))
         return "\n".join(parts)
+    return ""
+
+
+def content_part_is_reasoning(item: dict[str, Any]) -> bool:
+    part_type = str(item.get("type") or item.get("channel") or "").lower()
+    return part_type in {"reasoning", "analysis", "thinking", "chain_of_thought"}
+
+
+def assistant_reasoning_trace(message_payload: dict[str, Any]) -> dict[str, Any] | None:
+    entries: list[dict[str, str]] = []
+    for key, source in (
+        ("reasoning", "message.reasoning"),
+        ("analysis", "message.analysis"),
+        ("thinking", "message.thinking"),
+    ):
+        value = message_payload.get(key)
+        text = reasoning_value_text(value)
+        if text:
+            entries.append({"source": source, "content": text})
+    content = message_payload.get("content")
+    if isinstance(content, list):
+        for index, item in enumerate(content):
+            if not isinstance(item, dict) or not content_part_is_reasoning(item):
+                continue
+            text = reasoning_value_text(item.get("text") or item.get("content") or item.get("reasoning"))
+            if text:
+                entries.append({"source": f"message.content[{index}]", "content": text})
+    if not entries:
+        return None
+    return {
+        "entries": entries,
+        "chars": sum(len(entry["content"]) for entry in entries),
+        "visible_by_default": False,
+    }
+
+
+def reasoning_trace_text(reasoning: dict[str, Any] | None) -> str:
+    if not reasoning:
+        return ""
+    entries = reasoning.get("entries")
+    if not isinstance(entries, list):
+        return ""
+    parts = []
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("content"):
+            parts.append(str(entry["content"]))
+    return "\n".join(parts)
+
+
+def reasoning_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [reasoning_value_text(item) for item in value]
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, dict):
+        for key in ("text", "content", "reasoning", "summary"):
+            text = reasoning_value_text(value.get(key))
+            if text:
+                return text
+        return json.dumps(value, sort_keys=True)
     return ""
 
 
@@ -2524,11 +2589,13 @@ def format_runtime_event_line(item: dict[str, Any]) -> str:
             if isinstance(call, dict) and isinstance(call.get("function"), dict) and call.get("function", {}).get("name")
         ]
         assistant_text = assistant_message_text(message)
+        reasoning_text = reasoning_trace_text(item.get("reasoning") if isinstance(item.get("reasoning"), dict) else None)
         return (
             f"{timestamp} assistant duration={duration} cost=${float(usage.get('cost') or 0):.8f} "
             f"tokens={int(usage.get('total_tokens') or 0)} tool_calls={len(tool_calls)}"
             + (f" tools={','.join(names)}" if names else "")
             + (f" message={quote_value(single_line(assistant_text, 320), 320)}" if assistant_text else "")
+            + (f" reasoning={quote_value(single_line(reasoning_text, 500), 500)}" if reasoning_text else "")
         )
     if role == "tool":
         name = str(item.get("name") or "unknown")
@@ -2779,6 +2846,9 @@ def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
             ]
             if names:
                 details.append("tools requested: " + ", ".join(str(name) for name in names))
+            reasoning = item.get("reasoning") if isinstance(item.get("reasoning"), dict) else None
+            if reasoning:
+                details.append(f"reasoning: present, {int(reasoning.get('chars') or 0)} chars")
             lines.extend(f"- {detail}" for detail in details)
             text = assistant_message_text(message).strip()
             if text:

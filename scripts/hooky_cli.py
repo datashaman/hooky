@@ -1128,6 +1128,8 @@ def transcript_text(entry: dict[str, Any]) -> str:
         parts: list[str] = []
         for item in content:
             if isinstance(item, dict):
+                if agent_runtime.content_part_is_reasoning(item):
+                    continue
                 parts.append(str(item.get("text") or item.get("content") or item))
             else:
                 parts.append(str(item))
@@ -1135,6 +1137,13 @@ def transcript_text(entry: dict[str, Any]) -> str:
     if isinstance(entry.get("message"), str):
         return str(entry["message"])
     return ""
+
+
+def transcript_reasoning_text(entry: dict[str, Any]) -> str:
+    reasoning = entry.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return ""
+    return agent_runtime.reasoning_trace_text(reasoning)
 
 
 def transcript_tool_calls(entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1338,6 +1347,7 @@ def loop_transcript(
     role: Annotated[str, typer.Option(help="Role filter: all, system, user, assistant, or tool.")] = "all",
     last: Annotated[int, typer.Option(help="Number of matching transcript entries to show.")] = 20,
     full: Annotated[bool, typer.Option("--full", help="Print full message text instead of a preview.")] = False,
+    reasoning: Annotated[bool, typer.Option("--reasoning", help="Include attached assistant reasoning traces.")] = False,
 ) -> None:
     """Show actual persisted model conversation entries for loop debugging."""
     workspace = workspace_from_ctx(ctx)
@@ -1354,7 +1364,9 @@ def loop_transcript(
         calls = transcript_tool_calls(entry)
         kind = str(entry.get("kind") or "message")
         text = transcript_text(entry).strip()
-        typer.echo(f"## {index}. {entry_role} kind={kind} tool_calls={len(calls)}")
+        reasoning_text = transcript_reasoning_text(entry).strip()
+        reasoning_suffix = f" reasoning_chars={len(reasoning_text)}" if reasoning_text else ""
+        typer.echo(f"## {index}. {entry_role} kind={kind} tool_calls={len(calls)}{reasoning_suffix}")
         if calls:
             names = [
                 str((call.get("function") or {}).get("name") or call.get("name") or "unknown")
@@ -1370,6 +1382,10 @@ def loop_transcript(
             typer.echo(text if full else agent_runtime.single_line(text, 1200))
         else:
             typer.echo("[empty]")
+        if reasoning and reasoning_text:
+            typer.echo("")
+            typer.echo("reasoning:")
+            typer.echo(reasoning_text if full else agent_runtime.single_line(reasoning_text, 1200))
         typer.echo("")
 
 
