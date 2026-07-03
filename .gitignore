@@ -6,3 +6,5 @@ __pycache__/
 .hooky/current.json
 .hooky/managed-processes/
 event-proposal.md
+*.swp
+.*.swp
