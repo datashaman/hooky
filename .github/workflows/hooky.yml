@@ -106,14 +106,14 @@ jobs:
               issue = event.get("issue") or {}
               if issue.get("number"):
                   run_key = f"issue-{issue.get('number')}"
-              proposal = "\n\n".join(
-                  part
-                  for part in [
-                      f"Address GitHub issue #{issue.get('number')}: {issue.get('title', '')}".strip(),
-                      str(issue.get("body") or "").strip(),
-                  ]
-                  if part
-              )
+                  proposal = "\n\n".join(
+                      part
+                      for part in [
+                          f"Address GitHub issue #{issue.get('number')}: {issue.get('title', '')}".strip(),
+                          str(issue.get("body") or "").strip(),
+                      ]
+                      if part
+                  )
 
           if not proposal:
               proposal = f"Run Hooky for {event_name} event {os.environ['GITHUB_RUN_ID']}."
