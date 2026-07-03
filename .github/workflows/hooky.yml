@@ -162,7 +162,7 @@ jobs:
 
       - name: Commit Hooky changes to branch
         id: commit
-        if: success() && github.event_name != 'pull_request'
+        if: success()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -200,18 +200,22 @@ jobs:
       - name: Comment on issue
         if: >-
           always() &&
-          (github.event_name == 'issues' || github.event_name == 'issue_comment') &&
-          github.event.issue.number
+          (github.event.issue.number || github.event.pull_request.number)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.pr.outputs.url }}
+          PR_OUTCOME: ${{ steps.pr.outcome }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
         run: |
+          number="${{ github.event.issue.number || github.event.pull_request.number }}"
           status="${{ steps.loop_status.outputs.status }}"
           body="Hooky run finished with loop status: ${status}."
           if [ -n "$PR_URL" ]; then
             body="${body}\n\nPull request: ${PR_URL}"
+          elif [ "$PR_OUTCOME" = "failure" ]; then
+            body="${body}\n\nA pull request could not be opened (gh pr create/list failed); see the workflow run logs. The committed changes are still on branch \`${BRANCH}\` if the commit step succeeded."
           elif [ "$status" != "passed" ]; then
             body="${body}\n\nNo pull request was opened because the loop did not reach a passing evaluator verdict. See the workflow run artifacts for the evaluator report and traces."
           fi
           body="${body}\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh issue comment "${{ github.event.issue.number }}" --body "$body"
+          gh issue comment "$number" --body "$body"
