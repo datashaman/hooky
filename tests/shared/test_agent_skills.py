@@ -7,6 +7,8 @@ from unittest import mock
 
 from hooky.shared import agent_skills
 
+TODOMVC_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "projects" / "todomvc"
+
 
 class AgentSkillsTests(unittest.TestCase):
     def test_discovers_project_skill_with_frontmatter(self) -> None:
@@ -25,12 +27,11 @@ class AgentSkillsTests(unittest.TestCase):
             self.assertEqual(skills["example"].description, "Example skill.")
             self.assertIn("Do the thing.", agent_skills.skill_context(list(skills.values()), ["example"]))
 
-    def test_bundled_visual_ui_review_skill_is_available(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            skills = {skill.name: skill for skill in agent_skills.discover_skills(Path(tmp))}
+    def test_todomvc_fixture_visual_ui_review_skill_is_available(self) -> None:
+        skills = {skill.name: skill for skill in agent_skills.discover_skills(TODOMVC_FIXTURE)}
 
-            self.assertIn("visual-ui-review", skills)
-            self.assertIn("browser UI", skills["visual-ui-review"].description)
+        self.assertIn("visual-ui-review", skills)
+        self.assertIn("browser UI", skills["visual-ui-review"].description)
 
     def test_discovers_external_skill_root_from_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as external:
