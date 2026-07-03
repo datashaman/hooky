@@ -15,11 +15,11 @@ from hooky import agent_skills
 from hooky.runtime.models import runtime_dir
 from hooky.runtime.rendering import canonical_tool_name
 from hooky.runtime.schemas import integer_schema, string_array_schema, string_schema, tool_schema
-from hooky.runtime.tools_evidence import EvidenceToolsMixin
-from hooky.runtime.tools_git import GitToolsMixin
-from hooky.runtime.tools_process import ProcessToolsMixin
-from hooky.runtime.tools_read_write import ReadWriteToolsMixin
-from hooky.runtime.tools_shell import ShellToolsMixin
+from hooky.runtime.tools.evidence import EvidenceToolsMixin
+from hooky.runtime.tools.git import GitToolsMixin
+from hooky.runtime.tools.process import ProcessToolsMixin
+from hooky.runtime.tools.read_write import ReadWriteToolsMixin
+from hooky.runtime.tools.shell import ShellToolsMixin
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
 FinalValidator = Callable[[dict[str, Any]], None]

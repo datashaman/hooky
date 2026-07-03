@@ -1,6 +1,6 @@
 """Public API for the Hooky Typer CLI.
 
-Importing this package imports every ``commands_*`` submodule so their
+Importing this package imports every ``commands.*`` submodule so their
 ``@app.command()`` / ``@skills_app.command()`` / ``@evidence_app.command()``
 decorators register against the shared ``app`` Typer instance as a side
 effect.
@@ -104,9 +104,9 @@ from hooky.cli.transcript import (
     transcript_text,
     transcript_tool_calls,
 )
-from hooky.cli.commands_setup import follow_runtime_log, init, loop_init, loop_status, loop_watch, skills_list, skills_show
-from hooky.cli.commands_evidence import evidence_exec, evidence_init, evidence_note, evidence_path, evidence_screenshot, evidence_show
-from hooky.cli.commands_inspect import (
+from hooky.cli.commands.setup import follow_runtime_log, init, loop_init, loop_status, loop_watch, skills_list, skills_show
+from hooky.cli.commands.evidence import evidence_exec, evidence_init, evidence_note, evidence_path, evidence_screenshot, evidence_show
+from hooky.cli.commands.inspect import (
     loop_context,
     loop_harness_review,
     loop_inspect,
@@ -115,7 +115,7 @@ from hooky.cli.commands_inspect import (
     loop_trace_grep,
     loop_transcript,
 )
-from hooky.cli.commands_run import (
+from hooky.cli.commands.run import (
     _run_model_loop_once,
     doctor,
     loop_run,
@@ -128,7 +128,7 @@ from hooky.cli.commands_run import (
     trace,
     watch,
 )
-from hooky.cli.commands_roles import (
+from hooky.cli.commands.roles import (
     loop_accept_contract,
     loop_complete_attempt,
     loop_evaluator_attempt,

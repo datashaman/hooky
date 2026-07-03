@@ -15,8 +15,8 @@ from hooky import roles
 from hooky import loop_executor
 
 from hooky.cli.app import DEFAULT_LAST_RUN_PATH, T, app
-from hooky.cli.commands_inspect import loop_harness_review
-from hooky.cli.commands_setup import follow_runtime_log, loop_status, loop_watch
+from hooky.cli.commands.inspect import loop_harness_review
+from hooky.cli.commands.setup import follow_runtime_log, loop_status, loop_watch
 from hooky.cli.loop_state import (
     append_jsonl,
     append_loop_log,

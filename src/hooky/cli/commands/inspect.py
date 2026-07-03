@@ -12,7 +12,7 @@ from hooky import runtime
 from hooky import roles
 
 from hooky.cli.app import app
-from hooky.cli.commands_setup import follow_runtime_log
+from hooky.cli.commands.setup import follow_runtime_log
 from hooky.cli.loop_state import (
     append_loop_log,
     ensure_loop_initialized,

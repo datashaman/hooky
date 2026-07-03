@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from hooky import cli
 from hooky import roles
 from hooky.runtime import AgentRunError, AgentRunResult, git_run
-from hooky.cli import commands_run
+from hooky.cli.commands import run as commands_run
 
 
 class HookyProgressTests(unittest.TestCase):
