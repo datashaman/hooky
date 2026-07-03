@@ -8,7 +8,7 @@ effect.
 
 from __future__ import annotations
 
-from hooky.cli.app import REPO_ROOT, SCRIPT_DIR, app, cli, evidence_app, main, skills_app
+from hooky.cli.app import app, cli, evidence_app, main, skills_app
 from hooky.cli.commands.evidence import evidence_exec, evidence_init, evidence_note, evidence_path, evidence_screenshot, evidence_show
 from hooky.cli.commands.inspect import (
     loop_context,
@@ -149,8 +149,6 @@ from hooky.cli.validation import (
 )
 
 __all__ = [
-    "REPO_ROOT",
-    "SCRIPT_DIR",
     "app",
     "evidence_app",
     "main",

@@ -1,4 +1,4 @@
-"""Typer app instances, global CLI constants, and the root callback."""
+"""Typer app instances and the root callback."""
 
 from __future__ import annotations
 
@@ -7,9 +7,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[2]
 
 app = typer.Typer(help="Run the Hooky loop pipeline.", no_args_is_help=True)
 skills_app = typer.Typer(help="Inspect available agent skills.", no_args_is_help=True)
