@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-
 from pathlib import Path
 from typing import Any
 
 import typer
 
 from hooky import runtime
-
 from hooky.cli.loop_state import latest_loop_attempt_id
 from hooky.cli.paths import loop_attempt_dir, loop_dir, normalize_run_key, selected_run_key
 

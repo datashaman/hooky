@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from hooky.runtime.text import assistant_message_text, compact_json, quote_value, reasoning_trace_text, single_line
@@ -97,11 +96,7 @@ def prefix_event_line(line: str, prefix: str) -> str:
 
 
 def render_runtime_events_log(transcript: list[dict[str, Any]]) -> str:
-    lines = [
-        format_runtime_event_line(item)
-        for item in transcript
-        if item.get("role") in {"system", "user", "assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}
-    ]
+    lines = [format_runtime_event_line(item) for item in transcript if item.get("role") in {"system", "user", "assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}]
     return "\n".join(line for line in lines if line) + ("\n" if lines else "")
 
 
@@ -173,10 +168,7 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         return detail
     if name == "latest_test_failure_context":
         failed_tests = result.get("failed_tests") if isinstance(result.get("failed_tests"), list) else []
-        detail = (
-            f"context_path={quote_value(str(result.get('context_path') or ''), 180)} "
-            f"failed_tests={len(failed_tests)} artifacts={len(result.get('artifacts') or [])}"
-        )
+        detail = f"context_path={quote_value(str(result.get('context_path') or ''), 180)} failed_tests={len(failed_tests)} artifacts={len(result.get('artifacts') or [])}"
         if failed_tests:
             detail += f" failing={quote_value(single_line('; '.join(str(item) for item in failed_tests[:2]), 180), 180)}"
         return detail
@@ -204,10 +196,7 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
             detail += f" output_path={quote_value(str(result.get('output_path') or ''), 180)}"
         return detail
     if name == "detect_project_environment":
-        return (
-            f"package_manager={quote_value(str(result.get('package_manager') or ''), 80)} "
-            f"scripts={len(result.get('scripts') or {})} test_commands={len(result.get('test_commands') or [])}"
-        )
+        return f"package_manager={quote_value(str(result.get('package_manager') or ''), 80)} scripts={len(result.get('scripts') or {})} test_commands={len(result.get('test_commands') or [])}"
     if name in {"git_status", "git_diff", "git_show"}:
         stdout = single_line(str(result.get("stdout") or ""), 180)
         detail = f"returncode={result.get('returncode')}"
@@ -218,9 +207,7 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         ports = ",".join(str(port) for port in result.get("ports") or [])
         requested_ports = ",".join(str(port) for port in result.get("requested_ports") or [])
         detail = (
-            f"process_id={quote_value(str(result.get('process_id') or ''), 80)} "
-            f"pid={result.get('pid')} ready={result.get('ready')} "
-            f"command={quote_value(str(arguments.get('command') or ''), 180)}"
+            f"process_id={quote_value(str(result.get('process_id') or ''), 80)} pid={result.get('pid')} ready={result.get('ready')} command={quote_value(str(arguments.get('command') or ''), 180)}"
         )
         if requested_ports:
             detail += f" requested_ports={quote_value(requested_ports, 80)}"
@@ -236,18 +223,12 @@ def tail_detail(name: str, arguments: dict[str, Any], result: dict[str, Any]) ->
         return detail
     if name == "read_process":
         output = single_line(str(result.get("output") or ""), 180)
-        detail = (
-            f"process_id={quote_value(str(arguments.get('process_id') or ''), 80)} "
-            f"running={result.get('running')} returncode={result.get('returncode')}"
-        )
+        detail = f"process_id={quote_value(str(arguments.get('process_id') or ''), 80)} running={result.get('running')} returncode={result.get('returncode')}"
         if output:
             detail += f" output={quote_value(output, 180)}"
         return detail
     if name == "stop_process":
-        return (
-            f"process_id={quote_value(str(arguments.get('process_id') or ''), 80)} "
-            f"stopped={result.get('stopped')} returncode={result.get('returncode')}"
-        )
+        return f"process_id={quote_value(str(arguments.get('process_id') or ''), 80)} stopped={result.get('stopped')} returncode={result.get('returncode')}"
     if name == "list_processes":
         processes = result.get("processes") if isinstance(result.get("processes"), list) else []
         running = sum(1 for item in processes if isinstance(item, dict) and item.get("running") is True)
@@ -343,11 +324,7 @@ def todo_label(item: dict[str, Any]) -> str:
 
 def render_runtime_timeline_markdown(transcript: list[dict[str, Any]]) -> str:
     lines = ["# Runtime Timeline", ""]
-    items = [
-        item
-        for item in transcript
-        if item.get("role") in {"system", "user", "assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}
-    ]
+    items = [item for item in transcript if item.get("role") in {"system", "user", "assistant", "tool", "runtime_notice", "compaction", "pre_compaction"}]
     if not items:
         lines.append("No runtime events recorded.")
         lines.append("")
@@ -683,5 +660,4 @@ def build_runtime_metadata(
 
 
 def utc_timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
+    return datetime.now(UTC).replace(microsecond=0).isoformat()

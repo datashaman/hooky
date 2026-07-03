@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-
 from typing import Any
 
 from hooky.roles.runner import runtime_rel

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
-import os
-import json
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 from hooky import roles
 from hooky.roles import models as roles_models
@@ -292,10 +292,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
         self.assertTrue(roles.taste_rubric_required(contract))
 
     def test_reference_visual_rubric_required_detects_todomvc_spec_language(self) -> None:
-        proposal = (
-            "Build a React/Vite TodoMVC app using todomvc-common and todomvc-app-css. "
-            "The UI should visually match the canonical TodoMVC template and official CSS."
-        )
+        proposal = "Build a React/Vite TodoMVC app using todomvc-common and todomvc-app-css. The UI should visually match the canonical TodoMVC template and official CSS."
 
         self.assertTrue(roles.reference_visual_rubric_required(proposal))
 
@@ -310,11 +307,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             )
             contract = loop_dir / "contract.md"
             contract.write_text(
-                "# Loop Contract\n\n"
-                "## Done Criteria\n\n"
-                "- UI matches the canonical TodoMVC layout.\n\n"
-                "## Taste Rubric\n\n"
-                "Optional when subjective quality matters.\n",
+                "# Loop Contract\n\n## Done Criteria\n\n- UI matches the canonical TodoMVC layout.\n\n## Taste Rubric\n\nOptional when subjective quality matters.\n",
                 encoding="utf-8",
             )
             (loop_dir / "feature_list.json").write_text(

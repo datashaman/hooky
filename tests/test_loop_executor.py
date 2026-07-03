@@ -36,10 +36,13 @@ class LoopExecutorTests(unittest.TestCase):
             self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
             self.assertEqual(command[-1], "-")
 
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
-            os.environ,
-            {"HOOKY_CODEX_MODEL": "gpt-5.5", "HOOKY_CODEX_REASONING_EFFORT": "high"},
-            clear=True,
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(
+                os.environ,
+                {"HOOKY_CODEX_MODEL": "gpt-5.5", "HOOKY_CODEX_REASONING_EFFORT": "high"},
+                clear=True,
+            ),
         ):
             command = loop_executor.codex_command(Path(tmp), Path(tmp) / "exec")
             self.assertIn("--model", command)
@@ -59,10 +62,13 @@ class LoopExecutorTests(unittest.TestCase):
             self.assertNotIn("--effort", command)
             self.assertIn("--setting-sources", command)
 
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
-            os.environ,
-            {"HOOKY_CLAUDE_MODEL": "opusplan", "HOOKY_CLAUDE_EFFORT": "medium"},
-            clear=True,
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(
+                os.environ,
+                {"HOOKY_CLAUDE_MODEL": "opusplan", "HOOKY_CLAUDE_EFFORT": "medium"},
+                clear=True,
+            ),
         ):
             command = loop_executor.claude_command(Path(tmp) / "exec")
             self.assertIn("--model", command)

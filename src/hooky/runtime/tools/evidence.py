@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import subprocess
 import time
-
 from pathlib import Path
 from typing import Any
 
 from hooky import agent_skills
-
 from hooky.runtime.evidence import (
     append_evidence_command_file,
     append_evidence_note_file,
@@ -258,4 +256,3 @@ class EvidenceToolsMixin:
                 "label": label,
             }
         )
-

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-
 from pathlib import Path
 from typing import Any
 
-from hooky import loop_executor
-from hooky import runtime
+from hooky import loop_executor, runtime
 
 SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")

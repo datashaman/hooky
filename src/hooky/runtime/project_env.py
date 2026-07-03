@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import shlex
-
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +13,7 @@ from hooky.runtime.text import dedupe_strings, single_line
 
 
 def detect_project_environment(root: Path) -> dict[str, Any]:
-    lockfiles = [
-        name
-        for name in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "uv.lock", "requirements.txt", "Cargo.lock", "go.sum")
-        if (root / name).exists()
-    ]
+    lockfiles = [name for name in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "uv.lock", "requirements.txt", "Cargo.lock", "go.sum") if (root / name).exists()]
     package_json_path = root / "package.json"
     package_json: dict[str, Any] = {}
     scripts: dict[str, str] = {}
@@ -254,4 +249,3 @@ def parse_test_counts(output: str) -> dict[str, int]:
         if match:
             counts[key.replace(" ", "_")] = int(match.group(1))
     return counts
-

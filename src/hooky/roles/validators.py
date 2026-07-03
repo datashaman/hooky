@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-
 from pathlib import Path
 from typing import Any
 
@@ -58,10 +57,7 @@ def validate_generator_contract_report(report: dict[str, Any], working_folder: P
         raise ValueError("feature_list.json must include features array")
     proposal_items = proposal_checklist_items(read_loop_proposal(working_folder))
     if proposal_items and len(payload["features"]) < len(proposal_items):
-        raise ValueError(
-            f"feature_list.json must cover every proposal checklist item: "
-            f"{len(payload['features'])} features for {len(proposal_items)} proposal items"
-        )
+        raise ValueError(f"feature_list.json must cover every proposal checklist item: {len(payload['features'])} features for {len(proposal_items)} proposal items")
 
 
 def validate_generator_contract_write(working_folder: Path, path: Path, content: str) -> None:

@@ -26,4 +26,21 @@ pythonpath = ["src"]
 [dependency-groups]
 dev = [
     "pytest>=8,<9",
+    "ruff>=0.13,<1",
 ]
+
+[tool.ruff]
+line-length = 200
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "B023", # false positive: these closures are invoked synchronously within the same loop iteration
+    "E501", # prompt/tool-description strings are long natural-language prose, not code to wrap
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"

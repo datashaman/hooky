@@ -8,8 +8,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from hooky.runtime.evidence import read_tail, relative_to, visual_snapshot_script, write_tool_result_artifact
@@ -116,10 +115,7 @@ class ShellToolsMixin:
             "timed_out": result.get("timed_out"),
             "output_path": output_path,
             "failed_tests": failed_tests[:10],
-            "artifacts": [
-                {"path": item["path"], "bytes": item["bytes"], "truncated": item["truncated"]}
-                for item in artifacts
-            ],
+            "artifacts": [{"path": item["path"], "bytes": item["bytes"], "truncated": item["truncated"]} for item in artifacts],
             "content": bundle[: max_output_bytes + max_artifact_bytes],
             "truncated": len(bundle.encode("utf-8")) > max_output_bytes + max_artifact_bytes,
         }
@@ -138,7 +134,7 @@ class ShellToolsMixin:
         timeout_seconds = int(args.get("timeout_seconds") or 30)
         output_dir = runtime_path(self.working_folder, "tool-results", "visual-snapshots")
         output_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ%f")[:22]
+        stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ%f")[:22]
         screenshot_path = output_dir / f"{stamp}.png"
         script_path = output_dir / f"{stamp}.cjs"
         script_path.write_text(visual_snapshot_script(), encoding="utf-8")

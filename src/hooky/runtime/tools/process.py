@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-
 from typing import Any
 
 from hooky.runtime.evidence import read_tail, relative_to
@@ -162,4 +161,3 @@ class ProcessToolsMixin:
         for process_id, process in list(self.managed_processes.items()):
             stop_managed_process(process)
             self.managed_processes.pop(process_id, None)
-

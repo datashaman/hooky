@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-
 from pathlib import Path
 
 from hooky.runtime.evidence import relative_to
@@ -56,8 +55,7 @@ def git_run(workspace: Path, args: list[str], check: bool) -> subprocess.Complet
         cwd=workspace,
         check=check,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
 
@@ -133,4 +131,3 @@ def matches_any_prefix(parts: tuple[str, ...], prefixes: list[str]) -> bool:
         if parts[: len(prefix_parts)] == prefix_parts:
             return True
     return False
-

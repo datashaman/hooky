@@ -5,15 +5,14 @@ import os
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 from typer.testing import CliRunner
 
-from hooky import cli
-from hooky import roles
-from hooky.runtime import AgentRunError, AgentRunResult, git_run
+from hooky import cli, roles
 from hooky.cli.commands import run as commands_run
+from hooky.runtime import AgentRunError, AgentRunResult, git_run
 
 
 class HookyProgressTests(unittest.TestCase):
@@ -968,8 +967,7 @@ class HookyProgressTests(unittest.TestCase):
         tests_dir = self.workspace / "tests"
         tests_dir.mkdir()
         (tests_dir / "dummy.test.js").write_text(
-            "import { test, expect } from '@playwright/test';\n"
-            "test('dummy test', async () => { expect(true).toBe(true); });\n",
+            "import { test, expect } from '@playwright/test';\ntest('dummy test', async () => { expect(true).toBe(true); });\n",
             encoding="utf-8",
         )
 
@@ -1009,8 +1007,7 @@ class HookyProgressTests(unittest.TestCase):
         tests_dir = self.workspace / "tests"
         tests_dir.mkdir()
         (tests_dir / "app.spec.js").write_text(
-            "import { test, expect } from '@playwright/test';\n"
-            "test('renders app title', async ({ page }) => { await page.goto('/'); await expect(page).toHaveTitle(/App/); });\n",
+            "import { test, expect } from '@playwright/test';\ntest('renders app title', async ({ page }) => { await page.goto('/'); await expect(page).toHaveTitle(/App/); });\n",
             encoding="utf-8",
         )
 
@@ -1187,9 +1184,7 @@ class HookyProgressTests(unittest.TestCase):
         runner = CliRunner()
         runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         (self.workspace / ".hooky/runs/local/contract.md").write_text(
-            "# Loop Contract\n\n"
-            "## Done Criteria\n\n- Build a polished branded dashboard with excellent craft.\n\n"
-            "## Taste Rubric\n\n_Optional. Required only when subjective quality matters._\n",
+            "# Loop Contract\n\n## Done Criteria\n\n- Build a polished branded dashboard with excellent craft.\n\n## Taste Rubric\n\n_Optional. Required only when subjective quality matters._\n",
             encoding="utf-8",
         )
         runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
@@ -1525,7 +1520,7 @@ class HookyProgressTests(unittest.TestCase):
                         "role": "assistant",
                         "message": {
                             "role": "assistant",
-                            "content": "**final_report** {\"status\":\"done\"}",
+                            "content": '**final_report** {"status":"done"}',
                         },
                         "reasoning": {
                             "entries": [{"source": "message.reasoning", "content": "private diagnostic reasoning"}],

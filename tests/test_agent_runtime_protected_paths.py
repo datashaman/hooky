@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
+import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
-import os
-import socket
-import subprocess
 from unittest import mock
 
 from hooky import agent_skills
@@ -75,7 +75,7 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_ollama_chat_sends_think_option(self) -> None:
         class FakeResponse:
-            def __enter__(self) -> "FakeResponse":
+            def __enter__(self) -> FakeResponse:
                 return self
 
             def __exit__(self, *_args: object) -> None:
@@ -88,7 +88,7 @@ class ProtectedPathTests(unittest.TestCase):
 
         def fake_urlopen(request: object, timeout: int) -> FakeResponse:
             captured["timeout"] = timeout
-            captured["payload"] = json.loads(getattr(request, "data").decode("utf-8"))
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
             return FakeResponse()
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
@@ -381,13 +381,13 @@ class ProtectedPathTests(unittest.TestCase):
             root = Path(tmp)
             marker = root / "marker"
             command = (
-                "python3 -c \""
+                'python3 -c "'
                 "import pathlib, subprocess, time; "
                 f"p=pathlib.Path({str(marker)!r}); "
                 "subprocess.Popen(['python3','-c',"
                 "'import pathlib,time; time.sleep(2); pathlib.Path(%r).write_text(\\\"leaked\\\")' % str(p)]); "
                 "time.sleep(5)"
-                "\""
+                '"'
             )
 
             completed, timed_out = run_shell_command(command, cwd=root, timeout_seconds=1)
@@ -431,14 +431,14 @@ class ProtectedPathTests(unittest.TestCase):
                 max_seconds=30,
             )
             command = (
-                f"PORT={port} python3 -c \""
+                f'PORT={port} python3 -c "'
                 "import os, socket, time; "
                 "s=socket.socket(); "
                 "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
                 "s.bind(('127.0.0.1', int(os.environ['PORT']))); "
                 "s.listen(1); "
                 "time.sleep(60)"
-                "\""
+                '"'
             )
 
             result = runtime.start_process({"command": command, "wait_seconds": 1})
@@ -467,14 +467,14 @@ class ProtectedPathTests(unittest.TestCase):
                 max_seconds=30,
             )
             command = (
-                "python3 -c \""
+                'python3 -c "'
                 "import os, socket, time; "
                 "s=socket.socket(); "
                 "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
                 "s.bind(('127.0.0.1', int(os.environ['PORT']))); "
                 "s.listen(1); "
                 "time.sleep(60)"
-                "\""
+                '"'
             )
 
             result = runtime.start_process({"command": command, "auto_allocate_port": True, "wait_seconds": 1})
@@ -672,9 +672,7 @@ class ProtectedPathTests(unittest.TestCase):
             self.assertIsNone(runtime.final_report)
 
     def test_extracts_text_declared_tool_actions(self) -> None:
-        actions = extract_text_tool_actions(
-            '**assistant Action** ```json {"role":"assistant","content":[{"name":"final_report","arguments":{"status":"done"}}]} ```'
-        )
+        actions = extract_text_tool_actions('**assistant Action** ```json {"role":"assistant","content":[{"name":"final_report","arguments":{"status":"done"}}]} ```')
 
         self.assertEqual(actions, [{"name": "final_report", "arguments": {"status": "done"}}])
 
@@ -806,9 +804,7 @@ The contract is close but still underspecified.
             (root / ".hooky/artifacts/state.json").write_text("{}", encoding="utf-8")
             runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
-            excerpt = runtime.read_file_excerpt(
-                {"path": ".hooky/runs/local/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
-            )
+            excerpt = runtime.read_file_excerpt({"path": ".hooky/runs/local/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1})
             root_listing = runtime.list_files({"path": "."})
 
             self.assertEqual(excerpt["content"], "line two")
@@ -1026,9 +1022,7 @@ The contract is close but still underspecified.
                         "topGapRatio": 0.2,
                         "clippedElementCount": 1,
                         "headingInteractiveOverlapCount": 1,
-                        "sampleHeadingInteractiveOverlaps": [
-                            {"headingText": "Create project", "interactiveText": "Project name", "overlapRatio": 0.35}
-                        ],
+                        "sampleHeadingInteractiveOverlaps": [{"headingText": "Create project", "interactiveText": "Project name", "overlapRatio": 0.35}],
                         "visibleElementCount": 4,
                     },
                 }

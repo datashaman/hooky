@@ -10,7 +10,6 @@ import socket
 import subprocess
 import time
 import urllib.request
-
 from pathlib import Path
 from typing import Any
 
@@ -268,4 +267,3 @@ def close_process_log(process: subprocess.Popen[str]) -> None:
         handle.close()
     except Exception:
         pass
-

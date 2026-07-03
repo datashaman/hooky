@@ -85,4 +85,3 @@ def integer_schema(default: int | None = None, minimum: int | None = None, maxim
 
 def string_array_schema() -> dict[str, Any]:
     return {"type": "array", "items": {"type": "string"}, "default": []}
-

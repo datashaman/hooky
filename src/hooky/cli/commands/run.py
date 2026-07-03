@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
-
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Callable
+from typing import Annotated
 
 import typer
 
-from hooky import runtime
-from hooky import roles
-from hooky import loop_executor
-
-from hooky.cli.app import DEFAULT_LAST_RUN_PATH, T, app
+from hooky import loop_executor, roles, runtime
+from hooky.cli.app import T, app
 from hooky.cli.commands.inspect import loop_harness_review
 from hooky.cli.commands.setup import follow_runtime_log, loop_status, loop_watch
 from hooky.cli.loop_state import (
@@ -36,6 +33,7 @@ from hooky.cli.loop_state import (
     write_loop_state,
 )
 from hooky.cli.paths import (
+    DEFAULT_LAST_RUN_PATH,
     ensure_workspace_ready,
     loop_contract_path,
     loop_dir,

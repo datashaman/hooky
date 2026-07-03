@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-
 from typing import Annotated
 
 import typer
 
-from hooky import runtime
-from hooky import roles
-
+from hooky import roles, runtime
 from hooky.cli.app import app
 from hooky.cli.commands.setup import follow_runtime_log
 from hooky.cli.loop_state import (
@@ -101,11 +98,7 @@ def loop_transcript(
         reasoning_suffix = f" reasoning_chars={len(reasoning_text)}" if reasoning_text else ""
         typer.echo(f"## {index}. {entry_role} kind={kind} tool_calls={len(calls)}{reasoning_suffix}")
         if calls:
-            names = [
-                str((call.get("function") or {}).get("name") or call.get("name") or "unknown")
-                for call in calls
-                if isinstance(call, dict)
-            ]
+            names = [str((call.get("function") or {}).get("name") or call.get("name") or "unknown") for call in calls if isinstance(call, dict)]
             typer.echo("tools: " + ", ".join(names))
         if entry_role == "tool":
             typer.echo("tool: " + str(entry.get("name") or "unknown"))

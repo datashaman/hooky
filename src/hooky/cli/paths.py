@@ -7,16 +7,14 @@ import os
 import re
 import shutil
 import sys
-
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from hooky import runtime
-from hooky import loop_executor
+from hooky import loop_executor, runtime
 
 DEFAULT_LAST_RUN_PATH = Path("/tmp/hooky-last-run-path")
 DEFAULT_RUN_KEY = "local"
@@ -25,7 +23,7 @@ RUN_DIR_ENV = "HOOKY_RUN_DIR"
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def workspace_from_ctx(ctx: typer.Context) -> Path:

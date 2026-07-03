@@ -8,18 +8,27 @@ import mimetypes
 import os
 import threading
 import time
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from hooky import agent_skills
-
 from hooky.runtime.evidence import relative_to
 from hooky.runtime.models import LocalDeadline, model_client, model_provider, model_request_options, openrouter_timeout_ms, relative_or_name, response_usage
-from hooky.runtime.rendering import append_live_event, canonical_tool_name, format_runtime_event_line, utc_timestamp, write_runtime_log
+from hooky.runtime.rendering import append_live_event, format_runtime_event_line, utc_timestamp, write_runtime_log
 from hooky.runtime.schemas import structured_response_format
-from hooky.runtime.text import assistant_message_text, assistant_reasoning_trace, compaction_schema, compaction_system_prompt, compaction_user_prompt, estimate_tokens, extract_text_tool_actions, recover_text_final_report, single_line, trim_leading_tool_messages
+from hooky.runtime.text import (
+    assistant_message_text,
+    assistant_reasoning_trace,
+    compaction_schema,
+    compaction_system_prompt,
+    compaction_user_prompt,
+    estimate_tokens,
+    extract_text_tool_actions,
+    recover_text_final_report,
+    single_line,
+    trim_leading_tool_messages,
+)
 from hooky.runtime.tool_runtime import ToolRuntime
 
 
@@ -143,8 +152,7 @@ def run_tool_agent(
         )
     if runtime.initial_image_paths:
         initial_images = [
-            {"path": relative_to((path if path.is_absolute() else runtime.working_folder / path), runtime.working_folder), "label": "Initial visual evidence"}
-            for path in runtime.initial_image_paths
+            {"path": relative_to((path if path.is_absolute() else runtime.working_folder / path), runtime.working_folder), "label": "Initial visual evidence"} for path in runtime.initial_image_paths
         ]
         image_message = image_input_message(runtime, initial_images, "Initial visual evidence attached for inspection.")
         if image_message:
@@ -425,10 +433,7 @@ def run_tool_agent(
                     if name == "run_tests":
                         grace = runtime.grant_post_success_grace(result)
                         if grace:
-                            notice = (
-                                "Post-success grace: tests passed near the runtime deadline. "
-                                f"Added {grace['added_seconds']}s for final todo/reporting."
-                            )
+                            notice = f"Post-success grace: tests passed near the runtime deadline. Added {grace['added_seconds']}s for final todo/reporting."
                             transcript.append(
                                 {
                                     "role": "runtime_notice",
@@ -439,10 +444,7 @@ def run_tool_agent(
                             )
                             append_live_event(
                                 runtime,
-                                (
-                                    f"{utc_timestamp()} runtime_notice kind=post_success_grace "
-                                    f"added_seconds={grace['added_seconds']} max_seconds={int(grace['max_seconds'])}"
-                                ),
+                                (f"{utc_timestamp()} runtime_notice kind=post_success_grace added_seconds={grace['added_seconds']} max_seconds={int(grace['max_seconds'])}"),
                             )
                     flush_live_log()
                     messages.append(
@@ -634,4 +636,3 @@ def accumulate_usage(total: dict[str, Any], usage: dict[str, Any]) -> None:
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
         total[key] = int(total.get(key) or 0) + int(usage.get(key) or 0)
     total["cost"] = round(float(total.get("cost") or 0) + float(usage.get("cost") or 0), 8)
-

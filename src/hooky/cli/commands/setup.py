@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import time
-
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from hooky import agent_skills
-
-from hooky.cli.app import DEFAULT_LAST_RUN_PATH, app, skills_app
+from hooky.cli.app import app, skills_app
 from hooky.cli.loop_state import ensure_loop_initialized, initialize_loop_files, read_loop_state
 from hooky.cli.paths import (
+    DEFAULT_LAST_RUN_PATH,
     ensure_workspace_ready,
     loop_contract_path,
     loop_dir,

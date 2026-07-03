@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fnmatch
-
 from pathlib import Path
 from typing import Any
 
@@ -199,11 +198,7 @@ class ReadWriteToolsMixin:
         matches = []
         for path in sorted(root.rglob("*")):
             relative = relative_to(path, self.working_folder)
-            if (
-                path.is_file()
-                and not self.is_read_blocked(path)
-                and (fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(relative, pattern))
-            ):
+            if path.is_file() and not self.is_read_blocked(path) and (fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(relative, pattern)):
                 matches.append(relative)
         return {"ok": True, "matches": matches[:500], "truncated": len(matches) > 500}
 
@@ -225,4 +220,3 @@ class ReadWriteToolsMixin:
                     if len(matches) >= 500:
                         return {"ok": True, "matches": matches, "truncated": True}
         return {"ok": True, "matches": matches, "truncated": False}
-

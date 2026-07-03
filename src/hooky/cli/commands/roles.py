@@ -8,7 +8,6 @@ from typing import Annotated, Any
 import typer
 
 from hooky import roles
-
 from hooky.cli.app import app
 from hooky.cli.loop_state import (
     active_loop_attempt,

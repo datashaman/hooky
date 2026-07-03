@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-
 from typing import Any
 
 from hooky.runtime.text import sanitize_output_for_read_policy
@@ -48,4 +47,3 @@ class GitToolsMixin:
         stdout = sanitize_output_for_read_policy(completed.stdout[-max_bytes:], self.read_blocked_prefixes)
         stderr = sanitize_output_for_read_policy(completed.stderr[-max_bytes:], self.read_blocked_prefixes)
         return {"ok": completed.returncode == 0, "returncode": completed.returncode, "stdout": stdout, "stderr": stderr}
-

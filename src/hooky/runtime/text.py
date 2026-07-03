@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -220,10 +219,7 @@ def extract_text_tool_actions(text: str) -> list[dict[str, Any]]:
 def compaction_system_prompt(runtime: ToolRuntime) -> str:
     if runtime.compaction_prompt_path.exists():
         return runtime.compaction_prompt_path.read_text(encoding="utf-8")
-    return (
-        "You are an anchored context summarization assistant. Summarize only the supplied "
-        "older context, preserve exact paths and identifiers, and do not answer the task."
-    )
+    return "You are an anchored context summarization assistant. Summarize only the supplied older context, preserve exact paths and identifiers, and do not answer the task."
 
 
 def compaction_user_prompt(previous_summary: str, older_messages: list[Any]) -> str:
@@ -237,11 +233,7 @@ def compaction_user_prompt(previous_summary: str, older_messages: list[Any]) -> 
         "- Tool results and failures\n"
         "- Todo state\n"
         "- Next relevant actions\n\n"
-        "Previous summary:\n"
-        + (previous_summary or "None.")
-        + "\n\nOlder context to compact:\n```json\n"
-        + json.dumps(older_messages, indent=2, sort_keys=True, default=str)
-        + "\n```"
+        "Previous summary:\n" + (previous_summary or "None.") + "\n\nOlder context to compact:\n```json\n" + json.dumps(older_messages, indent=2, sort_keys=True, default=str) + "\n```"
     )
 
 
@@ -341,4 +333,3 @@ def sanitize_output_for_read_policy(output: str, blocked_prefixes: list[str]) ->
             continue
         lines.append(line)
     return "\n".join(lines)
-

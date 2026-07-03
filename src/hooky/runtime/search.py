@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-
 from typing import Any
 
 
@@ -64,4 +63,3 @@ def tavily_search(
         "query": query,
         "results": results,
     }
-

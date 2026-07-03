@@ -7,7 +7,6 @@ import os
 import signal
 import urllib.error
 import urllib.request
-
 from pathlib import Path
 from typing import Any
 
@@ -78,11 +77,7 @@ class ModelMessage:
     def __init__(self, payload: dict[str, Any]):
         self.role = str(payload.get("role") or "assistant")
         self.content = payload.get("content")
-        self.extra = {
-            key: value
-            for key, value in payload.items()
-            if key not in {"role", "content", "tool_calls"} and value is not None
-        }
+        self.extra = {key: value for key, value in payload.items() if key not in {"role", "content", "tool_calls"} and value is not None}
         tool_calls = payload.get("tool_calls") if isinstance(payload.get("tool_calls"), list) else []
         self.tool_calls = [ModelToolCall(item, index) for index, item in enumerate(tool_calls, 1) if isinstance(item, dict)]
 
@@ -162,7 +157,7 @@ class OllamaClient:
     def __init__(self, base_url: str):
         self.chat = OllamaChat(base_url)
 
-    def __enter__(self) -> "OllamaClient":
+    def __enter__(self) -> OllamaClient:
         return self
 
     def __exit__(self, *_args: Any) -> None:
@@ -197,11 +192,7 @@ def response_usage(response: Any) -> dict[str, Any]:
         return usage.model_dump(exclude_none=True)
     if isinstance(usage, dict):
         return {key: value for key, value in usage.items() if value is not None}
-    return {
-        key: value
-        for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost")
-        if (value := getattr(usage, key, None)) is not None
-    }
+    return {key: value for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cost") if (value := getattr(usage, key, None)) is not None}
 
 
 def openrouter_timeout_ms() -> int:
@@ -215,7 +206,7 @@ class LocalDeadline:
         self.previous_handler: Any = None
         self.previous_timer: tuple[float, float] = (0.0, 0.0)
 
-    def __enter__(self) -> "LocalDeadline":
+    def __enter__(self) -> LocalDeadline:
         self.previous_handler = signal.getsignal(signal.SIGALRM)
         self.previous_timer = signal.getitimer(signal.ITIMER_REAL)
         signal.signal(signal.SIGALRM, self._raise_timeout)
@@ -234,4 +225,3 @@ class LocalDeadline:
 
 def relative_or_name(path: Path) -> str:
     return path.as_posix()
-

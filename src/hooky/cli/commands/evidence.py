@@ -6,12 +6,11 @@ from typing import Annotated
 
 import typer
 
-from hooky.runtime import ensure_evidence_report
-
 from hooky.cli.app import evidence_app
 from hooky.cli.loop_state import ensure_loop_initialized, read_loop_state
 from hooky.cli.paths import workspace_from_ctx
 from hooky.cli.transcript import evidence_base_dir_for_cli, evidence_report_path_for_cli, evidence_runtime_for_cli
+from hooky.runtime import ensure_evidence_report
 
 
 @evidence_app.command("path")

@@ -9,6 +9,71 @@ effect.
 from __future__ import annotations
 
 from hooky.cli.app import REPO_ROOT, SCRIPT_DIR, T, app, cli, evidence_app, main, skills_app
+from hooky.cli.commands.evidence import evidence_exec, evidence_init, evidence_note, evidence_path, evidence_screenshot, evidence_show
+from hooky.cli.commands.inspect import (
+    loop_context,
+    loop_harness_review,
+    loop_inspect,
+    loop_runtime_log,
+    loop_stall,
+    loop_trace_grep,
+    loop_transcript,
+)
+from hooky.cli.commands.roles import (
+    loop_accept_contract,
+    loop_complete_attempt,
+    loop_evaluator_attempt,
+    loop_evaluator_contract,
+    loop_evaluator_report,
+    loop_generator_contract,
+    loop_generator_implement,
+    loop_log,
+    loop_otel_event,
+    loop_planner,
+    loop_proposal,
+    loop_propose_contract,
+    loop_restart_attempt,
+    loop_restart_contract,
+    loop_review_contract,
+    loop_start_attempt,
+    loop_trace_event,
+)
+from hooky.cli.commands.run import (
+    _run_model_loop_once,
+    doctor,
+    loop_run,
+    report,
+    run_default,
+    run_model_loop_once,
+    run_model_role_with_retries,
+    start,
+    status,
+    trace,
+    watch,
+)
+from hooky.cli.commands.setup import follow_runtime_log, init, loop_init, loop_status, loop_watch, skills_list, skills_show
+from hooky.cli.loop_state import (
+    active_loop_attempt,
+    append_jsonl,
+    append_loop_log,
+    apply_loop_evaluator_report,
+    default_loop_feature_list,
+    default_loop_state,
+    ensure_loop_initialized,
+    fallback_evaluator_report_from_error,
+    format_evaluator_feedback,
+    initialize_loop_files,
+    latest_loop_attempt_id,
+    loop_visible_bottleneck,
+    next_loop_attempt_id,
+    read_loop_state,
+    record_loop_transition,
+    reset_loop_attempt_workspace,
+    start_loop_attempt_state,
+    update_loop_attempt,
+    write_loop_progress,
+    write_loop_state,
+)
 from hooky.cli.paths import (
     DEFAULT_LAST_RUN_PATH,
     DEFAULT_RUN_KEY,
@@ -49,27 +114,19 @@ from hooky.cli.paths import (
     write_json,
     write_last_run_workspace,
 )
-from hooky.cli.loop_state import (
-    active_loop_attempt,
-    append_jsonl,
-    append_loop_log,
-    apply_loop_evaluator_report,
-    default_loop_feature_list,
-    default_loop_state,
-    ensure_loop_initialized,
-    fallback_evaluator_report_from_error,
-    format_evaluator_feedback,
-    initialize_loop_files,
-    latest_loop_attempt_id,
-    loop_visible_bottleneck,
-    next_loop_attempt_id,
-    read_loop_state,
-    record_loop_transition,
-    reset_loop_attempt_workspace,
-    start_loop_attempt_state,
-    update_loop_attempt,
-    write_loop_progress,
-    write_loop_state,
+from hooky.cli.transcript import (
+    evidence_base_dir_for_cli,
+    evidence_report_path_for_cli,
+    evidence_runtime_for_cli,
+    load_json_list,
+    load_loop_transcript,
+    loop_context_stats,
+    loop_debug_root,
+    transcript_message,
+    transcript_reasoning_text,
+    transcript_role,
+    transcript_text,
+    transcript_tool_calls,
 )
 from hooky.cli.validation import (
     blocking_visual_failures_from_snapshot_events,
@@ -89,63 +146,6 @@ from hooky.cli.validation import (
     report_mentions_blocking_visual_defect,
     tool_event_is_test_execution,
     tool_result_passed,
-)
-from hooky.cli.transcript import (
-    evidence_base_dir_for_cli,
-    evidence_report_path_for_cli,
-    evidence_runtime_for_cli,
-    load_json_list,
-    load_loop_transcript,
-    loop_context_stats,
-    loop_debug_root,
-    transcript_message,
-    transcript_reasoning_text,
-    transcript_role,
-    transcript_text,
-    transcript_tool_calls,
-)
-from hooky.cli.commands.setup import follow_runtime_log, init, loop_init, loop_status, loop_watch, skills_list, skills_show
-from hooky.cli.commands.evidence import evidence_exec, evidence_init, evidence_note, evidence_path, evidence_screenshot, evidence_show
-from hooky.cli.commands.inspect import (
-    loop_context,
-    loop_harness_review,
-    loop_inspect,
-    loop_runtime_log,
-    loop_stall,
-    loop_trace_grep,
-    loop_transcript,
-)
-from hooky.cli.commands.run import (
-    _run_model_loop_once,
-    doctor,
-    loop_run,
-    report,
-    run_default,
-    run_model_loop_once,
-    run_model_role_with_retries,
-    start,
-    status,
-    trace,
-    watch,
-)
-from hooky.cli.commands.roles import (
-    loop_accept_contract,
-    loop_complete_attempt,
-    loop_evaluator_attempt,
-    loop_evaluator_contract,
-    loop_evaluator_report,
-    loop_generator_contract,
-    loop_generator_implement,
-    loop_log,
-    loop_otel_event,
-    loop_planner,
-    loop_propose_contract,
-    loop_proposal,
-    loop_restart_attempt,
-    loop_restart_contract,
-    loop_review_contract,
-    loop_start_attempt,
-    loop_trace_event,
 )
 
 __all__ = [

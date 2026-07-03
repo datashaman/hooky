@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import json
-
 from pathlib import Path
 from typing import Any
 
-from hooky import runtime
-from hooky import roles
-
+from hooky import roles, runtime
 from hooky.cli.paths import loop_attempt_dir, loop_contract_path, loop_feature_list_path, loop_proposal_path
 
 
@@ -20,20 +17,14 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
     contract_text = loop_contract_path(workspace).read_text(encoding="utf-8", errors="ignore") if loop_contract_path(workspace).exists() else ""
     rubric_restart_required = roles.taste_rubric_required(contract_text) and not roles.taste_rubric_is_substantive(contract_text)
     if rubric_restart_required:
-        evidence_failures.append(
-            "Evaluator cannot pass this attempt: subjective quality is requested but contract.md does not define a substantive Taste Rubric."
-        )
+        evidence_failures.append("Evaluator cannot pass this attempt: subjective quality is requested but contract.md does not define a substantive Taste Rubric.")
     if has_placeholder_only_tests(workspace):
-        evidence_failures.append(
-            "Evaluator cannot pass this attempt: the executable test suite appears to contain only placeholder tests."
-        )
+        evidence_failures.append("Evaluator cannot pass this attempt: the executable test suite appears to contain only placeholder tests.")
     events = loop_attempt_tool_events(workspace, attempt_id)
     test_failures = loop_attempt_test_evidence_failures(events)
     evidence_failures.extend(test_failures)
     if loop_attempt_requires_visual_evidence(workspace) and not loop_attempt_captured_visual_snapshot(events):
-        evidence_failures.append(
-            "Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app."
-        )
+        evidence_failures.append("Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app.")
     reference_visual_failures = loop_attempt_reference_visual_evidence_failures(workspace, events)
     evidence_failures.extend(reference_visual_failures)
     visual_failures = loop_attempt_blocking_visual_failures(workspace, events, report)
@@ -69,10 +60,7 @@ def loop_attempt_test_evidence_failures(events: list[dict[str, Any]]) -> list[st
         return []
     command = str(result.get("command") or "test command")
     reason = str(result.get("error") or result.get("summary") or result.get("output_tail") or "failed")
-    return [
-        "Evaluator cannot pass this attempt: latest executable test evidence failed "
-        f"({command}): {runtime.single_line(reason, 240)}"
-    ]
+    return [f"Evaluator cannot pass this attempt: latest executable test evidence failed ({command}): {runtime.single_line(reason, 240)}"]
 
 
 def tool_event_is_test_execution(event: dict[str, Any]) -> bool:
@@ -116,9 +104,7 @@ def loop_attempt_blocking_visual_failures(workspace: Path, events: list[dict[str
     bottleneck_text = str(report.get("bottleneck") or "").lower()
     report_text = f"{findings_text} {bottleneck_text}"
     if report_mentions_blocking_visual_defect(report_text):
-        failures.append(
-            "Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content."
-        )
+        failures.append("Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content.")
     return runtime.dedupe_strings(failures)
 
 
@@ -128,9 +114,7 @@ def loop_attempt_reference_visual_evidence_failures(workspace: Path, events: lis
     count = loop_attempt_visual_snapshot_count(events)
     if count >= 2:
         return []
-    return [
-        "Evaluator cannot pass this attempt: reference/canonical UI work needs visual snapshots from multiple states, not only first load."
-    ]
+    return ["Evaluator cannot pass this attempt: reference/canonical UI work needs visual snapshots from multiple states, not only first load."]
 
 
 def loop_attempt_tool_events(workspace: Path, attempt_id: str) -> list[dict[str, Any]]:
@@ -228,13 +212,7 @@ def has_placeholder_only_tests(workspace: Path) -> bool:
     test_root = workspace / "tests"
     if not test_root.exists():
         return False
-    test_files = [
-        path
-        for path in test_root.rglob("*")
-        if path.is_file()
-        and path.suffix in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py"}
-        and path.name not in {".gitkeep"}
-    ]
+    test_files = [path for path in test_root.rglob("*") if path.is_file() and path.suffix in {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py"} and path.name not in {".gitkeep"}]
     if not test_files:
         return False
     return all(is_placeholder_test_file(path) for path in test_files)
@@ -286,8 +264,10 @@ def loop_attempt_requires_reference_visual_evidence(workspace: Path) -> bool:
     for path in [loop_contract_path(workspace), loop_feature_list_path(workspace), loop_proposal_path(workspace)]:
         if path.exists():
             text += "\n" + path.read_text(encoding="utf-8", errors="ignore")
-    return roles.reference_visual_rubric_required(text) or roles.taste_rubric_is_substantive(text) and any(
-        term in text.lower() for term in ("reference", "canonical", "template", "official css", "todomvc")
+    return (
+        roles.reference_visual_rubric_required(text)
+        or roles.taste_rubric_is_substantive(text)
+        and any(term in text.lower() for term in ("reference", "canonical", "template", "official css", "todomvc"))
     )
 
 

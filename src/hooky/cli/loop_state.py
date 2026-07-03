@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +64,7 @@ def ensure_loop_initialized(workspace: Path) -> None:
 def append_loop_log(workspace: Path, op: str, title: str, body: str = "") -> None:
     path = loop_log_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = datetime.now(UTC).replace(microsecond=0)
     date = now.date().isoformat()
     time_label = now.time().isoformat().replace("+00:00", "") + "Z"
     existing = path.read_text(encoding="utf-8") if path.exists() else ""

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 from hooky import agent_skills
 
@@ -47,16 +47,7 @@ class AgentSkillsTests(unittest.TestCase):
             self.assertIn("skills-sh-example", skills)
 
     def test_parses_multiline_yaml_frontmatter_description(self) -> None:
-        metadata, body = agent_skills.parse_frontmatter(
-            "---\n"
-            "name: example\n"
-            "description: >\n"
-            "  First sentence.\n"
-            "  Second sentence.\n"
-            "---\n"
-            "\n"
-            "# Body\n"
-        )
+        metadata, body = agent_skills.parse_frontmatter("---\nname: example\ndescription: >\n  First sentence.\n  Second sentence.\n---\n\n# Body\n")
 
         self.assertEqual(metadata["description"], "First sentence. Second sentence.")
         self.assertEqual(body, "\n# Body\n")

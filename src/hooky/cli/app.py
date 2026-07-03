@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-
 from pathlib import Path
 from typing import Annotated, TypeVar
 
@@ -22,9 +21,6 @@ app.add_typer(evidence_app, name="evidence")
 # These constants live in hooky.cli.paths alongside the other run-key/
 # workspace helpers; re-imported here because the root callback needs them.
 from hooky.cli.paths import (  # noqa: E402
-    DEFAULT_LAST_RUN_PATH,
-    DEFAULT_RUN_KEY,
-    RUN_DIR_ENV,
     RUN_KEY_ENV,
     normalize_run_key,
 )

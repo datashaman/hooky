@@ -24,7 +24,6 @@ from hooky.runtime import (
     utc_timestamp,
 )
 
-
 VALID_EXECUTORS = {"native", "shell", "codex", "claude"}
 EXECUTOR_ENV = "HOOKY_EXECUTOR"
 
@@ -444,11 +443,7 @@ def extract_executor_error(stdout: str | None, stderr: str | None) -> str | None
         if isinstance(message, dict) and event.get("error"):
             content = message.get("content")
             if isinstance(content, list):
-                text = " ".join(
-                    str(item.get("text"))
-                    for item in content
-                    if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
-                ).strip()
+                text = " ".join(str(item.get("text")) for item in content if isinstance(item, dict) and item.get("type") == "text" and item.get("text")).strip()
                 if text:
                     return text
     return None

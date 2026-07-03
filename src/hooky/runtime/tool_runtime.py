@@ -5,13 +5,12 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from hooky import agent_skills
-
 from hooky.runtime.models import runtime_dir
 from hooky.runtime.rendering import canonical_tool_name
 from hooky.runtime.schemas import integer_schema, string_array_schema, string_schema, tool_schema
@@ -101,11 +100,7 @@ class ToolRuntime(
         if os.environ.get("AGENT_POST_SUCCESS_GRACE_SECONDS"):
             self.max_post_success_grace_seconds = int(os.environ["AGENT_POST_SUCCESS_GRACE_SECONDS"])
         if os.environ.get("HOOKY_ACTIVE_SKILLS") and not self.preselected_skill_names:
-            self.preselected_skill_names = [
-                item.strip()
-                for item in os.environ["HOOKY_ACTIVE_SKILLS"].split(",")
-                if item.strip()
-            ]
+            self.preselected_skill_names = [item.strip() for item in os.environ["HOOKY_ACTIVE_SKILLS"].split(",") if item.strip()]
 
     def tools(self) -> list[dict[str, Any]]:
         tools = [
@@ -358,11 +353,7 @@ class ToolRuntime(
             )
         if self.enabled_tools is not None:
             enabled = set(self.enabled_tools)
-            tools = [
-                tool
-                for tool in tools
-                if tool.get("function", {}).get("name") in enabled
-            ]
+            tools = [tool for tool in tools if tool.get("function", {}).get("name") in enabled]
         return tools
 
     def run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -415,4 +406,3 @@ class ToolRuntime(
             "todo_write": self.todo_write,
             "final_report": self.finish,
         }
-
