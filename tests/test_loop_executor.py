@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hooky import agent_runtime
 from hooky import loop_executor
+from hooky.runtime import ToolRuntime
 
 
 class LoopExecutorTests(unittest.TestCase):
@@ -89,7 +89,7 @@ print("wrote", output_path)
 """.lstrip(),
                 encoding="utf-8",
             )
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=workspace,
                 final_report_schema={"type": "object"},
                 max_cost_usd=0.01,

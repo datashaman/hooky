@@ -19,10 +19,8 @@ app.add_typer(skills_app, name="skills")
 evidence_app = typer.Typer(help="Capture and inspect system-owned evidence reports.", no_args_is_help=True)
 app.add_typer(evidence_app, name="evidence")
 
-# These constants are the historical public surface of the pre-split hooky_cli
-# module. They live in hooky.cli.paths (their natural home, alongside the
-# other run-key/workspace helpers) and are re-exported here unchanged so
-# ``hooky_cli.DEFAULT_LAST_RUN_PATH`` etc. keep resolving.
+# These constants live in hooky.cli.paths alongside the other run-key/
+# workspace helpers; re-imported here because the root callback needs them.
 from hooky.cli.paths import (  # noqa: E402
     DEFAULT_LAST_RUN_PATH,
     DEFAULT_RUN_KEY,

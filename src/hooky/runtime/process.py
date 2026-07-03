@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Managed background process lifecycle helpers."""
 
 from __future__ import annotations
 

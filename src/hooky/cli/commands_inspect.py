@@ -8,8 +8,8 @@ from typing import Annotated
 
 import typer
 
-from hooky import agent_runtime
-from hooky import loop_agent
+from hooky import runtime
+from hooky import roles
 
 from hooky.cli.app import app
 from hooky.cli.commands_setup import follow_runtime_log
@@ -110,15 +110,15 @@ def loop_transcript(
         if entry_role == "tool":
             typer.echo("tool: " + str(entry.get("name") or "unknown"))
             result = entry.get("result")
-            typer.echo(agent_runtime.single_line(json.dumps(result, sort_keys=True) if isinstance(result, dict) else str(result), 1200))
+            typer.echo(runtime.single_line(json.dumps(result, sort_keys=True) if isinstance(result, dict) else str(result), 1200))
         elif text:
-            typer.echo(text if full else agent_runtime.single_line(text, 1200))
+            typer.echo(text if full else runtime.single_line(text, 1200))
         else:
             typer.echo("[empty]")
         if reasoning and reasoning_text:
             typer.echo("")
             typer.echo("reasoning:")
-            typer.echo(reasoning_text if full else agent_runtime.single_line(reasoning_text, 1200))
+            typer.echo(reasoning_text if full else runtime.single_line(reasoning_text, 1200))
         typer.echo("")
 
 
@@ -153,7 +153,7 @@ def loop_stall(
         typer.echo("recent no-tool assistant messages:")
         for entry in no_tool[-5:]:
             text = transcript_text(entry).strip()
-            typer.echo("- " + (agent_runtime.single_line(text, 500) if text else "[empty]"))
+            typer.echo("- " + (runtime.single_line(text, 500) if text else "[empty]"))
 
 
 @app.command("context")
@@ -225,7 +225,7 @@ def loop_inspect(
             role = transcript_role(entry)
             calls = transcript_tool_calls(entry)
             text = transcript_text(entry).strip()
-            preview = agent_runtime.single_line(text, 300) if text else "[empty]"
+            preview = runtime.single_line(text, 300) if text else "[empty]"
             suffix = f" tools={len(calls)}" if role == "assistant" else ""
             typer.echo(f"- {role}{suffix}: {preview}")
     else:
@@ -273,7 +273,7 @@ def loop_trace_grep(
         for index, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
             if needle not in line.lower():
                 continue
-            typer.echo(f"{path}:{index}: {agent_runtime.single_line(line, 1000)}")
+            typer.echo(f"{path}:{index}: {runtime.single_line(line, 1000)}")
             matches += 1
             if matches >= lines:
                 return
@@ -300,7 +300,7 @@ def loop_harness_review(ctx: typer.Context, write: Annotated[bool, typer.Option(
     trace_files = [trace_root / "runtime_events.log", trace_root / "runtime_transcript.json", trace_root / "tool_events.json"]
     visible_bottleneck = loop_visible_bottleneck(state)
     contract_text = loop_contract_path(workspace).read_text(encoding="utf-8", errors="ignore") if loop_contract_path(workspace).exists() else ""
-    taste_rubric_present = loop_agent.taste_rubric_is_substantive(contract_text)
+    taste_rubric_present = roles.taste_rubric_is_substantive(contract_text)
     reference_visual_required = loop_attempt_requires_reference_visual_evidence(workspace)
     reference_visual_count = loop_attempt_visual_snapshot_count(loop_attempt_tool_events(workspace, latest)) if latest else 0
     context_stats = loop_context_stats(trace_root)

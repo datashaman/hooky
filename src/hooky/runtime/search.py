@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Web search tool backend."""
 
 from __future__ import annotations
 

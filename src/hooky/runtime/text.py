@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Markdown/JSON extraction, compaction prompts, and text utilities."""
 
 from __future__ import annotations
 

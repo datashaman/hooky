@@ -10,7 +10,9 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from hooky import hooky_cli
+from hooky import cli
+from hooky import roles
+from hooky.runtime import AgentRunError, AgentRunResult, git_run
 from hooky.cli import commands_run
 
 
@@ -32,9 +34,9 @@ class HookyProgressTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise hooky_cli.agent_runtime.AgentRunError(
+                raise AgentRunError(
                     "agent model request exceeded 120s",
-                    hooky_cli.agent_runtime.AgentRunResult(
+                    AgentRunResult(
                         final_report=None,
                         usage={},
                         transcript=[],
@@ -48,10 +50,10 @@ class HookyProgressTests(unittest.TestCase):
             return "ok"
 
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
 
         with mock.patch.dict(os.environ, {"LOOP_MODEL_ROLE_RETRIES": "1"}):
-            result = hooky_cli.run_model_role_with_retries(self.workspace, "test-role", flaky_call)
+            result = cli.run_model_role_with_retries(self.workspace, "test-role", flaky_call)
 
         self.assertEqual(result, "ok")
         self.assertEqual(calls, 2)
@@ -66,9 +68,9 @@ class HookyProgressTests(unittest.TestCase):
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise hooky_cli.agent_runtime.AgentRunError(
+                raise AgentRunError(
                     "agent produced 6 consecutive assistant messages without tool calls",
-                    hooky_cli.agent_runtime.AgentRunResult(
+                    AgentRunResult(
                         final_report=None,
                         usage={},
                         transcript=[],
@@ -83,10 +85,10 @@ class HookyProgressTests(unittest.TestCase):
             return "ok"
 
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
 
         with mock.patch.dict(os.environ, {"LOOP_MODEL_ROLE_RETRIES": "1"}):
-            result = hooky_cli.run_model_role_with_retries(
+            result = cli.run_model_role_with_retries(
                 self.workspace,
                 "generator-implementation attempt 001",
                 flaky_call,
@@ -113,7 +115,7 @@ class HookyProgressTests(unittest.TestCase):
             (workspace / "tests").mkdir()
             (workspace / "tests/stale.spec.js").write_text("stale\n", encoding="utf-8")
 
-            note = hooky_cli.reset_loop_attempt_workspace(workspace)
+            note = cli.reset_loop_attempt_workspace(workspace)
 
             self.assertIn("HEAD is now at", note)
             self.assertEqual((workspace / "src/App.jsx").read_text(encoding="utf-8"), "before\n")
@@ -125,12 +127,12 @@ class HookyProgressTests(unittest.TestCase):
             workspace = Path(tmp)
             (workspace / "package.json").write_text('{"scripts":{}}\n', encoding="utf-8")
 
-            result = CliRunner().invoke(hooky_cli.app, ["-C", str(workspace), "init"])
+            result = CliRunner().invoke(cli.app, ["-C", str(workspace), "init"])
 
             self.assertEqual(result.exit_code, 0, result.output)
-            head = hooky_cli.agent_runtime.git_run(workspace, ["rev-parse", "--verify", "HEAD"], check=False)
-            show = hooky_cli.agent_runtime.git_run(workspace, ["show", "HEAD:package.json"], check=False)
-            status = hooky_cli.agent_runtime.git_run(workspace, ["status", "--short", "--", ".", ":!.hooky"], check=False)
+            head = git_run(workspace, ["rev-parse", "--verify", "HEAD"], check=False)
+            show = git_run(workspace, ["show", "HEAD:package.json"], check=False)
+            status = git_run(workspace, ["status", "--short", "--", ".", ":!.hooky"], check=False)
             self.assertEqual(head.returncode, 0)
             self.assertEqual(show.stdout, '{"scripts":{}}\n')
             self.assertEqual(status.stdout, "")
@@ -143,7 +145,7 @@ class HookyProgressTests(unittest.TestCase):
 
         with mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording):
             result = CliRunner().invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "start", "--last-run-path", str(last_run_path)],
             )
 
@@ -165,7 +167,7 @@ class HookyProgressTests(unittest.TestCase):
             mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording),
         ):
             result = CliRunner().invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "start", "--skill", "visual-ui-review", "--last-run-path", str(last_run_path)],
             )
 
@@ -185,7 +187,7 @@ class HookyProgressTests(unittest.TestCase):
 
         with mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording):
             result = CliRunner().invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "start", "--executor", "codex", "--last-run-path", str(last_run_path)],
             )
 
@@ -203,7 +205,7 @@ class HookyProgressTests(unittest.TestCase):
 
         with mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording):
             result = CliRunner().invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "run", "--executor", "claude", "--last-run-path", str(last_run_path)],
             )
 
@@ -211,15 +213,15 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(seen["executor"], "claude")
 
     def test_removed_pipeline_commands_are_not_registered(self) -> None:
-        help_result = CliRunner().invoke(hooky_cli.app, ["--help"])
+        help_result = CliRunner().invoke(cli.app, ["--help"])
 
         self.assertEqual(help_result.exit_code, 0, help_result.output)
         self.assertNotIn(" task ", help_result.output)
         self.assertNotIn(" approve ", help_result.output)
 
-        loop_result = CliRunner().invoke(hooky_cli.app, ["loop"])
+        loop_result = CliRunner().invoke(cli.app, ["loop"])
         self.assertNotEqual(loop_result.exit_code, 0)
-        pipeline_result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "pipeline"])
+        pipeline_result = CliRunner().invoke(cli.app, ["-C", str(self.workspace), "run", "pipeline"])
         self.assertNotEqual(pipeline_result.exit_code, 0)
 
     def test_skills_list_shows_workspace_skill(self) -> None:
@@ -230,32 +232,32 @@ class HookyProgressTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "skills", "list"])
+        result = CliRunner().invoke(cli.app, ["-C", str(self.workspace), "skills", "list"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("example - Workspace skill.", result.output)
 
     def test_watch_uses_last_run_workspace(self) -> None:
         last_run_path = self.workspace / "last-run-path"
-        CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "init", "--last-run-path", str(last_run_path)])
-        hooky_cli.write_last_run_workspace(last_run_path, self.workspace)
+        CliRunner().invoke(cli.app, ["-C", str(self.workspace), "init", "--last-run-path", str(last_run_path)])
+        cli.write_last_run_workspace(last_run_path, self.workspace)
 
         result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             ["watch", "--last-run-path", str(last_run_path), "--path"],
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn(str(hooky_cli.loop_log_path(self.workspace)), result.output)
+        self.assertIn(str(cli.loop_log_path(self.workspace)), result.output)
 
     def test_status_uses_last_run_workspace_when_current_directory_has_no_loop(self) -> None:
         last_run_path = self.workspace / "last-run-path"
-        CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "init", "--last-run-path", str(last_run_path)])
+        CliRunner().invoke(cli.app, ["-C", str(self.workspace), "init", "--last-run-path", str(last_run_path)])
 
         with tempfile.TemporaryDirectory() as other:
             (Path(other) / ".hooky").mkdir(parents=True)
             result = CliRunner().invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", other, "status", "--last-run-path", str(last_run_path)],
             )
 
@@ -264,7 +266,7 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_init_creates_durable_state_files(self) -> None:
         result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "init", "--title", "Build a todo app"],
         )
 
@@ -278,7 +280,7 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("Build a todo app", contract)
         proposal = (self.workspace / ".hooky/runs/local/proposal.md").read_text(encoding="utf-8")
         self.assertIn("Build a todo app", proposal)
-        feature_list = hooky_cli.read_json(self.workspace / ".hooky/runs/local/feature_list.json")
+        feature_list = cli.read_json(self.workspace / ".hooky/runs/local/feature_list.json")
         self.assertEqual(feature_list["features"], [])
         log = (self.workspace / ".hooky/runs/local/log.md").read_text(encoding="utf-8")
         self.assertRegex(log, r"(?m)^## \d{4}-\d{2}-\d{2}$")
@@ -287,7 +289,7 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_init_reads_proposal_from_stdin_and_derives_title(self) -> None:
         result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "init"],
             input="Build a todo app\n\nUsers can add and complete todos.\n",
         )
@@ -302,7 +304,7 @@ class HookyProgressTests(unittest.TestCase):
         body_file.write_text("Build a calendar\n\nUsers can add events.\n", encoding="utf-8")
 
         result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "init", "--proposal-file", str(body_file)],
         )
 
@@ -316,7 +318,7 @@ class HookyProgressTests(unittest.TestCase):
         body_file.write_text("Build a calendar\n\nUsers can add events.\n", encoding="utf-8")
 
         file_result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "run", "--dry-run", "--proposal-file", str(body_file), "--force"],
         )
 
@@ -328,7 +330,7 @@ class HookyProgressTests(unittest.TestCase):
         stdin_workspace = self.workspace / "stdin-run"
         stdin_workspace.mkdir()
         stdin_result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(stdin_workspace), "run", "--dry-run"],
             input="Build a todo app\n\nUse official TodoMVC behavior.\n",
         )
@@ -348,7 +350,7 @@ class HookyProgressTests(unittest.TestCase):
                 (workspace / "package.json").write_text('{"scripts":{}}\n', encoding="utf-8")
 
                 result = runner.invoke(
-                    hooky_cli.app,
+                    cli.app,
                     ["run", "--dry-run", "--proposal", "Build this project"],
                 )
 
@@ -362,27 +364,27 @@ class HookyProgressTests(unittest.TestCase):
                 os.chdir(previous)
 
     def test_loop_start_attempt_requires_accepted_contract(self) -> None:
-        CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        CliRunner().invoke(cli.app, ["-C", str(self.workspace), "init"])
 
-        result = CliRunner().invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        result = CliRunner().invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("contract is not accepted", result.output)
 
     def test_loop_contract_negotiation_updates_contract_progress_and_log(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
 
         proposal = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "proposal", "--proposal", "Build a browser todo app."],
         )
         contract = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "propose-contract", "--body", "- Add todos\n- Persist todos"],
         )
         review = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "review-contract", "--status", "rejected", "--body", "Missing route criteria."],
         )
 
@@ -396,26 +398,26 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("- Add todos", contract)
         log = (self.workspace / ".hooky/runs/local/log.md").read_text(encoding="utf-8")
         self.assertIn("Missing route criteria.", log)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["status"], "contract-rejected")
 
-        blocked = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        blocked = runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         self.assertNotEqual(blocked.exit_code, 0)
 
         accepted = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "review-contract", "--status", "accepted", "--body", "Criteria are testable."],
         )
 
         self.assertEqual(accepted.exit_code, 0, accepted.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertTrue(state["contract_accepted"])
         self.assertEqual(state["status"], "contract-accepted")
 
     def test_loop_planner_command_runs_role_and_updates_state(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         contract_path = self.workspace / ".hooky/runs/local/contract.md"
 
         def fake_planner(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
@@ -424,15 +426,15 @@ class HookyProgressTests(unittest.TestCase):
             contract_path.write_text("# Loop Contract\n\n## Proposal\n\nBuild a calendar.\n", encoding="utf-8")
             return {"status": "done", "contract_path": ".hooky/runs/local/contract.md", "summary": "Proposal written."}, {"cost": 0.01}
 
-        with mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner):
+        with mock.patch.object(roles, "generate_planner_artifacts", side_effect=fake_planner):
             result = runner.invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "planner", "--proposal", "Build a calendar"],
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("Proposal written.", result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "proposal-written")
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["role_usage"]["planner"]["cost"], 0.01)
@@ -440,7 +442,7 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_generator_contract_command_runs_role_and_updates_state(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         contract_path = self.workspace / ".hooky/runs/local/contract.md"
         feature_path = self.workspace / ".hooky/runs/local/feature_list.json"
 
@@ -458,21 +460,21 @@ class HookyProgressTests(unittest.TestCase):
                 "summary": "Criteria proposed.",
             }, {"cost": 0.02}
 
-        with mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_generator):
-            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "generator-contract"])
+        with mock.patch.object(roles, "generate_generator_contract_artifacts", side_effect=fake_generator):
+            result = runner.invoke(cli.app, ["-C", str(self.workspace), "generator-contract"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("Criteria proposed.", result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "contract-proposed")
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["role_usage"]["generator_contract"]["cost"], 0.02)
-        features = hooky_cli.read_json(feature_path)
+        features = cli.read_json(feature_path)
         self.assertEqual(features["features"][0]["id"], "F001")
 
     def test_loop_evaluator_contract_command_runs_role_and_updates_state(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
 
         def fake_evaluator(*, working_folder: Path, attempt_id: str | None = None) -> tuple[dict[str, object], dict[str, object]]:
             self.assertEqual(working_folder.resolve(), self.workspace.resolve())
@@ -484,12 +486,12 @@ class HookyProgressTests(unittest.TestCase):
                 "required_changes": ["Add persistence criteria."],
             }, {"cost": 0.03}
 
-        with mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_evaluator):
-            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "evaluator-contract"])
+        with mock.patch.object(roles, "generate_evaluator_contract_artifacts", side_effect=fake_evaluator):
+            result = runner.invoke(cli.app, ["-C", str(self.workspace), "evaluator-contract"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("contract_review: rejected", result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "contract-rejected")
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["role_usage"]["evaluator_contract"]["cost"], 0.03)
@@ -498,10 +500,10 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_attempt_lifecycle_creates_trace_and_otel_artifacts(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
 
-        result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        result = runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         attempt_dir = self.workspace / ".hooky/runs/local/attempts/001"
@@ -509,17 +511,17 @@ class HookyProgressTests(unittest.TestCase):
         self.assertTrue((attempt_dir / "traces/generator.jsonl").exists())
         self.assertTrue((attempt_dir / "traces/evaluator.jsonl").exists())
         self.assertTrue((attempt_dir / "otel/spans.jsonl").exists())
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["current_attempt"], "001")
         self.assertEqual(state["status"], "attempt-running")
 
         complete = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "complete-attempt", "--result", "fail", "--bottleneck", "generator_trajectory"],
         )
 
         self.assertEqual(complete.exit_code, 0, complete.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertIsNone(state["current_attempt"])
         self.assertEqual(state["status"], "attempt-failed")
         self.assertEqual(state["bottleneck"], "generator_trajectory")
@@ -528,9 +530,9 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_generator_implement_command_runs_role_for_active_attempt(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         def fake_generator(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
             self.assertEqual(working_folder.resolve(), self.workspace.resolve())
@@ -543,21 +545,21 @@ class HookyProgressTests(unittest.TestCase):
                 "failures": [],
             }, {"cost": 0.04}
 
-        with mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_generator):
-            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "generator-implement"])
+        with mock.patch.object(roles, "generate_generator_implementation_artifacts", side_effect=fake_generator):
+            result = runner.invoke(cli.app, ["-C", str(self.workspace), "generator-implement"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("Implemented the first pass.", result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/generator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/generator_report.json")
         self.assertEqual(report["changed_files"], ["src/app.py"])
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["role_usage"]["generator_implementation"]["cost"], 0.04)
 
     def test_loop_evaluator_attempt_command_applies_recommendation(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         def fake_evaluator(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
             self.assertEqual(working_folder.resolve(), self.workspace.resolve())
@@ -570,12 +572,12 @@ class HookyProgressTests(unittest.TestCase):
                 "score": 0.25,
             }, {"cost": 0.05}
 
-        with mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_evaluator):
-            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "evaluator-attempt"])
+        with mock.patch.object(roles, "generate_evaluator_attempt_artifacts", side_effect=fake_evaluator):
+            result = runner.invoke(cli.app, ["-C", str(self.workspace), "evaluator-attempt"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("recommendation: restart-attempt", result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-attempt")
         self.assertIsNone(state["current_attempt"])
         self.assertEqual(state["bottleneck"], "implementation drift")
@@ -653,21 +655,21 @@ class HookyProgressTests(unittest.TestCase):
             }, {"cost": 0.05}
 
         patches = [
-            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+            mock.patch.object(roles, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(roles, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(roles, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(roles, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(roles, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
         ]
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
             result = runner.invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "run", "--proposal", "Build todos"],
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("status: passed", result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "passed")
         self.assertEqual(state["attempts"][0]["status"], "passed")
         self.assertEqual(state["role_usage"]["evaluator_attempt"]["cost"], 0.05)
@@ -724,13 +726,13 @@ class HookyProgressTests(unittest.TestCase):
             }, {"cost": 0.03}
 
         patches = [
-            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(roles, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(roles, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(roles, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
         ]
         with patches[0], patches[1], patches[2]:
             result = runner.invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "run", "--proposal", "Build something"],
             )
 
@@ -804,16 +806,16 @@ class HookyProgressTests(unittest.TestCase):
             }, {"cost": 0.05}
 
         patches = [
-            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+            mock.patch.object(roles, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(roles, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(roles, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(roles, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(roles, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
             mock.patch.dict(os.environ, {"LOOP_ATTEMPT_MAX_ROUNDS": "2"}),
         ]
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             result = runner.invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", str(self.workspace), "run", "--proposal", "Build todos"],
             )
 
@@ -823,7 +825,7 @@ class HookyProgressTests(unittest.TestCase):
         self.assertEqual(attempts[0], ("001", ""))
         self.assertEqual(attempts[1][0], "002")
         self.assertIn("T007 fails", attempts[1][1])
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual([attempt["status"] for attempt in state["attempts"]], ["restarted", "passed"])
         log = (self.workspace / ".hooky/runs/local/log.md").read_text(encoding="utf-8")
         self.assertIn("attempt 001 reset", log)
@@ -862,9 +864,9 @@ class HookyProgressTests(unittest.TestCase):
 
         def fake_attempt_review(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
             if attempt_id == "001":
-                raise hooky_cli.agent_runtime.AgentRunError(
+                raise AgentRunError(
                     "agent produced 6 consecutive assistant messages without tool calls",
-                    hooky_cli.agent_runtime.AgentRunResult(
+                    AgentRunResult(
                         final_report=None,
                         usage={"cost": 0.05},
                         transcript=[],
@@ -884,39 +886,39 @@ class HookyProgressTests(unittest.TestCase):
             }, {"cost": 0.05}
 
         patches = [
-            mock.patch.object(hooky_cli.loop_agent, "generate_planner_artifacts", side_effect=fake_planner),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_contract_artifacts", side_effect=fake_contract),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
-            mock.patch.object(hooky_cli.loop_agent, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
-            mock.patch.object(hooky_cli.loop_agent, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+            mock.patch.object(roles, "generate_planner_artifacts", side_effect=fake_planner),
+            mock.patch.object(roles, "generate_generator_contract_artifacts", side_effect=fake_contract),
+            mock.patch.object(roles, "generate_evaluator_contract_artifacts", side_effect=fake_contract_review),
+            mock.patch.object(roles, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(roles, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
             mock.patch.dict(os.environ, {"LOOP_ATTEMPT_MAX_ROUNDS": "2"}),
         ]
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-            result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "run", "--proposal", "Build todos"])
+            result = runner.invoke(cli.app, ["-C", str(self.workspace), "run", "--proposal", "Build todos"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("attempt: 002", result.output)
         self.assertIn("status: passed", result.output)
         self.assertIn("TodoMVC implementation pending", attempts[1][1])
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["recommendation"], "restart-attempt")
         self.assertIn("Evaluator did not produce", report["findings"][0])
 
     def test_loop_restart_attempt_preserves_durable_files(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "restart-attempt", "--reason", "patching without convergence"],
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
         for relative in ["feature_list.json", "progress.md", "contract.md", "log.md"]:
-            self.assertTrue((hooky_cli.loop_dir(self.workspace) / relative).exists())
-        state = hooky_cli.read_loop_state(self.workspace)
+            self.assertTrue((cli.loop_dir(self.workspace) / relative).exists())
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-attempt")
         self.assertIsNone(state["current_attempt"])
         self.assertEqual(state["attempts"][0]["status"], "restarted")
@@ -925,12 +927,12 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_evaluator_report_records_bottleneck_and_report_artifact(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -949,10 +951,10 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["recommendation"], "restart-attempt")
         self.assertEqual(report["score"], 0.42)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-attempt")
         self.assertIsNone(state["current_attempt"])
         self.assertEqual(state["bottleneck"], "generator_trajectory")
@@ -960,9 +962,9 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_evaluator_pass_is_downgraded_for_placeholder_only_tests(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         tests_dir = self.workspace / "tests"
         tests_dir.mkdir()
         (tests_dir / "dummy.test.js").write_text(
@@ -972,7 +974,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -987,22 +989,22 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertEqual(report["recommendation"], "continue")
         self.assertIn("placeholder tests", " ".join(report["findings"]))
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "attempt-failed")
 
     def test_loop_evaluator_pass_is_downgraded_for_ui_without_visual_snapshot(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         (self.workspace / ".hooky/runs/local/contract.md").write_text(
             "# Loop Contract\n\n## Done Criteria\n\n- Browser UI layout is visually correct.\n",
             encoding="utf-8",
         )
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         (self.workspace / "package.json").write_text('{"dependencies":{"react":"latest","vite":"latest"}}\n', encoding="utf-8")
         tests_dir = self.workspace / "tests"
         tests_dir.mkdir()
@@ -1013,7 +1015,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1028,13 +1030,13 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertIn("capture_visual_snapshot", " ".join(report["findings"]))
 
     def test_loop_evaluator_pass_is_downgraded_for_reference_ui_with_only_empty_snapshot(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         (self.workspace / ".hooky/runs/local/proposal.md").write_text(
             "Build a TodoMVC app that visually matches the canonical template using todomvc-app-css.\n",
             encoding="utf-8",
@@ -1050,8 +1052,8 @@ class HookyProgressTests(unittest.TestCase):
             "- functionality weight 0.30: empty, populated, completed/filter, and editing states remain usable.\n",
             encoding="utf-8",
         )
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         traces = self.workspace / ".hooky/runs/local/attempts/001/traces"
         traces.mkdir(parents=True, exist_ok=True)
         (traces / "tool_events.json").write_text(
@@ -1071,7 +1073,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1086,15 +1088,15 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertIn("multiple states", " ".join(report["findings"]))
 
     def test_loop_evaluator_pass_is_downgraded_for_failed_latest_test_evidence(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         traces = self.workspace / ".hooky/runs/local/attempts/001/traces"
         traces.mkdir(parents=True, exist_ok=True)
         (traces / "tool_events.json").write_text(
@@ -1115,7 +1117,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1130,16 +1132,16 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertEqual(report["bottleneck"], "verification_tests_failed")
         self.assertIn("latest executable test evidence failed", " ".join(report["findings"]))
 
     def test_loop_evaluator_pass_allows_later_successful_test_evidence(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         traces = self.workspace / ".hooky/runs/local/attempts/001/traces"
         traces.mkdir(parents=True, exist_ok=True)
         (traces / "tool_events.json").write_text(
@@ -1161,7 +1163,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1178,23 +1180,23 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "pass")
 
     def test_loop_evaluator_pass_restarts_contract_when_subjective_rubric_is_missing(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         (self.workspace / ".hooky/runs/local/contract.md").write_text(
             "# Loop Contract\n\n"
             "## Done Criteria\n\n- Build a polished branded dashboard with excellent craft.\n\n"
             "## Taste Rubric\n\n_Optional. Required only when subjective quality matters._\n",
             encoding="utf-8",
         )
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1209,23 +1211,23 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertEqual(report["recommendation"], "restart-contract")
         self.assertEqual(report["bottleneck"], "missing_taste_rubric")
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-contract")
         self.assertFalse(state["contract_accepted"])
 
     def test_loop_evaluator_pass_is_downgraded_for_reported_clipped_primary_ui(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         (self.workspace / ".hooky/runs/local/contract.md").write_text(
             "# Loop Contract\n\n## Done Criteria\n\n- Browser UI layout is visually correct.\n",
             encoding="utf-8",
         )
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         traces = self.workspace / ".hooky/runs/local/attempts/001/traces"
         traces.mkdir(parents=True, exist_ok=True)
         (traces / "tool_events.json").write_text(
@@ -1245,7 +1247,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1262,20 +1264,20 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertIn("clipped/off-screen/overflowing primary UI", " ".join(report["findings"]))
         self.assertLessEqual(report["score"], 0.5)
 
     def test_loop_evaluator_pass_is_downgraded_for_blocking_visual_snapshot_metrics(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         (self.workspace / ".hooky/runs/local/contract.md").write_text(
             "# Loop Contract\n\n## Done Criteria\n\n- Browser UI layout is visually correct.\n",
             encoding="utf-8",
         )
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         traces = self.workspace / ".hooky/runs/local/attempts/001/traces"
         traces.mkdir(parents=True, exist_ok=True)
         (traces / "tool_events.json").write_text(
@@ -1297,7 +1299,7 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1312,18 +1314,18 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        report = hooky_cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
+        report = cli.read_json(self.workspace / ".hooky/runs/local/attempts/001/evaluator_report.json")
         self.assertEqual(report["status"], "fail")
         self.assertIn("clipped visible text or controls", " ".join(report["findings"]))
 
     def test_loop_evaluator_report_restart_contract_reopens_contract(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1340,19 +1342,19 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-contract")
         self.assertFalse(state["contract_accepted"])
         self.assertEqual(state["bottleneck"], "weak_contract")
 
     def test_loop_trace_and_otel_events_append_supporting_artifacts(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
 
         trace = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1366,7 +1368,7 @@ class HookyProgressTests(unittest.TestCase):
             ],
         )
         otel = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1399,7 +1401,7 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_run_executes_complete_local_suite(self) -> None:
         result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1418,7 +1420,7 @@ class HookyProgressTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("status: passed", result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "passed")
         self.assertIsNone(state["current_attempt"])
         self.assertEqual(state["attempts"][0]["status"], "passed")
@@ -1431,7 +1433,7 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_run_can_record_restart_recommendation(self) -> None:
         result = CliRunner().invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1449,21 +1451,21 @@ class HookyProgressTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 1, result.output)
-        state = hooky_cli.read_loop_state(self.workspace)
+        state = cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-attempt")
         self.assertEqual(state["attempts"][0]["status"], "restarted")
         self.assertEqual(state["bottleneck"], "generator_trajectory")
 
     def test_loop_watch_shows_path_and_log_content(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
         runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "log", "--op", "note", "--title", "watchable", "--body", "hello"],
         )
 
-        path_result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "watch", "--path"])
-        content_result = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "watch", "--no-follow"])
+        path_result = runner.invoke(cli.app, ["-C", str(self.workspace), "watch", "--path"])
+        content_result = runner.invoke(cli.app, ["-C", str(self.workspace), "watch", "--no-follow"])
 
         self.assertEqual(path_result.exit_code, 0, path_result.output)
         self.assertIn(".hooky/runs/local/log.md", path_result.output)
@@ -1473,18 +1475,18 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_evidence_cli_captures_note_and_command_output(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
 
-        init = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "evidence", "init"])
+        init = runner.invoke(cli.app, ["-C", str(self.workspace), "evidence", "init"])
         note = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "evidence", "note", "Manual check", "--body", "Reviewed the proposal."],
         )
         command = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             ["-C", str(self.workspace), "evidence", "exec", "printf cli-evidence", "--title", "CLI command"],
         )
-        show = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "evidence", "show"])
+        show = runner.invoke(cli.app, ["-C", str(self.workspace), "evidence", "show"])
 
         self.assertEqual(init.exit_code, 0, init.output)
         self.assertEqual(note.exit_code, 0, note.output)
@@ -1499,11 +1501,11 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_debug_commands_show_runtime_transcript_and_stalls(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         trace_root = self.workspace / ".hooky/runs/local/attempts/001/traces"
-        hooky_cli.write_json(
+        cli.write_json(
             trace_root / "runtime_transcript.json",
             {
                 "bad": "shape",
@@ -1546,11 +1548,11 @@ class HookyProgressTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        transcript = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001"])
-        transcript_reasoning = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001", "--reasoning"])
-        stall = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "stall", "--attempt", "001"])
-        context = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "context", "--attempt", "001"])
-        runtime_log = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "runtime-log", "--attempt", "001"])
+        transcript = runner.invoke(cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001"])
+        transcript_reasoning = runner.invoke(cli.app, ["-C", str(self.workspace), "transcript", "--attempt", "001", "--reasoning"])
+        stall = runner.invoke(cli.app, ["-C", str(self.workspace), "stall", "--attempt", "001"])
+        context = runner.invoke(cli.app, ["-C", str(self.workspace), "context", "--attempt", "001"])
+        runtime_log = runner.invoke(cli.app, ["-C", str(self.workspace), "runtime-log", "--attempt", "001"])
 
         self.assertEqual(transcript.exit_code, 0, transcript.output)
         self.assertIn("Implement TodoMVC.", transcript.output)
@@ -1570,9 +1572,9 @@ class HookyProgressTests(unittest.TestCase):
 
     def test_loop_inspect_trace_grep_and_harness_review_surface_debug_state(self) -> None:
         runner = CliRunner()
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "init"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "accept-contract"])
-        runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "start-attempt"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
         trace_root = self.workspace / ".hooky/runs/local/attempts/001/traces"
         (trace_root / "runtime_transcript.json").write_text(
             json.dumps(
@@ -1597,9 +1599,9 @@ class HookyProgressTests(unittest.TestCase):
         (trace_root / "compaction_events.json").write_text("[]\n", encoding="utf-8")
         (trace_root / "pre_compaction_archives.json").write_text("[]\n", encoding="utf-8")
 
-        inspect = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "inspect", "--attempt", "001"])
-        grep = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "trace-grep", "TodoMVC", "--attempt", "001"])
-        review = runner.invoke(hooky_cli.app, ["-C", str(self.workspace), "harness-review"])
+        inspect = runner.invoke(cli.app, ["-C", str(self.workspace), "inspect", "--attempt", "001"])
+        grep = runner.invoke(cli.app, ["-C", str(self.workspace), "trace-grep", "TodoMVC", "--attempt", "001"])
+        review = runner.invoke(cli.app, ["-C", str(self.workspace), "harness-review"])
 
         self.assertEqual(inspect.exit_code, 0, inspect.output)
         self.assertIn("transcript_entries: 3", inspect.output)
@@ -1611,13 +1613,13 @@ class HookyProgressTests(unittest.TestCase):
         self.assertIn("missing substantive Taste Rubric in contract.md", review.output)
         self.assertIn("context_transcript", review.output)
         self.assertIn("tool_prefix_stability", review.output)
-        self.assertTrue((hooky_cli.loop_dir(self.workspace) / "harness_review.md").exists())
+        self.assertTrue((cli.loop_dir(self.workspace) / "harness_review.md").exists())
 
     def test_loop_status_uses_last_run_workspace_when_current_directory_has_no_loop(self) -> None:
         last_run_path = self.workspace / "loop-last-run-path"
         runner = CliRunner()
         run_result = runner.invoke(
-            hooky_cli.app,
+            cli.app,
             [
                 "-C",
                 str(self.workspace),
@@ -1633,7 +1635,7 @@ class HookyProgressTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as other:
             status = runner.invoke(
-                hooky_cli.app,
+                cli.app,
                 ["-C", other, "status", "--last-run-path", str(last_run_path)],
             )
 

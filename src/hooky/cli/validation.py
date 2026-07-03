@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from hooky import agent_runtime
-from hooky import loop_agent
+from hooky import runtime
+from hooky import roles
 
 from hooky.cli.paths import loop_attempt_dir, loop_contract_path, loop_feature_list_path, loop_proposal_path
 
@@ -18,7 +18,7 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
         return report
     evidence_failures: list[str] = []
     contract_text = loop_contract_path(workspace).read_text(encoding="utf-8", errors="ignore") if loop_contract_path(workspace).exists() else ""
-    rubric_restart_required = loop_agent.taste_rubric_required(contract_text) and not loop_agent.taste_rubric_is_substantive(contract_text)
+    rubric_restart_required = roles.taste_rubric_required(contract_text) and not roles.taste_rubric_is_substantive(contract_text)
     if rubric_restart_required:
         evidence_failures.append(
             "Evaluator cannot pass this attempt: subjective quality is requested but contract.md does not define a substantive Taste Rubric."
@@ -71,7 +71,7 @@ def loop_attempt_test_evidence_failures(events: list[dict[str, Any]]) -> list[st
     reason = str(result.get("error") or result.get("summary") or result.get("output_tail") or "failed")
     return [
         "Evaluator cannot pass this attempt: latest executable test evidence failed "
-        f"({command}): {agent_runtime.single_line(reason, 240)}"
+        f"({command}): {runtime.single_line(reason, 240)}"
     ]
 
 
@@ -119,7 +119,7 @@ def loop_attempt_blocking_visual_failures(workspace: Path, events: list[dict[str
         failures.append(
             "Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content."
         )
-    return agent_runtime.dedupe_strings(failures)
+    return runtime.dedupe_strings(failures)
 
 
 def loop_attempt_reference_visual_evidence_failures(workspace: Path, events: list[dict[str, Any]]) -> list[str]:
@@ -171,7 +171,7 @@ def blocking_visual_failures_from_snapshot_events(events: list[dict[str, Any]]) 
                 if clipped_item_is_blocking(item):
                     failures.append("Evaluator cannot pass this attempt: visual snapshot has clipped visible text or controls.")
                     break
-    return agent_runtime.dedupe_strings(failures)
+    return runtime.dedupe_strings(failures)
 
 
 def numeric_less_than(value: object, limit: float) -> bool:
@@ -286,7 +286,7 @@ def loop_attempt_requires_reference_visual_evidence(workspace: Path) -> bool:
     for path in [loop_contract_path(workspace), loop_feature_list_path(workspace), loop_proposal_path(workspace)]:
         if path.exists():
             text += "\n" + path.read_text(encoding="utf-8", errors="ignore")
-    return loop_agent.reference_visual_rubric_required(text) or loop_agent.taste_rubric_is_substantive(text) and any(
+    return roles.reference_visual_rubric_required(text) or roles.taste_rubric_is_substantive(text) and any(
         term in text.lower() for term in ("reference", "canonical", "template", "official css", "todomvc")
     )
 

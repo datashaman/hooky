@@ -10,8 +10,35 @@ import socket
 import subprocess
 from unittest import mock
 
-from hooky import agent_runtime
 from hooky import agent_skills
+from hooky.runtime import (
+    ModelMessage,
+    OllamaChat,
+    ToolRuntime,
+    active_todo_label,
+    assistant_message_text,
+    assistant_reasoning_trace,
+    available_tool_names,
+    canonical_tool_name,
+    compaction_user_prompt,
+    ensure_git_baseline,
+    extract_text_tool_actions,
+    format_runtime_event_line,
+    image_input_message,
+    model_credentials_available,
+    model_provider,
+    model_request_deadline_seconds,
+    protected_path_changes,
+    provider_model_name,
+    recover_text_final_report,
+    render_runtime_events_log,
+    render_runtime_timeline_markdown,
+    requested_ports_from_command,
+    run_shell_command,
+    skill_catalog_message,
+    snapshot_protected_paths,
+    write_runtime_log,
+)
 
 
 class ProtectedPathTests(unittest.TestCase):
@@ -19,19 +46,19 @@ class ProtectedPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "tests").mkdir()
-            before = agent_runtime.snapshot_protected_paths(root, ["tests"])
+            before = snapshot_protected_paths(root, ["tests"])
 
             report = root / "tests" / "some-tool-report" / "data" / "result.md"
             report.parent.mkdir(parents=True)
             report.write_text("generated report", encoding="utf-8")
 
-            changes = agent_runtime.protected_path_changes(root, ["tests"], before)
+            changes = protected_path_changes(root, ["tests"], before)
 
             self.assertEqual(changes, [])
             self.assertTrue(report.exists())
 
     def test_model_message_preserves_provider_reasoning_fields(self) -> None:
-        message = agent_runtime.ModelMessage(
+        message = ModelMessage(
             {
                 "role": "assistant",
                 "content": "visible",
@@ -65,7 +92,7 @@ class ProtectedPathTests(unittest.TestCase):
             return FakeResponse()
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            agent_runtime.OllamaChat("http://localhost:11434").send(
+            OllamaChat("http://localhost:11434").send(
                 model="ollama/gpt-oss:20b",
                 messages=[],
                 think="high",
@@ -79,20 +106,20 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "tests" / "example.spec"
             source.parent.mkdir()
             source.write_text("before", encoding="utf-8")
-            before = agent_runtime.snapshot_protected_paths(root, ["tests"])
+            before = snapshot_protected_paths(root, ["tests"])
 
             source.write_text("after", encoding="utf-8")
 
-            self.assertEqual(agent_runtime.protected_path_changes(root, ["tests"], before), ["tests/example.spec"])
+            self.assertEqual(protected_path_changes(root, ["tests"], before), ["tests/example.spec"])
 
     def test_requested_ports_are_parsed_from_common_explicit_forms(self) -> None:
-        self.assertEqual(agent_runtime.requested_ports_from_command("npm run dev -- --port 5173"), [5173])
-        self.assertEqual(agent_runtime.requested_ports_from_command("PORT=4173 npm start"), [4173])
-        self.assertEqual(agent_runtime.requested_ports_from_command("serve http://127.0.0.1:8080"), [8080])
+        self.assertEqual(requested_ports_from_command("npm run dev -- --port 5173"), [5173])
+        self.assertEqual(requested_ports_from_command("PORT=4173 npm start"), [4173])
+        self.assertEqual(requested_ports_from_command("serve http://127.0.0.1:8080"), [8080])
 
     def test_bash_rejects_long_running_server_and_background_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -115,7 +142,7 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "src/App.jsx"
             source.parent.mkdir()
             source.write_text("before", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -137,7 +164,7 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "src/App.jsx"
             source.parent.mkdir()
             source.write_text("before", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -158,7 +185,7 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "src/App.jsx"
             source.parent.mkdir()
             source.write_text("before", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -179,7 +206,7 @@ class ProtectedPathTests(unittest.TestCase):
             first.parent.mkdir()
             first.write_text("first-before", encoding="utf-8")
             second.write_text("second-before", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -207,7 +234,7 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "src/App.jsx"
             source.parent.mkdir()
             source.write_text("one\ntwo\nthree\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -252,7 +279,7 @@ class ProtectedPathTests(unittest.TestCase):
             first.parent.mkdir()
             first.write_text("one\n", encoding="utf-8")
             second.write_text("alpha\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -286,7 +313,7 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "src/App.jsx"
             source.parent.mkdir()
             source.write_text("one\ntwo\nthree\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -316,7 +343,7 @@ class ProtectedPathTests(unittest.TestCase):
             source = root / "src/App.jsx"
             source.parent.mkdir()
             source.write_text("before", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -335,7 +362,7 @@ class ProtectedPathTests(unittest.TestCase):
             artifact = root / ".hooky/runs/local/contract.md"
             artifact.parent.mkdir(parents=True)
             artifact.write_text("before", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -363,7 +390,7 @@ class ProtectedPathTests(unittest.TestCase):
                 "\""
             )
 
-            completed, timed_out = agent_runtime.run_shell_command(command, cwd=root, timeout_seconds=1)
+            completed, timed_out = run_shell_command(command, cwd=root, timeout_seconds=1)
             time.sleep(2.5)
 
             self.assertTrue(timed_out)
@@ -372,9 +399,9 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_model_request_deadline_respects_remaining_stage_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"OPENROUTER_TIMEOUT_MS": "120000"}):
-            runtime = agent_runtime.ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=180)
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=180)
 
-            self.assertEqual(agent_runtime.model_request_deadline_seconds(runtime, elapsed_seconds=175.2), 4)
+            self.assertEqual(model_request_deadline_seconds(runtime, elapsed_seconds=175.2), 4)
 
     def test_start_process_fails_when_requested_port_is_busy(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -384,7 +411,7 @@ class ProtectedPathTests(unittest.TestCase):
             port = int(sock.getsockname()[1])
             tmp = tempfile.TemporaryDirectory()
             self.addCleanup(tmp.cleanup)
-            runtime = agent_runtime.ToolRuntime(working_folder=Path(tmp.name), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=Path(tmp.name), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.start_process({"command": f"PORT={port} python3 -m http.server"})
 
@@ -397,7 +424,7 @@ class ProtectedPathTests(unittest.TestCase):
             self.skipTest("lsof is required for listener detection")
         with tempfile.TemporaryDirectory() as tmp:
             port = free_tcp_port()
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -433,7 +460,7 @@ class ProtectedPathTests(unittest.TestCase):
         if not lsof_available():
             self.skipTest("lsof is required for listener detection")
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -460,7 +487,7 @@ class ProtectedPathTests(unittest.TestCase):
                 runtime.cleanup_processes()
 
     def test_runtime_timeline_includes_runtime_notices(self) -> None:
-        rendered = agent_runtime.render_runtime_timeline_markdown(
+        rendered = render_runtime_timeline_markdown(
             [
                 {
                     "role": "user",
@@ -477,7 +504,7 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("Runtime soft deadline", rendered)
 
     def test_runtime_timeline_includes_assistant_messages(self) -> None:
-        rendered = agent_runtime.render_runtime_timeline_markdown(
+        rendered = render_runtime_timeline_markdown(
             [
                 {
                     "role": "assistant",
@@ -505,7 +532,7 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("tools requested: read_files", rendered)
 
     def test_runtime_event_log_includes_user_prompts(self) -> None:
-        rendered = agent_runtime.render_runtime_events_log(
+        rendered = render_runtime_events_log(
             [
                 {
                     "role": "user",
@@ -521,7 +548,7 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("Continue by using the available tools", rendered)
 
     def test_runtime_event_log_includes_no_tool_assistant_message(self) -> None:
-        rendered = agent_runtime.render_runtime_events_log(
+        rendered = render_runtime_events_log(
             [
                 {
                     "role": "assistant",
@@ -539,7 +566,7 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIn("forgot to call the tool", rendered)
 
     def test_runtime_event_log_includes_assistant_message_with_tool_calls(self) -> None:
-        rendered = agent_runtime.render_runtime_events_log(
+        rendered = render_runtime_events_log(
             [
                 {
                     "role": "assistant",
@@ -575,8 +602,8 @@ class ProtectedPathTests(unittest.TestCase):
             ],
             "reasoning": "provider reasoning",
         }
-        reasoning = agent_runtime.assistant_reasoning_trace(message)
-        rendered = agent_runtime.render_runtime_events_log(
+        reasoning = assistant_reasoning_trace(message)
+        rendered = render_runtime_events_log(
             [
                 {
                     "role": "assistant",
@@ -589,7 +616,7 @@ class ProtectedPathTests(unittest.TestCase):
                 }
             ]
         )
-        timeline = agent_runtime.render_runtime_timeline_markdown(
+        timeline = render_runtime_timeline_markdown(
             [
                 {
                     "role": "assistant",
@@ -604,7 +631,7 @@ class ProtectedPathTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(reasoning)
-        self.assertEqual(agent_runtime.assistant_message_text(message), "Visible response")
+        self.assertEqual(assistant_message_text(message), "Visible response")
         self.assertIn("reasoning=", rendered)
         self.assertIn("provider reasoning", rendered)
         self.assertIn("private chain of thought", rendered)
@@ -613,7 +640,7 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_recovers_text_final_report_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -621,7 +648,7 @@ class ProtectedPathTests(unittest.TestCase):
                 final_validator=lambda report: None if report.get("status") == "done" else (_ for _ in ()).throw(ValueError("bad status")),
             )
 
-            recovered = agent_runtime.recover_text_final_report(
+            recovered = recover_text_final_report(
                 runtime,
                 'Here is the report: {"status":"done","summary":"ok"}',
             )
@@ -631,7 +658,7 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_rejects_invalid_text_final_report_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -639,13 +666,13 @@ class ProtectedPathTests(unittest.TestCase):
                 final_validator=lambda report: (_ for _ in ()).throw(ValueError("bad report")),
             )
 
-            recovered = agent_runtime.recover_text_final_report(runtime, '{"status":"done"}')
+            recovered = recover_text_final_report(runtime, '{"status":"done"}')
 
             self.assertIsNone(recovered)
             self.assertIsNone(runtime.final_report)
 
     def test_extracts_text_declared_tool_actions(self) -> None:
-        actions = agent_runtime.extract_text_tool_actions(
+        actions = extract_text_tool_actions(
             '**assistant Action** ```json {"role":"assistant","content":[{"name":"final_report","arguments":{"status":"done"}}]} ```'
         )
 
@@ -653,14 +680,14 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_recovers_text_declared_final_report_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
                 max_seconds=30,
             )
 
-            recovered = agent_runtime.recover_text_final_report(
+            recovered = recover_text_final_report(
                 runtime,
                 '{"role":"assistant","content":[{"name":"final_report","arguments":{"status":"done"}}]}',
             )
@@ -670,7 +697,7 @@ class ProtectedPathTests(unittest.TestCase):
 
     def test_recovers_markdown_evaluator_final_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -678,7 +705,7 @@ class ProtectedPathTests(unittest.TestCase):
                 final_validator=lambda report: None if report.get("status") == "done" else (_ for _ in ()).throw(ValueError("bad status")),
             )
 
-            recovered = agent_runtime.recover_text_final_report(
+            recovered = recover_text_final_report(
                 runtime,
                 """**final_report**
 Accepted: **false**
@@ -702,7 +729,7 @@ The contract is close but still underspecified.
 
     def test_enabled_tools_rejects_hidden_tool_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -724,7 +751,7 @@ The contract is close but still underspecified.
             root = Path(tmp)
             (root / "a.txt").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
             (root / "b.txt").write_text("alpha\nbeta\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             excerpt = runtime.read_file_excerpt({"path": "a.txt", "start_line": 2, "max_lines": 2})
             many = runtime.read_files({"paths": ["a.txt", "b.txt"], "max_bytes_per_file": 20})
@@ -737,7 +764,7 @@ The contract is close but still underspecified.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "a.txt").write_text("one\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.read_files({"paths": ["a.txt", "missing.txt"]})
 
@@ -751,7 +778,7 @@ The contract is close but still underspecified.
             root = Path(tmp)
             (root / "src").mkdir()
             (root / "src/styles.css").write_text("body {}\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.find_files({"pattern": "src/styles.css"})
 
@@ -762,7 +789,7 @@ The contract is close but still underspecified.
             root = Path(tmp)
             (root / "src").mkdir()
             (root / "src/app.js").write_text("class Mirror {}\nconst material = new Mirror();\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.search_files({"pattern": "Mirror"})
 
@@ -777,7 +804,7 @@ The contract is close but still underspecified.
             result_path.write_text("line one\nline two\n", encoding="utf-8")
             (root / ".hooky/artifacts/state.json").parent.mkdir(parents=True)
             (root / ".hooky/artifacts/state.json").write_text("{}", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             excerpt = runtime.read_file_excerpt(
                 {"path": ".hooky/runs/local/tool-results/test-runs/result.log", "start_line": 2, "max_lines": 1}
@@ -793,19 +820,19 @@ The contract is close but still underspecified.
 
     def test_todo_text_is_used_for_active_log_label(self) -> None:
         self.assertEqual(
-            agent_runtime.active_todo_label([{"id": 1, "status": "in_progress", "text": "Analyze existing implementation"}]),
+            active_todo_label([{"id": 1, "status": "in_progress", "text": "Analyze existing implementation"}]),
             "Analyze existing implementation",
         )
 
     def test_malformed_tool_names_are_canonicalized(self) -> None:
         valid = {"read_files", "write_files", "final_report"}
 
-        self.assertEqual(agent_runtime.canonical_tool_name("write_files<|channel|>commentary", valid), "write_files")
-        self.assertEqual(agent_runtime.canonical_tool_name("read_files.json", valid), "read_files")
-        self.assertEqual(agent_runtime.canonical_tool_name("missing_tool.json", valid), "missing_tool.json")
+        self.assertEqual(canonical_tool_name("write_files<|channel|>commentary", valid), "write_files")
+        self.assertEqual(canonical_tool_name("read_files.json", valid), "read_files")
+        self.assertEqual(canonical_tool_name("missing_tool.json", valid), "missing_tool.json")
 
     def test_runtime_event_line_displays_canonical_tool_name(self) -> None:
-        line = agent_runtime.format_runtime_event_line(
+        line = format_runtime_event_line(
             {
                 "role": "assistant",
                 "ended_at": "2026-06-29T15:08:09+00:00",
@@ -830,7 +857,7 @@ The contract is close but still underspecified.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "package.json").write_text("{}\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.run_tool("read_files.json", {"paths": ["package.json"]})
 
@@ -848,7 +875,7 @@ The contract is close but still underspecified.
             )
             (skill_path.parent / "references").mkdir()
             (skill_path.parent / "references/details.md").write_text("Detailed guidance.\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -870,7 +897,7 @@ The contract is close but still underspecified.
             skill_path.parent.mkdir(parents=True)
             skill_path.write_text("# Example\n", encoding="utf-8")
             (skill_path.parent / "details.md").write_text("secret\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -890,7 +917,7 @@ The contract is close but still underspecified.
                 "---\nname: example\ndescription: Example skill.\n---\n\n# Example\n",
                 encoding="utf-8",
             )
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -898,7 +925,7 @@ The contract is close but still underspecified.
                 skills=agent_skills.discover_skills(root),
             )
 
-            message = agent_runtime.skill_catalog_message(runtime)
+            message = skill_catalog_message(runtime)
 
             self.assertIsNotNone(message)
             self.assertEqual(message["role"], "user")
@@ -909,9 +936,9 @@ The contract is close but still underspecified.
     def test_skill_catalog_message_is_none_without_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
-            self.assertIsNone(agent_runtime.skill_catalog_message(runtime))
+            self.assertIsNone(skill_catalog_message(runtime))
 
     def test_detect_project_environment_finds_package_manager_and_tests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -922,7 +949,7 @@ The contract is close but still underspecified.
             )
             (root / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
             (root / "playwright.config.cjs").write_text("module.exports = {}\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.detect_project_environment({})
 
@@ -933,7 +960,7 @@ The contract is close but still underspecified.
     def test_run_tests_saves_output_and_extracts_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.run_tests(
                 {
@@ -953,7 +980,7 @@ The contract is close but still underspecified.
             error_context = root / "test-results" / "example-failure" / "error-context.md"
             error_context.parent.mkdir(parents=True)
             error_context.write_text("# Page snapshot\n\nbutton: Save\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             test_result = runtime.run_tests(
                 {
@@ -974,7 +1001,7 @@ The contract is close but still underspecified.
 
     def test_latest_test_failure_context_reports_missing_failed_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             result = runtime.latest_test_failure_context({})
 
@@ -984,7 +1011,7 @@ The contract is close but still underspecified.
     def test_capture_visual_snapshot_saves_artifact_and_returns_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             def fake_run(command, cwd, text, capture_output, timeout):
                 screenshot_path = Path(command[3])
@@ -1022,9 +1049,9 @@ The contract is close but still underspecified.
             root = Path(tmp)
             image = root / "shot.png"
             image.write_bytes(b"png-bytes")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
-            message = agent_runtime.image_input_message(runtime, [{"path": "shot.png", "label": "Screenshot"}], "Inspect this.")
+            message = image_input_message(runtime, [{"path": "shot.png", "label": "Screenshot"}], "Inspect this.")
 
             self.assertIsNotNone(message)
             content = message["content"]
@@ -1033,25 +1060,25 @@ The contract is close but still underspecified.
             self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
 
     def test_available_tools_include_visual_snapshot(self) -> None:
-        self.assertIn("capture_visual_snapshot", agent_runtime.available_tool_names())
+        self.assertIn("capture_visual_snapshot", available_tool_names())
 
     def test_available_tools_include_latest_test_failure_context(self) -> None:
-        self.assertIn("latest_test_failure_context", agent_runtime.available_tool_names())
+        self.assertIn("latest_test_failure_context", available_tool_names())
 
     def test_available_tools_include_edit_files(self) -> None:
-        self.assertIn("edit_files", agent_runtime.available_tool_names())
+        self.assertIn("edit_files", available_tool_names())
 
     def test_available_tools_include_time_extension_request(self) -> None:
-        self.assertIn("request_time_extension", agent_runtime.available_tool_names())
+        self.assertIn("request_time_extension", available_tool_names())
 
     def test_available_tools_include_search_files(self) -> None:
-        names = agent_runtime.available_tool_names()
+        names = available_tool_names()
 
         self.assertIn("search_files", names)
 
     def test_tool_schema_order_matches_available_tool_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1060,10 +1087,10 @@ The contract is close but still underspecified.
 
             schema_names = [tool["function"]["name"] for tool in runtime.tools()]
 
-            self.assertEqual(schema_names, agent_runtime.available_tool_names())
+            self.assertEqual(schema_names, available_tool_names())
 
     def test_compaction_prompt_preserves_required_survival_checklist(self) -> None:
-        prompt = agent_runtime.compaction_user_prompt(
+        prompt = compaction_user_prompt(
             "Previous state.",
             [{"role": "assistant", "content": "I read src/App.jsx and saw a failing test."}],
         )
@@ -1083,7 +1110,7 @@ The contract is close but still underspecified.
             root = Path(tmp)
             traces = root / ".hooky/runs/local/attempts/001/traces"
             traces.mkdir(parents=True)
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1105,7 +1132,7 @@ The contract is close but still underspecified.
             self.assertIn("evidence-ok", (root / command["output_path"]).read_text(encoding="utf-8"))
 
     def test_available_tools_include_evidence_capture(self) -> None:
-        names = agent_runtime.available_tool_names()
+        names = available_tool_names()
         self.assertIn("append_evidence_note", names)
         self.assertIn("append_evidence_command", names)
         self.assertIn("append_evidence_screenshot", names)
@@ -1117,7 +1144,7 @@ The contract is close but still underspecified.
             (root / "src" / "App.jsx").write_text("export default function App() {}", encoding="utf-8")
             (root / "node_modules").mkdir()
             (root / "node_modules" / "framework.js").write_text("internal", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1137,7 +1164,7 @@ The contract is close but still underspecified.
             root = Path(tmp)
             (root / "node_modules").mkdir()
             (root / "node_modules" / "framework.js").write_text("internal", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1153,7 +1180,7 @@ The contract is close but still underspecified.
     def test_time_extension_is_granted_only_near_deadline_with_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=root,
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1198,7 +1225,7 @@ The contract is close but still underspecified.
                 "written_at": "2026-07-01T00:00:02+00:00",
             }
 
-            agent_runtime.write_runtime_log(root, transcript, [], [], [], metadata=metadata)
+            write_runtime_log(root, transcript, [], [], [], metadata=metadata)
 
             archive = root / "invocations" / "2026-07-01T00-00-00-00-00-loop-generator-contract"
             self.assertTrue((archive / "runtime_transcript.json").exists())
@@ -1207,7 +1234,7 @@ The contract is close but still underspecified.
 
     def test_time_extension_requires_recent_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1232,7 +1259,7 @@ The contract is close but still underspecified.
 
     def test_passing_tests_near_deadline_grant_report_grace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1250,7 +1277,7 @@ The contract is close but still underspecified.
 
     def test_passing_tests_early_do_not_grant_report_grace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = agent_runtime.ToolRuntime(
+            runtime = ToolRuntime(
                 working_folder=Path(tmp),
                 final_report_schema={"type": "object"},
                 max_cost_usd=1,
@@ -1273,7 +1300,7 @@ The contract is close but still underspecified.
             subprocess.run(["git", "add", "tracked.txt"], cwd=root, check=True)
             subprocess.run(["git", "commit", "-m", "initial"], cwd=root, check=True, text=True, capture_output=True)
             (root / "tracked.txt").write_text("after\n", encoding="utf-8")
-            runtime = agent_runtime.ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
 
             status = runtime.git_status({})
             diff = runtime.git_diff({"path": "tracked.txt"})
@@ -1289,7 +1316,7 @@ The contract is close but still underspecified.
             root = Path(tmp)
             (root / "existing.txt").write_text("baseline\n", encoding="utf-8")
 
-            agent_runtime.ensure_git_baseline(root)
+            ensure_git_baseline(root)
 
             head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=root, check=False, text=True, capture_output=True)
             show = subprocess.run(["git", "show", "HEAD:existing.txt"], cwd=root, check=False, text=True, capture_output=True)
@@ -1300,18 +1327,18 @@ The contract is close but still underspecified.
 
     def test_model_provider_routes_ollama_and_openrouter_credentials(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(agent_runtime.model_provider("ollama/gpt-oss:20b"), "ollama")
-            self.assertEqual(agent_runtime.provider_model_name("ollama/gpt-oss:20b"), "gpt-oss:20b")
-            self.assertTrue(agent_runtime.model_credentials_available("ollama/gpt-oss:20b"))
-            self.assertFalse(agent_runtime.model_credentials_available("openai/gpt-oss-20b"))
+            self.assertEqual(model_provider("ollama/gpt-oss:20b"), "ollama")
+            self.assertEqual(provider_model_name("ollama/gpt-oss:20b"), "gpt-oss:20b")
+            self.assertTrue(model_credentials_available("ollama/gpt-oss:20b"))
+            self.assertFalse(model_credentials_available("openai/gpt-oss-20b"))
 
     def test_ollama_chat_url_accepts_root_or_v1_base_url(self) -> None:
         self.assertEqual(
-            agent_runtime.OllamaChat("http://localhost:11434").chat_completions_url(),
+            OllamaChat("http://localhost:11434").chat_completions_url(),
             "http://localhost:11434/v1/chat/completions",
         )
         self.assertEqual(
-            agent_runtime.OllamaChat("http://localhost:11434/v1").chat_completions_url(),
+            OllamaChat("http://localhost:11434/v1").chat_completions_url(),
             "http://localhost:11434/v1/chat/completions",
         )
 

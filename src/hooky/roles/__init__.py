@@ -1,10 +1,4 @@
-"""Public API for Hooky's loop roles, re-assembled from submodules.
-
-This package is the split-up successor to the historical monolithic
-``loop_agent.py``. ``hooky.loop_agent`` re-exports everything here as a
-facade so existing imports (``from hooky import loop_agent`` /
-``loop_agent.selected_model()`` etc.) keep working unchanged.
-"""
+"""Public API for Hooky's loop roles: planner, generator, and evaluator."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Git baseline, protected-path snapshotting, and git command helpers."""
 
 from __future__ import annotations
 

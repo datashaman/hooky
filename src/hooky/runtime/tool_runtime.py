@@ -1,16 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries.
-
-ToolRuntime holds all shared state (dataclass fields), lifecycle
-(``__post_init__``), the tool schema catalog (``tools()``), and dispatch
-(``run_tool`` / ``tool_handlers``). The individual tool handler methods are
-implemented across five mixins split by concern:
-
-- ``ReadWriteToolsMixin`` (tools_read_write.py): file read/write/list/find/search
-- ``GitToolsMixin`` (tools_git.py): read-only git inspection
-- ``ProcessToolsMixin`` (tools_process.py): managed background processes
-- ``EvidenceToolsMixin`` (tools_evidence.py): skills, time budget, evidence capture
-- ``ShellToolsMixin`` (tools_shell.py): tests, shell, network, todos, final report
-"""
+"""The ToolRuntime dataclass: tool dispatch and the agent-facing tool surface."""
 
 from __future__ import annotations
 

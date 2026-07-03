@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""The model/tool agent loop driver, compaction, and run-result types."""
 
 from __future__ import annotations
 

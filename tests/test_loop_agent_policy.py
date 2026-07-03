@@ -7,8 +7,8 @@ import json
 from unittest import mock
 from pathlib import Path
 
-from hooky import loop_agent
-from hooky.roles import models as loop_agent_models
+from hooky import roles
+from hooky.roles import models as roles_models
 
 
 class LoopAgentPolicyTests(unittest.TestCase):
@@ -18,9 +18,9 @@ class LoopAgentPolicyTests(unittest.TestCase):
             path = root / ".hooky/runs/local/contract.md"
 
             with self.assertRaisesRegex(ValueError, "Done Criteria"):
-                loop_agent.validate_generator_contract_write(root, path, "nope")
+                roles.validate_generator_contract_write(root, path, "nope")
 
-            loop_agent.validate_generator_contract_write(
+            roles.validate_generator_contract_write(
                 root,
                 path,
                 "# Loop Contract\n\n## Done Criteria\n\n- A concrete, testable assertion that is long enough to be a real contract.\n",
@@ -32,9 +32,9 @@ class LoopAgentPolicyTests(unittest.TestCase):
             path = root / ".hooky/runs/local/feature_list.json"
 
             with self.assertRaises(ValueError):
-                loop_agent.validate_generator_contract_write(root, path, '{"items":[]}')
+                roles.validate_generator_contract_write(root, path, '{"items":[]}')
 
-            loop_agent.validate_generator_contract_write(root, path, '{"features":[]}')
+            roles.validate_generator_contract_write(root, path, '{"features":[]}')
 
     def test_proposal_checklist_items_extracts_common_markdown_lists(self) -> None:
         proposal = """
@@ -47,7 +47,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
 """
 
         self.assertEqual(
-            loop_agent.proposal_checklist_items(proposal),
+            roles.proposal_checklist_items(proposal),
             ["Add items", "Complete items", "Filter active items", "Persist items"],
         )
 
@@ -79,7 +79,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "cover every proposal checklist item"):
-                loop_agent.validate_generator_contract_report(
+                roles.validate_generator_contract_report(
                     {
                         "contract_path": ".hooky/runs/local/contract.md",
                         "feature_list_path": ".hooky/runs/local/feature_list.json",
@@ -101,7 +101,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            loop_agent.validate_generator_contract_report(
+            roles.validate_generator_contract_report(
                 {
                     "contract_path": ".hooky/runs/local/contract.md",
                     "feature_list_path": ".hooky/runs/local/feature_list.json",
@@ -110,12 +110,12 @@ class LoopAgentPolicyTests(unittest.TestCase):
             )
 
     def test_contract_prompts_expose_original_proposal_and_coverage_rule(self) -> None:
-        generator_prompt = loop_agent.generator_contract_user_prompt(
+        generator_prompt = roles.generator_contract_user_prompt(
             "contract",
             "- Add todos\n- Complete todos",
             {"model": "test"},
         )
-        evaluator_prompt = loop_agent.evaluator_contract_user_prompt(
+        evaluator_prompt = roles.evaluator_contract_user_prompt(
             "contract",
             '{"features":[]}',
             "- Add todos\n- Complete todos",
@@ -129,8 +129,8 @@ class LoopAgentPolicyTests(unittest.TestCase):
         self.assertIn("reject unless every item is covered", evaluator_prompt)
 
     def test_evaluator_stop_is_reserved_for_automation_blockers(self) -> None:
-        system = loop_agent.evaluator_attempt_system_prompt()
-        user = loop_agent.evaluator_attempt_user_prompt(
+        system = roles.evaluator_attempt_system_prompt()
+        user = roles.evaluator_attempt_user_prompt(
             "contract",
             '{"features":[]}',
             "001",
@@ -160,11 +160,11 @@ class LoopAgentPolicyTests(unittest.TestCase):
             )
 
             with (
-                mock.patch.object(loop_agent_models, "EVALUATOR_SELECTED_MODEL_PATH", selected),
+                mock.patch.object(roles_models, "EVALUATOR_SELECTED_MODEL_PATH", selected),
                 mock.patch.dict(os.environ, {"OPENROUTER_MODEL": "openai/gpt-oss-20b"}, clear=False),
             ):
-                self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
-                metadata = loop_agent.selected_evaluator_attempt_model_metadata()
+                self.assertEqual(roles.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
+                metadata = roles.selected_evaluator_attempt_model_metadata()
 
             self.assertEqual(metadata["model"], "openai/gpt-4.1-mini")
             self.assertEqual(metadata["source"], "manual-multimodal-required")
@@ -172,18 +172,18 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_main_default_model_is_gpt_oss_20b(self) -> None:
         with (
             mock.patch.dict(os.environ, {}, clear=True),
-            mock.patch.object(loop_agent_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+            mock.patch.object(roles_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
         ):
-            self.assertEqual(loop_agent.selected_model(), "openai/gpt-oss-20b")
-            metadata = loop_agent.selected_model_metadata()
+            self.assertEqual(roles.selected_model(), "openai/gpt-oss-20b")
+            metadata = roles.selected_model_metadata()
 
         self.assertEqual(metadata["model"], "openai/gpt-oss-20b")
         self.assertEqual(metadata["source"], "fallback")
 
     def test_loop_evaluator_model_env_overrides_multimodal_default(self) -> None:
         with mock.patch.dict(os.environ, {"LOOP_EVALUATOR_MODEL": "openai/gpt-4.1"}, clear=False):
-            self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1")
-            metadata = loop_agent.selected_evaluator_attempt_model_metadata()
+            self.assertEqual(roles.selected_evaluator_attempt_model(), "openai/gpt-4.1")
+            metadata = roles.selected_evaluator_attempt_model_metadata()
 
         self.assertEqual(metadata["model"], "openai/gpt-4.1")
         self.assertEqual(metadata["source"], "LOOP_EVALUATOR_MODEL")
@@ -191,10 +191,10 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_ollama_model_env_overrides_main_loop_model(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
-            mock.patch.object(loop_agent_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+            mock.patch.object(roles_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
         ):
-            self.assertEqual(loop_agent.selected_model(), "ollama/gpt-oss:20b")
-            metadata = loop_agent.selected_model_metadata()
+            self.assertEqual(roles.selected_model(), "ollama/gpt-oss:20b")
+            metadata = roles.selected_model_metadata()
 
         self.assertEqual(metadata["model"], "ollama/gpt-oss:20b")
         self.assertEqual(metadata["source"], "OLLAMA_MODEL")
@@ -203,9 +203,9 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_ollama_think_env_is_recorded_in_selected_model_metadata(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b", "OLLAMA_THINK": "high"}, clear=True),
-            mock.patch.object(loop_agent_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+            mock.patch.object(roles_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
         ):
-            metadata = loop_agent.selected_model_metadata()
+            metadata = roles.selected_model_metadata()
 
         self.assertEqual(metadata["model"], "ollama/gpt-oss:20b")
         self.assertEqual(metadata["reasoning_request"], {"think": "high"})
@@ -213,9 +213,9 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_ollama_main_model_does_not_override_multimodal_evaluator_default(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
-            mock.patch.object(loop_agent_models, "EVALUATOR_SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-evaluator-model.json")),
+            mock.patch.object(roles_models, "EVALUATOR_SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-evaluator-model.json")),
         ):
-            self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
+            self.assertEqual(roles.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
 
     def test_openrouter_reasoning_env_is_recorded_in_selected_model_metadata(self) -> None:
         with mock.patch.dict(
@@ -223,7 +223,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             {"OPENROUTER_MODEL": "openai/gpt-oss-20b", "OPENROUTER_REASONING": '{"effort":"high"}'},
             clear=False,
         ):
-            metadata = loop_agent.selected_model_metadata()
+            metadata = roles.selected_model_metadata()
 
         self.assertEqual(metadata["model"], "openai/gpt-oss-20b")
         self.assertEqual(metadata["reasoning_request"], {"effort": "high"})
@@ -252,9 +252,9 @@ class LoopAgentPolicyTests(unittest.TestCase):
             }
 
             with self.assertRaisesRegex(ValueError, "rubric_scores"):
-                loop_agent.validate_evaluator_attempt_report(base_report, root)
+                roles.validate_evaluator_attempt_report(base_report, root)
 
-            loop_agent.validate_evaluator_attempt_report(
+            roles.validate_evaluator_attempt_report(
                 {
                     **base_report,
                     "rubric_scores": {
@@ -275,7 +275,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             (root / ".hooky/runs/local/contract.md").write_text("# Loop Contract\n\n## Done Criteria\n\n- Build it.\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "non-empty bottleneck"):
-                loop_agent.validate_evaluator_attempt_report(
+                roles.validate_evaluator_attempt_report(
                     {
                         "status": "pass",
                         "recommendation": "continue",
@@ -289,7 +289,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_taste_rubric_required_detects_subjective_contract_language(self) -> None:
         contract = "# Loop Contract\n\n## Done Criteria\n\n- Build a polished branded interface.\n\n## Taste Rubric\n\n_Optional._\n"
 
-        self.assertTrue(loop_agent.taste_rubric_required(contract))
+        self.assertTrue(roles.taste_rubric_required(contract))
 
     def test_reference_visual_rubric_required_detects_todomvc_spec_language(self) -> None:
         proposal = (
@@ -297,7 +297,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             "The UI should visually match the canonical TodoMVC template and official CSS."
         )
 
-        self.assertTrue(loop_agent.reference_visual_rubric_required(proposal))
+        self.assertTrue(roles.reference_visual_rubric_required(proposal))
 
     def test_generator_contract_requires_taste_rubric_for_reference_visual_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -328,7 +328,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "Taste Rubric"):
-                loop_agent.validate_generator_contract_report(
+                roles.validate_generator_contract_report(
                     {
                         "status": "done",
                         "contract_path": ".hooky/runs/local/contract.md",
@@ -350,7 +350,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            loop_agent.validate_generator_contract_report(
+            roles.validate_generator_contract_report(
                 {
                     "status": "done",
                     "contract_path": ".hooky/runs/local/contract.md",

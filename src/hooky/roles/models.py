@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from hooky import agent_runtime
 from hooky import loop_executor
+from hooky import runtime
 
 SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")
@@ -103,5 +103,5 @@ def env_ollama_reasoning_request() -> dict[str, Any] | None:
 def ensure_model_available(model: str, role_name: str) -> None:
     if loop_executor.selected_executor() != "native":
         return
-    if not agent_runtime.model_credentials_available(model):
-        raise RuntimeError(agent_runtime.model_credentials_error(model, role_name))
+    if not runtime.model_credentials_available(model):
+        raise RuntimeError(runtime.model_credentials_error(model, role_name))

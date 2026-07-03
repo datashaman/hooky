@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 import typer
 
-from hooky import loop_agent
+from hooky import roles
 
 from hooky.cli.app import app
 from hooky.cli.loop_state import (
@@ -83,7 +83,7 @@ def loop_planner(
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
-    report, usage = loop_agent.generate_planner_artifacts(
+    report, usage = roles.generate_planner_artifacts(
         working_folder=workspace,
         proposal=proposal or loop_contract_path(workspace).read_text(encoding="utf-8"),
         attempt_id=state.get("current_attempt"),
@@ -130,7 +130,7 @@ def loop_generator_contract(ctx: typer.Context) -> None:
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
-    report, usage = loop_agent.generate_generator_contract_artifacts(
+    report, usage = roles.generate_generator_contract_artifacts(
         working_folder=workspace,
         attempt_id=state.get("current_attempt"),
     )
@@ -185,7 +185,7 @@ def loop_evaluator_contract(ctx: typer.Context) -> None:
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
-    report, usage = loop_agent.generate_evaluator_contract_artifacts(
+    report, usage = roles.generate_evaluator_contract_artifacts(
         working_folder=workspace,
         attempt_id=state.get("current_attempt"),
     )
@@ -239,7 +239,7 @@ def loop_generator_implement(ctx: typer.Context) -> None:
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
     attempt_id = active_loop_attempt(state)
-    report, usage = loop_agent.generate_generator_implementation_artifacts(
+    report, usage = roles.generate_generator_implementation_artifacts(
         working_folder=workspace,
         attempt_id=attempt_id,
     )
@@ -299,7 +299,7 @@ def loop_evaluator_attempt(ctx: typer.Context) -> None:
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
     attempt_id = active_loop_attempt(state)
-    report, usage = loop_agent.generate_evaluator_attempt_artifacts(
+    report, usage = roles.generate_evaluator_attempt_artifacts(
         working_folder=workspace,
         attempt_id=attempt_id,
     )

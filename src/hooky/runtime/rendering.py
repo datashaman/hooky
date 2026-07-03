@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Rendering, formatting, and runtime-log helpers for tool output."""
 
 from __future__ import annotations
 

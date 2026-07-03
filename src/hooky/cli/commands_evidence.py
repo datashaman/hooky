@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer
 
-from hooky import agent_runtime
+from hooky.runtime import ensure_evidence_report
 
 from hooky.cli.app import evidence_app
 from hooky.cli.loop_state import ensure_loop_initialized, read_loop_state
@@ -36,7 +36,7 @@ def evidence_init(
     ensure_loop_initialized(workspace)
     state = read_loop_state(workspace)
     base_dir = evidence_base_dir_for_cli(workspace, state, attempt)
-    path = agent_runtime.ensure_evidence_report(workspace, base_dir)
+    path = ensure_evidence_report(workspace, base_dir)
     typer.echo(f"evidence: {path}")
 
 

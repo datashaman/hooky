@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from hooky import agent_skills
-from hooky.agent_runtime import ToolRuntime
+from hooky.runtime import ToolRuntime
 
 from hooky.roles.models import (
     ensure_model_available,

@@ -15,7 +15,7 @@ from typing import Any
 
 import typer
 
-from hooky import agent_runtime
+from hooky import runtime
 from hooky import loop_executor
 
 DEFAULT_LAST_RUN_PATH = Path("/tmp/hooky-last-run-path")
@@ -275,7 +275,7 @@ def resolve_workspace_path(workspace: Path, path: Path) -> Path:
 
 
 def is_git_worktree(workspace: Path) -> bool:
-    result = agent_runtime.git_run(workspace, ["rev-parse", "--is-inside-work-tree"], check=False)
+    result = runtime.git_run(workspace, ["rev-parse", "--is-inside-work-tree"], check=False)
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
@@ -285,6 +285,6 @@ def ensure_workspace_ready(workspace: Path, *, git: bool = True) -> None:
         return
     was_worktree = is_git_worktree(workspace)
     if not was_worktree:
-        agent_runtime.git_run(workspace, ["init"], check=True)
-    if not was_worktree or not agent_runtime.git_has_head(workspace):
-        agent_runtime.ensure_git_baseline(workspace)
+        runtime.git_run(workspace, ["init"], check=True)
+    if not was_worktree or not runtime.git_has_head(workspace):
+        runtime.ensure_git_baseline(workspace)

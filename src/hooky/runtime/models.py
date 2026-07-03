@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Model client construction, credentials, and request options."""
 
 from __future__ import annotations
 

@@ -1,10 +1,4 @@
-"""Public API for the Hooky agent runtime, re-assembled from submodules.
-
-This package is the split-up successor to the historical monolithic
-``agent_runtime.py``. ``hooky.agent_runtime`` re-exports everything here as a
-facade so existing imports (``from hooky import agent_runtime`` /
-``agent_runtime.ToolRuntime``) keep working unchanged.
-"""
+"""Public API for the Hooky agent runtime: model loop, tools, and ToolRuntime."""
 
 from __future__ import annotations
 

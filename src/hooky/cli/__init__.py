@@ -1,12 +1,9 @@
-"""Public API for the Hooky Typer CLI, re-assembled from submodules.
+"""Public API for the Hooky Typer CLI.
 
-This package is the split-up successor to the historical monolithic
-``hooky_cli.py``. Importing this package imports every ``commands_*``
-submodule so their ``@app.command()`` / ``@skills_app.command()`` /
-``@evidence_app.command()`` decorators register against the shared ``app``
-Typer instance as a side effect. ``hooky.hooky_cli`` re-exports everything
-here (plus ``agent_runtime``/``agent_skills``/``loop_agent``/``loop_executor``)
-as a facade so existing imports keep working unchanged.
+Importing this package imports every ``commands_*`` submodule so their
+``@app.command()`` / ``@skills_app.command()`` / ``@evidence_app.command()``
+decorators register against the shared ``app`` Typer instance as a side
+effect.
 """
 
 from __future__ import annotations
@@ -152,15 +149,6 @@ from hooky.cli.commands_roles import (
     loop_trace_event,
 )
 
-# Historical hooky_cli.py imported these modules directly (`from hooky import
-# agent_runtime` etc.), so `hooky_cli.agent_runtime.foo` and
-# `mock.patch.object(hooky_cli.loop_agent, "foo", ...)` resolved. Re-import
-# them here so the facade keeps exposing the same submodule attributes.
-from hooky import agent_runtime  # noqa: F401
-from hooky import agent_skills  # noqa: F401
-from hooky import loop_agent  # noqa: F401
-from hooky import loop_executor  # noqa: F401
-
 __all__ = [
     "REPO_ROOT",
     "SCRIPT_DIR",
@@ -305,8 +293,4 @@ __all__ = [
     "loop_review_contract",
     "loop_start_attempt",
     "loop_trace_event",
-    "agent_runtime",
-    "agent_skills",
-    "loop_agent",
-    "loop_executor",
 ]

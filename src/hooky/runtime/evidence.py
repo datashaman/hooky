@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Evidence report writers (notes, commands, screenshots) and hashing helpers."""
 
 from __future__ import annotations
 

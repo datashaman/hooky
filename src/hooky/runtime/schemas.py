@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""JSON schema builders for tool definitions and structured responses."""
 
 from __future__ import annotations
 

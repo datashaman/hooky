@@ -14,7 +14,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
-from hooky.agent_runtime import (
+from hooky.runtime import (
     AgentRunError,
     AgentRunResult,
     ToolRuntime,

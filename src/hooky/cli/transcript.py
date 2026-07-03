@@ -9,7 +9,7 @@ from typing import Any
 
 import typer
 
-from hooky import agent_runtime
+from hooky import runtime
 
 from hooky.cli.loop_state import latest_loop_attempt_id
 from hooky.cli.paths import loop_attempt_dir, loop_dir, normalize_run_key, selected_run_key
@@ -32,10 +32,10 @@ def evidence_base_dir_for_cli(workspace: Path, state: dict[str, Any], attempt: s
     return loop_dir(workspace)
 
 
-def evidence_runtime_for_cli(workspace: Path, state: dict[str, Any], attempt: str | None) -> agent_runtime.ToolRuntime:
+def evidence_runtime_for_cli(workspace: Path, state: dict[str, Any], attempt: str | None) -> runtime.ToolRuntime:
     base_dir = evidence_base_dir_for_cli(workspace, state, attempt)
     live_root = base_dir / "traces" if base_dir.name != normalize_run_key(selected_run_key(workspace)) else None
-    return agent_runtime.ToolRuntime(
+    return runtime.ToolRuntime(
         working_folder=workspace,
         final_report_schema={"type": "object", "properties": {}, "additionalProperties": True},
         max_cost_usd=0,
@@ -77,7 +77,7 @@ def transcript_text(entry: dict[str, Any]) -> str:
         parts: list[str] = []
         for item in content:
             if isinstance(item, dict):
-                if agent_runtime.content_part_is_reasoning(item):
+                if runtime.content_part_is_reasoning(item):
                     continue
                 parts.append(str(item.get("text") or item.get("content") or item))
             else:
@@ -92,7 +92,7 @@ def transcript_reasoning_text(entry: dict[str, Any]) -> str:
     reasoning = entry.get("reasoning")
     if not isinstance(reasoning, dict):
         return ""
-    return agent_runtime.reasoning_trace_text(reasoning)
+    return runtime.reasoning_trace_text(reasoning)
 
 
 def transcript_tool_calls(entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -136,7 +136,7 @@ def loop_context_stats(root: Path) -> dict[str, Any]:
         "compactions": len(compactions),
         "pre_compaction_archives": len(archives),
         "archived_older_messages": archived_messages,
-        "tool_schema_order": agent_runtime.available_tool_names(),
+        "tool_schema_order": runtime.available_tool_names(),
         "files": {
             "runtime_transcript": root / "runtime_transcript.json",
             "tool_events": root / "tool_events.json",

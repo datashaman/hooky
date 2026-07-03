@@ -10,8 +10,8 @@ from typing import Annotated, Callable
 
 import typer
 
-from hooky import agent_runtime
-from hooky import loop_agent
+from hooky import runtime
+from hooky import roles
 from hooky import loop_executor
 
 from hooky.cli.app import DEFAULT_LAST_RUN_PATH, T, app
@@ -59,14 +59,14 @@ def run_model_role_with_retries(
     label: str,
     call: Callable[[], T],
     *,
-    on_retry: Callable[[int, agent_runtime.AgentRunError], None] | None = None,
+    on_retry: Callable[[int, runtime.AgentRunError], None] | None = None,
 ) -> T:
     max_retries = int(os.environ.get("LOOP_MODEL_ROLE_RETRIES", "1"))
     attempt = 0
     while True:
         try:
             return call()
-        except agent_runtime.AgentRunError as exc:
+        except runtime.AgentRunError as exc:
             if attempt >= max_retries:
                 raise
             attempt += 1
@@ -112,7 +112,7 @@ def _run_model_loop_once(
     planner_report, planner_usage = run_model_role_with_retries(
         workspace,
         "planner",
-        lambda: loop_agent.generate_planner_artifacts(
+        lambda: roles.generate_planner_artifacts(
             working_folder=workspace,
             proposal=proposal or loop_contract_path(workspace).read_text(encoding="utf-8"),
             attempt_id=state.get("current_attempt"),
@@ -139,7 +139,7 @@ def _run_model_loop_once(
         generator_contract_report, generator_contract_usage = run_model_role_with_retries(
             workspace,
             f"generator-contract round {round_number}",
-            lambda: loop_agent.generate_generator_contract_artifacts(
+            lambda: roles.generate_generator_contract_artifacts(
                 working_folder=workspace,
                 attempt_id=state.get("current_attempt"),
                 review_feedback=review_feedback,
@@ -162,7 +162,7 @@ def _run_model_loop_once(
         evaluator_contract_report, evaluator_contract_usage = run_model_role_with_retries(
             workspace,
             f"evaluator-contract round {round_number}",
-            lambda: loop_agent.generate_evaluator_contract_artifacts(
+            lambda: roles.generate_evaluator_contract_artifacts(
                 working_folder=workspace,
                 attempt_id=state.get("current_attempt"),
             ),
@@ -205,7 +205,7 @@ def _run_model_loop_once(
         generator_report, generator_usage = run_model_role_with_retries(
             workspace,
             f"generator-implementation attempt {attempt_id}",
-            lambda: loop_agent.generate_generator_implementation_artifacts(
+            lambda: roles.generate_generator_implementation_artifacts(
                 working_folder=workspace,
                 attempt_id=attempt_id,
                 evaluator_feedback=evaluator_feedback,
@@ -235,7 +235,7 @@ def _run_model_loop_once(
             evaluator_report, evaluator_usage = run_model_role_with_retries(
                 workspace,
                 f"evaluator-attempt {attempt_id}",
-                lambda: loop_agent.generate_evaluator_attempt_artifacts(
+                lambda: roles.generate_evaluator_attempt_artifacts(
                     working_folder=workspace,
                     attempt_id=attempt_id,
                 ),
@@ -246,7 +246,7 @@ def _run_model_loop_once(
                 "written_at": utc_now(),
                 **evaluator_report,
             }
-        except agent_runtime.AgentRunError as exc:
+        except runtime.AgentRunError as exc:
             evaluator_usage = exc.result.usage
             evaluator_report = fallback_evaluator_report_from_error(
                 attempt_id=attempt_id,

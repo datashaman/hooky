@@ -1,4 +1,4 @@
-"""Auto-split from agent_runtime.py — see docs for module boundaries."""
+"""Project environment detection and test-command inference."""
 
 from __future__ import annotations
 

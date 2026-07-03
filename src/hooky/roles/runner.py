@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from hooky import agent_runtime
 from hooky import loop_executor
-from hooky.agent_runtime import AgentRunError, ToolRuntime, build_runtime_metadata, write_runtime_log
+from hooky import runtime
+from hooky.runtime import AgentRunError, AgentRunResult, ToolRuntime, build_runtime_metadata, write_runtime_log
 
-runtime_dir = agent_runtime.runtime_dir
+runtime_dir = runtime.runtime_dir
 
 
 def runtime_rel(*parts: str) -> str:
@@ -40,7 +40,7 @@ def run_role_agent(
     system: str,
     user: str,
     runtime: ToolRuntime,
-) -> agent_runtime.AgentRunResult:
+) -> AgentRunResult:
     return loop_executor.run_role(
         loop_executor.RoleInvocation(
             role=role,
