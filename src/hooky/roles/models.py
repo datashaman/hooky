@@ -7,7 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from hooky import loop_executor, runtime
+from hooky import runtime
+from hooky.shared import loop_executor
 
 SELECTED_MODEL_PATH = Path(".hooky/models/generator.json")
 EVALUATOR_SELECTED_MODEL_PATH = Path(".hooky/models/evaluator.json")

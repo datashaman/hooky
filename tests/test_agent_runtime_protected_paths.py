@@ -10,7 +10,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hooky import agent_skills
 from hooky.runtime import (
     ModelMessage,
     OllamaChat,
@@ -39,6 +38,7 @@ from hooky.runtime import (
     snapshot_protected_paths,
     write_runtime_log,
 )
+from hooky.shared import agent_skills
 
 
 class ProtectedPathTests(unittest.TestCase):

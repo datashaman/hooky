@@ -10,7 +10,7 @@ from typing import Annotated
 
 import typer
 
-from hooky import loop_executor, roles, runtime
+from hooky import roles, runtime
 from hooky.cli.app import app
 from hooky.cli.commands.inspect import loop_harness_review
 from hooky.cli.commands.setup import follow_runtime_log, loop_status, loop_watch
@@ -50,6 +50,7 @@ from hooky.cli.paths import (
     write_last_run_workspace,
 )
 from hooky.cli.transcript import loop_debug_root
+from hooky.shared import loop_executor
 
 
 def run_model_role_with_retries[T](

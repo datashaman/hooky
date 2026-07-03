@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from hooky import agent_skills
 from hooky.roles.models import (
     ensure_model_available,
     selected_evaluator_attempt_model,
@@ -43,6 +42,7 @@ from hooky.roles.validators import (
     validate_planner_report,
 )
 from hooky.runtime import ToolRuntime
+from hooky.shared import agent_skills
 
 
 def generate_planner_artifacts(*, working_folder: Path, proposal: str, attempt_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:

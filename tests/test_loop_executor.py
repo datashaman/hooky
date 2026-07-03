@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hooky import loop_executor
 from hooky.runtime import ToolRuntime
+from hooky.shared import loop_executor
 
 
 class LoopExecutorTests(unittest.TestCase):

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hooky import agent_skills
+from hooky.shared import agent_skills
 
 
 class AgentSkillsTests(unittest.TestCase):

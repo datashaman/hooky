@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from hooky import agent_skills
 from hooky.runtime.evidence import (
     append_evidence_command_file,
     append_evidence_note_file,
@@ -21,6 +20,7 @@ from hooky.runtime.models import runtime_path
 from hooky.runtime.process import long_running_bash_violation, run_shell_command
 from hooky.runtime.project_env import normalize_subprocess_output
 from hooky.runtime.rendering import utc_timestamp
+from hooky.shared import agent_skills
 
 
 class EvidenceToolsMixin:

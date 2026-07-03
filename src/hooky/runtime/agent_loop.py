@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hooky import agent_skills
 from hooky.runtime.evidence import relative_to
 from hooky.runtime.models import LocalDeadline, model_client, model_provider, model_request_options, openrouter_timeout_ms, relative_or_name, response_usage
 from hooky.runtime.rendering import append_live_event, format_runtime_event_line, utc_timestamp, write_runtime_log
@@ -30,6 +29,7 @@ from hooky.runtime.text import (
     trim_leading_tool_messages,
 )
 from hooky.runtime.tool_runtime import ToolRuntime
+from hooky.shared import agent_skills
 
 
 def model_request_deadline_seconds(runtime: ToolRuntime, elapsed_seconds: float) -> int:

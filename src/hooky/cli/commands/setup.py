@@ -8,7 +8,6 @@ from typing import Annotated, Any
 
 import typer
 
-from hooky import agent_skills
 from hooky.cli.app import app, skills_app
 from hooky.cli.loop_state import ensure_loop_initialized, initialize_loop_files, read_loop_state
 from hooky.cli.paths import (
@@ -27,6 +26,7 @@ from hooky.cli.paths import (
     workspace_from_ctx,
     write_last_run_workspace,
 )
+from hooky.shared import agent_skills
 
 
 @app.command()

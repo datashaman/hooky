@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from hooky import loop_executor, runtime
+from hooky import runtime
 from hooky.runtime import AgentRunError, AgentRunResult, ToolRuntime, build_runtime_metadata, write_runtime_log
+from hooky.shared import loop_executor
 
 runtime_dir = runtime.runtime_dir
 

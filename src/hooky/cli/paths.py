@@ -14,7 +14,8 @@ from typing import Any
 
 import typer
 
-from hooky import loop_executor, runtime
+from hooky import runtime
+from hooky.shared import loop_executor
 
 DEFAULT_LAST_RUN_PATH = Path("/tmp/hooky-last-run-path")
 DEFAULT_RUN_KEY = "local"
