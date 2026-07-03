@@ -41,3 +41,7 @@ def main(
         run_key = normalize_run_key(run_key)
         os.environ[RUN_KEY_ENV] = run_key
     ctx.obj = {"workspace": resolved, "run_key": run_key}
+
+
+def cli() -> None:
+    app()

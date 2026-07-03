@@ -552,7 +552,3 @@ def doctor(ctx: typer.Context) -> None:
         typer.echo("missing  WEB_SEARCH_PROVIDER (web_search tool will return a structured error)")
     if failed:
         raise typer.Exit(1)
-
-
-def cli() -> None:
-    app()

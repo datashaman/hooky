@@ -8,7 +8,7 @@ effect.
 
 from __future__ import annotations
 
-from hooky.cli.app import REPO_ROOT, SCRIPT_DIR, T, app, evidence_app, main, skills_app
+from hooky.cli.app import REPO_ROOT, SCRIPT_DIR, T, app, cli, evidence_app, main, skills_app
 from hooky.cli.paths import (
     DEFAULT_LAST_RUN_PATH,
     DEFAULT_RUN_KEY,
@@ -117,7 +117,6 @@ from hooky.cli.commands_inspect import (
 )
 from hooky.cli.commands_run import (
     _run_model_loop_once,
-    cli,
     doctor,
     loop_run,
     report,
