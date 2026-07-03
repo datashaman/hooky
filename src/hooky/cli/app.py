@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import Annotated
 
 import typer
 
@@ -12,7 +12,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 
 app = typer.Typer(help="Run the Hooky loop pipeline.", no_args_is_help=True)
-T = TypeVar("T")
 skills_app = typer.Typer(help="Inspect available agent skills.", no_args_is_help=True)
 app.add_typer(skills_app, name="skills")
 evidence_app = typer.Typer(help="Capture and inspect system-owned evidence reports.", no_args_is_help=True)
