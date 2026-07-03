@@ -10,7 +10,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from scripts import hooky_cli
+from hooky import hooky_cli
+from hooky.cli import commands_run
 
 
 class HookyProgressTests(unittest.TestCase):
@@ -140,7 +141,7 @@ class HookyProgressTests(unittest.TestCase):
         def stop_after_recording(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("stop")
 
-        with mock.patch.object(hooky_cli, "run_model_loop_once", side_effect=stop_after_recording):
+        with mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording):
             result = CliRunner().invoke(
                 hooky_cli.app,
                 ["-C", str(self.workspace), "start", "--last-run-path", str(last_run_path)],
@@ -161,7 +162,7 @@ class HookyProgressTests(unittest.TestCase):
 
         with (
             mock.patch.dict(os.environ, {}, clear=False),
-            mock.patch.object(hooky_cli, "run_model_loop_once", side_effect=stop_after_recording),
+            mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording),
         ):
             result = CliRunner().invoke(
                 hooky_cli.app,
@@ -182,7 +183,7 @@ class HookyProgressTests(unittest.TestCase):
             seen.update(kwargs)
             raise RuntimeError("stop")
 
-        with mock.patch.object(hooky_cli, "run_model_loop_once", side_effect=stop_after_recording):
+        with mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording):
             result = CliRunner().invoke(
                 hooky_cli.app,
                 ["-C", str(self.workspace), "start", "--executor", "codex", "--last-run-path", str(last_run_path)],
@@ -200,7 +201,7 @@ class HookyProgressTests(unittest.TestCase):
             seen.update(kwargs)
             raise RuntimeError("stop")
 
-        with mock.patch.object(hooky_cli, "run_model_loop_once", side_effect=stop_after_recording):
+        with mock.patch.object(commands_run, "run_model_loop_once", side_effect=stop_after_recording):
             result = CliRunner().invoke(
                 hooky_cli.app,
                 ["-C", str(self.workspace), "run", "--executor", "claude", "--last-run-path", str(last_run_path)],

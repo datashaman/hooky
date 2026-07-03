@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import sys
 import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import agent_skills  # noqa: E402
+from hooky import agent_skills
 
 
 class AgentSkillsTests(unittest.TestCase):

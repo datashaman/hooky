@@ -31,7 +31,7 @@ jobs:
 
       - name: Compile Python modules
         run: |
-          uv run python -m py_compile scripts/hooky_cli.py scripts/loop_agent.py scripts/agent_runtime.py scripts/agent_skills.py
+          uv run python -m compileall src/hooky
 
       - name: Run tests
         run: |

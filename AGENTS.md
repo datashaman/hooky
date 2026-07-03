@@ -31,7 +31,7 @@ See `docs/loop-model.md` for the loop model.
 
 - `.hooky/runs/<key>/` stores durable loop state, contract, progress, log, attempt reports, and traces.
 - `.hooky/current.json` stores the local current-run pointer and is not committed.
-- `scripts/` stores local executable agent harnesses.
+- `src/hooky/` stores the Hooky package source (runtime, roles, cli submodules).
 - `.agents/skills/` stores bundled agent skills.
 - `tests/fixtures/projects/` stores runnable project fixtures.
 

@@ -9,12 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-import agent_runtime
-import loop_executor
+from hooky import agent_runtime
+from hooky import loop_executor
 
 
 class LoopExecutorTests(unittest.TestCase):

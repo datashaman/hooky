@@ -14,7 +14,15 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
-from agent_runtime import AgentRunError, AgentRunResult, ToolRuntime, append_live_event, run_tool_agent, single_line, utc_timestamp
+from hooky.agent_runtime import (
+    AgentRunError,
+    AgentRunResult,
+    ToolRuntime,
+    append_live_event,
+    run_tool_agent,
+    single_line,
+    utc_timestamp,
+)
 
 
 VALID_EXECUTORS = {"native", "shell", "codex", "claude"}

@@ -5,15 +5,13 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-import sys
 import os
 import socket
 import subprocess
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import agent_runtime  # noqa: E402
-import agent_skills  # noqa: E402
+from hooky import agent_runtime
+from hooky import agent_skills
 
 
 class ProtectedPathTests(unittest.TestCase):

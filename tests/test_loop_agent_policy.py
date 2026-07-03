@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import tempfile
 import unittest
 import os
@@ -8,8 +7,8 @@ import json
 from unittest import mock
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import loop_agent  # noqa: E402
+from hooky import loop_agent
+from hooky.roles import models as loop_agent_models
 
 
 class LoopAgentPolicyTests(unittest.TestCase):
@@ -161,7 +160,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
             )
 
             with (
-                mock.patch.object(loop_agent, "EVALUATOR_SELECTED_MODEL_PATH", selected),
+                mock.patch.object(loop_agent_models, "EVALUATOR_SELECTED_MODEL_PATH", selected),
                 mock.patch.dict(os.environ, {"OPENROUTER_MODEL": "openai/gpt-oss-20b"}, clear=False),
             ):
                 self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
@@ -173,7 +172,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_main_default_model_is_gpt_oss_20b(self) -> None:
         with (
             mock.patch.dict(os.environ, {}, clear=True),
-            mock.patch.object(loop_agent, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+            mock.patch.object(loop_agent_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
         ):
             self.assertEqual(loop_agent.selected_model(), "openai/gpt-oss-20b")
             metadata = loop_agent.selected_model_metadata()
@@ -192,7 +191,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_ollama_model_env_overrides_main_loop_model(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
-            mock.patch.object(loop_agent, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+            mock.patch.object(loop_agent_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
         ):
             self.assertEqual(loop_agent.selected_model(), "ollama/gpt-oss:20b")
             metadata = loop_agent.selected_model_metadata()
@@ -204,7 +203,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_ollama_think_env_is_recorded_in_selected_model_metadata(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b", "OLLAMA_THINK": "high"}, clear=True),
-            mock.patch.object(loop_agent, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
+            mock.patch.object(loop_agent_models, "SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-model.json")),
         ):
             metadata = loop_agent.selected_model_metadata()
 
@@ -214,7 +213,7 @@ class LoopAgentPolicyTests(unittest.TestCase):
     def test_ollama_main_model_does_not_override_multimodal_evaluator_default(self) -> None:
         with (
             mock.patch.dict(os.environ, {"OLLAMA_MODEL": "gpt-oss:20b"}, clear=True),
-            mock.patch.object(loop_agent, "EVALUATOR_SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-evaluator-model.json")),
+            mock.patch.object(loop_agent_models, "EVALUATOR_SELECTED_MODEL_PATH", Path("/tmp/does-not-exist-hooky-evaluator-model.json")),
         ):
             self.assertEqual(loop_agent.selected_evaluator_attempt_model(), "openai/gpt-4.1-mini")
 

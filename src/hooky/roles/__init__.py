@@ -1,0 +1,129 @@
+"""Public API for Hooky's loop roles, re-assembled from submodules.
+
+This package is the split-up successor to the historical monolithic
+``loop_agent.py``. ``hooky.loop_agent`` re-exports everything here as a
+facade so existing imports (``from hooky import loop_agent`` /
+``loop_agent.selected_model()`` etc.) keep working unchanged.
+"""
+
+from __future__ import annotations
+
+from hooky.roles.models import (
+    DEFAULT_MODEL,
+    EVALUATOR_SELECTED_MODEL_PATH,
+    SELECTED_MODEL_PATH,
+    ensure_model_available,
+    env_ollama_reasoning_request,
+    env_reasoning_request,
+    read_selected_model,
+    selected_evaluator_attempt_model,
+    selected_evaluator_attempt_model_metadata,
+    selected_model,
+    selected_model_metadata,
+)
+from hooky.roles.runner import (
+    read_loop_proposal,
+    run_loop_role,
+    run_role_agent,
+    runtime_dir,
+    runtime_path,
+    runtime_rel,
+    tool_results_rel,
+)
+from hooky.roles.schemas import (
+    evaluator_attempt_schema,
+    evaluator_contract_schema,
+    generator_contract_schema,
+    generator_implementation_schema,
+    planner_schema,
+)
+from hooky.roles.validators import (
+    find_markdown_heading_line,
+    find_markdown_section_end,
+    markdown_section,
+    markdown_without_section,
+    proposal_checklist_items,
+    reference_visual_rubric_required,
+    taste_rubric_is_substantive,
+    taste_rubric_required,
+    validate_evaluator_attempt_report,
+    validate_evaluator_contract_report,
+    validate_generator_contract_report,
+    validate_generator_contract_write,
+    validate_generator_implementation_report,
+    validate_planner_report,
+)
+from hooky.roles.prompts import (
+    evaluator_attempt_system_prompt,
+    evaluator_attempt_user_prompt,
+    evaluator_contract_system_prompt,
+    evaluator_contract_user_prompt,
+    generator_contract_system_prompt,
+    generator_contract_user_prompt,
+    generator_implementation_system_prompt,
+    generator_implementation_user_prompt,
+    planner_system_prompt,
+    planner_user_prompt,
+)
+from hooky.roles.generators import (
+    generate_evaluator_attempt_artifacts,
+    generate_evaluator_contract_artifacts,
+    generate_generator_contract_artifacts,
+    generate_generator_implementation_artifacts,
+    generate_planner_artifacts,
+)
+
+__all__ = [
+    "DEFAULT_MODEL",
+    "EVALUATOR_SELECTED_MODEL_PATH",
+    "SELECTED_MODEL_PATH",
+    "ensure_model_available",
+    "env_ollama_reasoning_request",
+    "env_reasoning_request",
+    "read_selected_model",
+    "selected_evaluator_attempt_model",
+    "selected_evaluator_attempt_model_metadata",
+    "selected_model",
+    "selected_model_metadata",
+    "read_loop_proposal",
+    "run_loop_role",
+    "run_role_agent",
+    "runtime_dir",
+    "runtime_path",
+    "runtime_rel",
+    "tool_results_rel",
+    "evaluator_attempt_schema",
+    "evaluator_contract_schema",
+    "generator_contract_schema",
+    "generator_implementation_schema",
+    "planner_schema",
+    "find_markdown_heading_line",
+    "find_markdown_section_end",
+    "markdown_section",
+    "markdown_without_section",
+    "proposal_checklist_items",
+    "reference_visual_rubric_required",
+    "taste_rubric_is_substantive",
+    "taste_rubric_required",
+    "validate_evaluator_attempt_report",
+    "validate_evaluator_contract_report",
+    "validate_generator_contract_report",
+    "validate_generator_contract_write",
+    "validate_generator_implementation_report",
+    "validate_planner_report",
+    "evaluator_attempt_system_prompt",
+    "evaluator_attempt_user_prompt",
+    "evaluator_contract_system_prompt",
+    "evaluator_contract_user_prompt",
+    "generator_contract_system_prompt",
+    "generator_contract_user_prompt",
+    "generator_implementation_system_prompt",
+    "generator_implementation_user_prompt",
+    "planner_system_prompt",
+    "planner_user_prompt",
+    "generate_evaluator_attempt_artifacts",
+    "generate_evaluator_contract_artifacts",
+    "generate_generator_contract_artifacts",
+    "generate_generator_implementation_artifacts",
+    "generate_planner_artifacts",
+]
