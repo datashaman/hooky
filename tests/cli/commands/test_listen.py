@@ -106,7 +106,7 @@ class ListenServerTests(unittest.TestCase):
         body = json.dumps(
             {
                 "issue": {"number": 7, "title": "Add feature", "pull_request": {"url": "..."}},
-                "comment": {"body": "/hooky also handle nulls"},
+                "comment": {"body": "/hooky go also handle nulls"},
             }
         ).encode()
 
@@ -149,6 +149,22 @@ class ListenServerTests(unittest.TestCase):
     def test_refine_only_comment_on_issue_does_not_spawn_subprocess(self) -> None:
         _server, port = self.start_server()
         body = json.dumps({"issue": {"number": 1, "title": "Broken link"}, "comment": {"body": "/hooky also check the header"}}).encode()
+
+        with mock.patch.object(subprocess, "run") as run_mock:
+            status = self.post(port, body, event="issue_comment")
+            time.sleep(0.2)
+
+        self.assertEqual(status, 202)
+        run_mock.assert_not_called()
+
+    def test_freeform_comment_on_pr_is_refine_only_and_does_not_spawn_subprocess(self) -> None:
+        _server, port = self.start_server()
+        body = json.dumps(
+            {
+                "issue": {"number": 7, "title": "Add feature", "pull_request": {"url": "..."}},
+                "comment": {"body": "/hooky also handle nulls"},
+            }
+        ).encode()
 
         with mock.patch.object(subprocess, "run") as run_mock:
             status = self.post(port, body, event="issue_comment")

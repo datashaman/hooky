@@ -104,12 +104,12 @@ jobs:
           mode = determine_mode(event, event_name)
           run_key, proposal = derive_run_from_event(event, event_name, run_id, explicit_proposal=explicit_proposal)
 
-          # Issue threads accumulate refinement comments over time (see docs/workflows.md);
-          # fold them into the proposal whenever the full loop actually runs, so a run
-          # triggered by a label or by /hooky run/go picks up everything discussed since
-          # the issue was opened, not just the original body.
+          # Issue/PR comment threads accumulate refinement comments over time (see
+          # docs/workflows.md); fold them into the proposal whenever a run actually
+          # fires, so a label or an explicit /hooky run/go picks up everything
+          # discussed since, not just the original body or the triggering comment.
           issue_number = (event.get("issue") or {}).get("number")
-          if mode == "implement" and event_name in {"issues", "issue_comment"} and not explicit_proposal.strip() and issue_number:
+          if mode in {"implement", "light-implement"} and event_name in {"issues", "issue_comment"} and not explicit_proposal.strip() and issue_number:
               completed = subprocess.run(
                   ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue_number}/comments?per_page=100"],
                   capture_output=True,

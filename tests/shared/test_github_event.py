@@ -65,9 +65,16 @@ class DetermineModeTests(unittest.TestCase):
         event = {"issue": {"number": 1}, "comment": {"body": "/hooky review this approach"}}
         self.assertEqual(determine_mode(event, "issue_comment"), "refine")
 
-    def test_freeform_comment_on_pull_request_is_light_implement(self) -> None:
+    def test_freeform_comment_on_pull_request_is_refine(self) -> None:
+        # Symmetric with issues: a suggestion left as plain /hooky text just
+        # accumulates until an explicit run/go comment fires the light-implement pass.
         event = {"issue": {"number": 7, "pull_request": {"url": "..."}}, "comment": {"body": "/hooky also handle nulls"}}
-        self.assertEqual(determine_mode(event, "issue_comment"), "light-implement")
+        self.assertEqual(determine_mode(event, "issue_comment"), "refine")
+
+    def test_run_or_go_comment_on_pull_request_is_light_implement(self) -> None:
+        for keyword in ("run", "go"):
+            event = {"issue": {"number": 7, "pull_request": {"url": "..."}}, "comment": {"body": f"/hooky {keyword} also handle nulls"}}
+            self.assertEqual(determine_mode(event, "issue_comment"), "light-implement")
 
     def test_review_comment_on_pull_request_is_review(self) -> None:
         event = {"issue": {"number": 7, "pull_request": {"url": "..."}}, "comment": {"body": "/hooky review"}}

@@ -162,12 +162,13 @@ def listen(
 
     Trigger conditions, mode, and run_key/proposal derivation match
     .github/workflows/hooky.yml: a `hooky:run` label on an issue (or
-    `workflow_dispatch`) runs the full loop; a `hooky:run` label on a PR, or a
-    `/hooky review` comment on a PR, runs a read-only review; `/hooky <text>`
-    on a PR runs a light, unnegotiated implementation; `/hooky run`/`/hooky
-    go` on an issue runs the full loop; any other `/hooky <text>` comment on
-    an issue is refine-only and starts nothing. Runs are serialized against
-    this workspace's working tree.
+    `workflow_dispatch`) runs the full loop; `/hooky run`/`/hooky go` on an
+    issue also runs the full loop. A `hooky:run` label on a PR, or a `/hooky
+    review` comment on a PR, runs a read-only review. `/hooky run`/`/hooky
+    go` on a PR runs a light, unnegotiated implementation. Any other `/hooky
+    <text>` comment, on an issue or a PR, is refine-only and starts nothing -
+    it's folded into the proposal the next time a run actually fires. Runs
+    are serialized against this workspace's working tree.
     """
     workspace = workspace_from_ctx(ctx)
     resolved_secret = secret or os.environ.get("HOOKY_WEBHOOK_SECRET")

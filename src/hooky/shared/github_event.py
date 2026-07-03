@@ -5,17 +5,24 @@ so `hooky listen` (a local webhook listener, e.g. paired with `gh webhook
 forward`) triggers runs the same way the GitHub Actions workflow does. Keep
 both in sync if either the trigger conditions or the derivation logic change.
 
-Modes, decided by how deliberate the trigger is:
+Modes, decided by how deliberate the trigger is - symmetric for issues and
+PRs, except execution on a PR is scoped (light-implement) rather than
+negotiated (implement):
 - "implement": the full planner -> contract negotiation -> attempt loop.
-  Only a `hooky:run` label on an issue, `workflow_dispatch`, or an explicit
-  `/hooky run`/`/hooky go` comment on an issue reach this.
-- "light-implement": a scoped, already-worded ask against an existing PR
-  (`/hooky <text>` comment on a PR). No contract negotiation - the comment
-  itself is the already-scoped ask.
+  A `hooky:run` label on an issue, `workflow_dispatch`, or an explicit
+  `/hooky run`/`/hooky go` comment on an issue.
+- "light-implement": a scoped, already-worded ask against an existing PR. No
+  contract negotiation - the comment itself is the ask. An explicit `/hooky
+  run`/`/hooky go` comment on a PR.
 - "review": read-only assessment, no writes, no branch/PR. A `hooky:run`
   label on a PR, or an explicit `/hooky review` comment on a PR.
 - "refine": accumulate context for a future run; no model call, no run at
-  all. Any other `/hooky <text>` comment on an issue.
+  all. Any other `/hooky <text>` comment on an issue or PR - folded into the
+  proposal the next time implement/light-implement actually runs against
+  that issue/PR. Plain comments with no `/hooky` prefix are never consumed
+  by any mode, on either issues or PRs: only explicit `/hooky` text drives
+  Hooky, so ordinary PR review conversation doesn't silently turn into code
+  changes.
 """
 
 from __future__ import annotations
@@ -62,7 +69,9 @@ def determine_mode(event: dict[str, Any], event_name: str) -> str:
         is_pr = bool(issue.get("pull_request"))
         keyword, _ = parse_hooky_comment(body)
         if is_pr:
-            return "review" if keyword == "review" else "light-implement"
+            if keyword == "review":
+                return "review"
+            return "light-implement" if keyword in {"run", "go"} else "refine"
         return "implement" if keyword in {"run", "go"} else "refine"
     return ""
 
