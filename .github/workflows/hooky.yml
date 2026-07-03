@@ -166,15 +166,15 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          branch="hooky/run-${{ github.run_id }}"
+          branch="hooky/${{ steps.proposal.outputs.run_key }}"
           git switch -c "$branch"
-          git add -A
+          git add -A -- . ':!.hooky'
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git commit -m "hooky: run loop for ${{ github.run_id }}"
-          git push --set-upstream origin "$branch"
+          git commit -m "hooky: run loop for ${{ steps.proposal.outputs.run_key }} (run ${{ github.run_id }})"
+          git push --force --set-upstream origin "$branch"
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
@@ -184,11 +184,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pr_url="$(gh pr create \
-            --title "Hooky run ${{ github.run_id }}" \
-            --body "Hooky completed a loop run from GitHub event ${{ github.event_name }}. Artifacts are attached to the workflow run." \
-            --base "${{ github.event.repository.default_branch }}" \
-            --head "${{ steps.commit.outputs.branch }}")"
+          branch="${{ steps.commit.outputs.branch }}"
+          existing_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url')"
+          if [ -n "$existing_url" ]; then
+            pr_url="$existing_url"
+          else
+            pr_url="$(gh pr create \
+              --title "Hooky run ${{ steps.proposal.outputs.run_key }}" \
+              --body "Hooky completed a loop run from GitHub event ${{ github.event_name }}. Artifacts are attached to the workflow run." \
+              --base "${{ github.event.repository.default_branch }}" \
+              --head "$branch")"
+          fi
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Comment on issue
