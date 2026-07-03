@@ -189,6 +189,39 @@ def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str =
     return loop_root
 
 
+def initialize_light_implementation_files(workspace: Path, *, proposal: str) -> Path:
+    """Set up loop files for a light-implement run: no planner, no contract negotiation.
+
+    The proposal is already a scoped, specific ask (a PR comment), so it becomes
+    the Done Criteria directly instead of being negotiated into one.
+    """
+    run_key = selected_run_key(workspace)
+    set_current_run_key(workspace, run_key)
+    loop_root = loop_dir(workspace)
+    loop_root.mkdir(parents=True, exist_ok=True)
+    proposal_text = proposal.strip()
+    write_json(
+        loop_feature_list_path(workspace),
+        {
+            "schema_version": 1,
+            "features": [{"id": "F001", "text": proposal_text, "proposal_refs": [], "status": "pending"}] if proposal_text else [],
+        },
+    )
+    loop_proposal_path(workspace).write_text(proposal_text + ("\n" if proposal_text else ""), encoding="utf-8")
+    state = default_loop_state()
+    state["run_key"] = run_key
+    state["created_at"] = utc_now()
+    state["contract_accepted"] = True
+    state["status"] = "contract-accepted"
+    write_loop_state(workspace, state)
+    contract_lines = ["# Loop Contract", "", "## Done Criteria", "", proposal_text or "_(no proposal text provided)_", ""]
+    loop_contract_path(workspace).write_text("\n".join(contract_lines), encoding="utf-8")
+    write_loop_progress(workspace, state, note="Light implement: contract set directly from the request, no negotiation.")
+    loop_log_path(workspace).write_text("", encoding="utf-8")
+    append_loop_log(workspace, "init", "light-implement initialized", f"workspace: {workspace}")
+    return loop_root
+
+
 def active_loop_attempt(state: dict[str, Any]) -> str:
     attempt_id = state.get("current_attempt")
     if not attempt_id:

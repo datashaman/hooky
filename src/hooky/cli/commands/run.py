@@ -21,6 +21,7 @@ from hooky.cli.loop_state import (
     ensure_loop_initialized,
     fallback_evaluator_report_from_error,
     format_evaluator_feedback,
+    initialize_light_implementation_files,
     initialize_loop_files,
     loop_attempt_dir,
     next_loop_attempt_id,
@@ -306,6 +307,149 @@ def _run_model_loop_once(
         raise typer.Exit(1)
 
 
+def run_light_implementation_loop(
+    workspace: Path,
+    *,
+    proposal: str,
+    force: bool,
+    last_run_path: Path,
+    executor: str | None = None,
+) -> None:
+    with temporary_executor(executor):
+        _run_light_implementation_loop(workspace, proposal=proposal, force=force, last_run_path=last_run_path)
+
+
+def _run_light_implementation_loop(
+    workspace: Path,
+    *,
+    proposal: str,
+    force: bool,
+    last_run_path: Path,
+) -> None:
+    """Generator/evaluator attempt loop with no planner and no contract negotiation.
+
+    The proposal is already a scoped ask (a PR comment), so it becomes the
+    contract directly. There's no negotiation phase to fall back into, so a
+    restart-contract recommendation is treated as a hard stop instead.
+    """
+    ensure_workspace_ready(workspace)
+    if not loop_state_path(workspace).exists() or force:
+        initialize_light_implementation_files(workspace, proposal=proposal)
+
+    max_attempt_rounds = int(os.environ.get("LOOP_ATTEMPT_MAX_ROUNDS", "3"))
+    evaluator_feedback = ""
+    final_attempt_id = ""
+    final_report_path: Path | None = None
+    for attempt_round in range(1, max_attempt_rounds + 1):
+        state = read_loop_state(workspace)
+        attempt_id, attempt_dir, state = start_loop_attempt_state(workspace, state)
+        final_attempt_id = attempt_id
+        state["last_action"] = "run:start-attempt"
+        record_loop_transition(workspace, state, note=f"Attempt {attempt_id} started.", log_op="attempt", log_title=f"attempt {attempt_id} started")
+
+        generator_report, generator_usage = run_model_role_with_retries(
+            workspace,
+            f"generator-implementation attempt {attempt_id}",
+            lambda: roles.generate_generator_implementation_artifacts(
+                working_folder=workspace,
+                attempt_id=attempt_id,
+                evaluator_feedback=evaluator_feedback,
+            ),
+            on_retry=lambda retry, _exc: append_loop_log(
+                workspace,
+                "loop-runner",
+                f"attempt {attempt_id} generator retry reset",
+                reset_loop_attempt_workspace(workspace),
+            ),
+        )
+        write_json(attempt_dir / "generator_report.json", generator_report)
+        state = read_loop_state(workspace)
+        state.setdefault("role_usage", {})["generator_implementation"] = generator_usage
+        state["last_action"] = "run:generator-implement"
+        record_loop_transition(
+            workspace,
+            state,
+            note=str(generator_report.get("summary") or "Generator completed implementation pass."),
+            log_op="generator",
+            log_title=f"attempt {attempt_id} implementation",
+            log_body=str(generator_report.get("summary") or ""),
+        )
+
+        try:
+            evaluator_report, evaluator_usage = run_model_role_with_retries(
+                workspace,
+                f"evaluator-attempt {attempt_id}",
+                lambda: roles.generate_evaluator_attempt_artifacts(
+                    working_folder=workspace,
+                    attempt_id=attempt_id,
+                ),
+            )
+            evaluator_report = {
+                "schema_version": 1,
+                "attempt": attempt_id,
+                "written_at": utc_now(),
+                **evaluator_report,
+            }
+        except runtime.AgentRunError as exc:
+            evaluator_usage = exc.result.usage
+            evaluator_report = fallback_evaluator_report_from_error(
+                attempt_id=attempt_id,
+                error=exc,
+                generator_report=generator_report,
+            )
+        evaluator_report = enforce_lint_status_gate(evaluator_report)
+        report_path = attempt_dir / "evaluator_report.json"
+        final_report_path = report_path
+        write_json(report_path, evaluator_report)
+        state = read_loop_state(workspace)
+        state.setdefault("role_usage", {})["evaluator_attempt"] = evaluator_usage
+        state = apply_loop_evaluator_report(
+            workspace,
+            state,
+            attempt_id=attempt_id,
+            report=evaluator_report,
+            report_path=report_path,
+            action="run:evaluator-attempt",
+        )
+        evaluator_feedback = format_evaluator_feedback(evaluator_report)
+        recommendation = str(evaluator_report.get("recommendation"))
+        status = str(evaluator_report.get("status"))
+        if recommendation == "restart-contract":
+            state = read_loop_state(workspace)
+            state["status"] = "stopped"
+            state["last_action"] = "run:restart-contract-unavailable"
+            record_loop_transition(
+                workspace,
+                state,
+                note="Evaluator asked to restart the contract, but light-implement has no negotiation phase. Stopping - the request needs clarification.",
+                log_op="loop-runner",
+                log_title="light-implement stopped",
+                log_body="restart-contract is not available outside the full loop.",
+            )
+            break
+        if status == "pass" or recommendation == "stop":
+            break
+        if recommendation == "restart-attempt":
+            if attempt_round >= max_attempt_rounds:
+                break
+            reset_note = reset_loop_attempt_workspace(workspace)
+            append_loop_log(workspace, "loop-runner", f"attempt {attempt_id} reset", reset_note)
+            continue
+        if recommendation == "continue" and attempt_round < max_attempt_rounds:
+            append_loop_log(workspace, "loop-runner", f"attempt {attempt_id} continuing", "Starting another generator/evaluator attempt with evaluator feedback.")
+            continue
+        break
+
+    state = read_loop_state(workspace)
+    write_last_run_workspace(last_run_path, workspace)
+    typer.echo(f"attempt: {final_attempt_id}")
+    typer.echo(f"status: {state['status']}")
+    if final_report_path is not None:
+        typer.echo(f"report: {final_report_path}")
+    if state["status"] != "passed":
+        raise typer.Exit(1)
+
+
 def loop_run(
     ctx: typer.Context,
     title: Annotated[str | None, typer.Option(help="Problem title used when initializing a new loop.")] = None,
@@ -317,6 +461,7 @@ def loop_run(
     recommendation: Annotated[str, typer.Option(help="Dry-run evaluator recommendation: continue, restart-attempt, restart-contract, or stop.", hidden=True)] = "continue",
     bottleneck: Annotated[str | None, typer.Option(help="Dry-run evaluator bottleneck.", hidden=True)] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Use deterministic local loop plumbing instead of model roles.")] = False,
+    light: Annotated[bool, typer.Option("--light", help="Skip the planner and contract negotiation; treat the proposal itself as the contract.")] = False,
     executor: Annotated[str | None, typer.Option(help="Role executor: native, shell, codex, or claude. Defaults to HOOKY_EXECUTOR or native.")] = None,
     force: Annotated[bool, typer.Option(help="Reinitialize the loop before running.")] = False,
     run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
@@ -332,6 +477,11 @@ def loop_run(
     elif not proposal and not sys.stdin.isatty():
         proposal = sys.stdin.read().strip()
     title = title or title_from_body(proposal)
+    if light:
+        if dry_run:
+            raise typer.BadParameter("--light and --dry-run cannot be combined")
+        run_light_implementation_loop(workspace, proposal=proposal, force=force, last_run_path=last_run_path, executor=executor)
+        return
     if not dry_run:
         run_model_loop_once(workspace, title=title, proposal=proposal, force=force, last_run_path=last_run_path, executor=executor)
         return
@@ -531,6 +681,42 @@ def trace(
     if not tail_file.exists():
         raise typer.BadParameter(f"loop runtime log not found: {tail_file}")
     typer.echo(tail_file.read_text(encoding="utf-8").rstrip())
+
+
+@app.command()
+def review(
+    ctx: typer.Context,
+    proposal: Annotated[str, typer.Option(help="Pull request context to review against.")] = "",
+    proposal_file: Annotated[Path | None, typer.Option(help="Pull request context file.")] = None,
+    executor: Annotated[str | None, typer.Option(help="Role executor: native, shell, codex, or claude. Defaults to HOOKY_EXECUTOR or native.")] = None,
+    run_key: Annotated[str | None, typer.Option(help="Durable loop run key under .hooky/runs/<key>.")] = None,
+    last_run_path: Annotated[Path, typer.Option(help="Path used by loop status/watch to find the latest workspace.")] = DEFAULT_LAST_RUN_PATH,
+) -> None:
+    """Run a read-only reviewer pass: no contract, no writes, no attempt loop."""
+    workspace = workspace_from_ctx(ctx)
+    if run_key:
+        set_current_run_key(workspace, run_key)
+    ensure_workspace_ready(workspace)
+    loop_dir(workspace).mkdir(parents=True, exist_ok=True)
+    if proposal_file is not None:
+        proposal = resolve_workspace_path(workspace, proposal_file).read_text(encoding="utf-8")
+    elif not proposal and not sys.stdin.isatty():
+        proposal = sys.stdin.read().strip()
+    with temporary_executor(executor):
+        report_data, _usage = run_model_role_with_retries(
+            workspace,
+            "reviewer",
+            lambda: roles.generate_reviewer_artifacts(working_folder=workspace, proposal=proposal),
+        )
+    report_data = {"schema_version": 1, "written_at": utc_now(), **report_data}
+    report_path = loop_dir(workspace) / "review_report.json"
+    write_json(report_path, report_data)
+    append_loop_log(workspace, "reviewer", f"review {report_data.get('verdict')}", str(report_data.get("summary") or ""))
+    write_last_run_workspace(last_run_path, workspace)
+    typer.echo(f"verdict: {report_data.get('verdict')}")
+    typer.echo(f"report: {report_path}")
+    if report_data.get("verdict") == "request_changes":
+        raise typer.Exit(1)
 
 
 @app.command()

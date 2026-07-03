@@ -99,6 +99,63 @@ class ListenServerTests(unittest.TestCase):
         self.assertIn("run", command)
         self.assertIn("--run-key", command)
         self.assertIn("issue-12", command)
+        self.assertNotIn("--light", command)
+
+    def test_light_implement_comment_on_pr_spawns_run_with_light_flag(self) -> None:
+        _server, port = self.start_server()
+        body = json.dumps(
+            {
+                "issue": {"number": 7, "title": "Add feature", "pull_request": {"url": "..."}},
+                "comment": {"body": "/hooky also handle nulls"},
+            }
+        ).encode()
+
+        with mock.patch.object(subprocess, "run") as run_mock:
+            run_mock.return_value = subprocess.CompletedProcess([], 0)
+            status = self.post(port, body, event="issue_comment")
+            deadline = time.monotonic() + 2
+            while run_mock.call_count == 0 and time.monotonic() < deadline:
+                time.sleep(0.02)
+
+        self.assertEqual(status, 202)
+        run_mock.assert_called_once()
+        (command,), _kwargs = run_mock.call_args
+        self.assertIn("run", command)
+        self.assertIn("--light", command)
+        self.assertIn("pr-7", command)
+
+    def test_review_comment_on_pr_spawns_review_subprocess(self) -> None:
+        _server, port = self.start_server()
+        body = json.dumps(
+            {
+                "issue": {"number": 7, "title": "Add feature", "pull_request": {"url": "..."}},
+                "comment": {"body": "/hooky review"},
+            }
+        ).encode()
+
+        with mock.patch.object(subprocess, "run") as run_mock:
+            run_mock.return_value = subprocess.CompletedProcess([], 0)
+            status = self.post(port, body, event="issue_comment")
+            deadline = time.monotonic() + 2
+            while run_mock.call_count == 0 and time.monotonic() < deadline:
+                time.sleep(0.02)
+
+        self.assertEqual(status, 202)
+        run_mock.assert_called_once()
+        (command,), _kwargs = run_mock.call_args
+        self.assertIn("review", command)
+        self.assertNotIn("run", command)
+
+    def test_refine_only_comment_on_issue_does_not_spawn_subprocess(self) -> None:
+        _server, port = self.start_server()
+        body = json.dumps({"issue": {"number": 1, "title": "Broken link"}, "comment": {"body": "/hooky also check the header"}}).encode()
+
+        with mock.patch.object(subprocess, "run") as run_mock:
+            status = self.post(port, body, event="issue_comment")
+            time.sleep(0.2)
+
+        self.assertEqual(status, 202)
+        run_mock.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -118,6 +118,16 @@ an issue/PR comment that starts with `/hooky`. GitHub is a trigger and
 publication surface; Hooky still records loop truth on disk before posting
 summaries back to GitHub.
 
+The diagram below shows the full **implement** path (`hooky run`). Trigger
+mechanism, not target type, decides the mode: a `hooky:run` label or
+`/hooky run`/`/hooky go` comment on an issue reaches this path; a `hooky:run`
+label or `/hooky review` comment on a PR runs a read-only **review** pass
+instead (no planner/contract/writes, posts `gh pr review`); any other
+`/hooky <text>` comment on a PR runs a scoped **light-implement** pass
+(generator/evaluator only, no contract negotiation); any other `/hooky <text>`
+comment on an issue is **refine**-only and runs nothing. See
+[`docs/workflows.md`](workflows.md) for the full mode table.
+
 ```mermaid
 sequenceDiagram
     autonumber

@@ -694,6 +694,112 @@ class RunCommandsTests(unittest.TestCase):
         self.assertIn(f"loop: {(self.workspace / '.hooky').resolve()}", status.output)
         self.assertIn("status: passed", status.output)
 
+    def test_light_implement_skips_planner_and_contract_negotiation(self) -> None:
+        runner = CliRunner()
+
+        def fake_implementation(*, working_folder: Path, attempt_id: str, evaluator_feedback: str = "") -> tuple[dict[str, object], dict[str, object]]:
+            self.assertEqual(attempt_id, "001")
+            contract = (working_folder / ".hooky/runs/local/contract.md").read_text(encoding="utf-8")
+            self.assertIn("also handle nulls", contract)
+            return {
+                "status": "done",
+                "summary": "Handled nulls.",
+                "changed_files": ["src/app.py"],
+                "tests_run": ["pytest"],
+                "failures": [],
+            }, {"cost": 0.04}
+
+        def fake_attempt_review(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            return {
+                "status": "pass",
+                "recommendation": "continue",
+                "bottleneck": "none_visible_after_trace_review",
+                "findings": [],
+                "score": 1.0,
+            }, {"cost": 0.05}
+
+        with (
+            mock.patch.object(roles, "generate_planner_artifacts") as planner_mock,
+            mock.patch.object(roles, "generate_generator_contract_artifacts") as contract_mock,
+            mock.patch.object(roles, "generate_evaluator_contract_artifacts") as contract_review_mock,
+            mock.patch.object(roles, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(roles, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+        ):
+            result = runner.invoke(
+                cli.app,
+                ["-C", str(self.workspace), "run", "--light", "--proposal", "also handle nulls"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("status: passed", result.output)
+        planner_mock.assert_not_called()
+        contract_mock.assert_not_called()
+        contract_review_mock.assert_not_called()
+        state = cli.read_loop_state(self.workspace)
+        self.assertTrue(state["contract_accepted"])
+
+    def test_light_implement_restart_contract_recommendation_stops_instead_of_negotiating(self) -> None:
+        runner = CliRunner()
+
+        def fake_implementation(*, working_folder: Path, attempt_id: str, evaluator_feedback: str = "") -> tuple[dict[str, object], dict[str, object]]:
+            return {"status": "done", "summary": "Tried.", "changed_files": [], "tests_run": [], "failures": []}, {"cost": 0.01}
+
+        def fake_attempt_review(*, working_folder: Path, attempt_id: str) -> tuple[dict[str, object], dict[str, object]]:
+            return {
+                "status": "fail",
+                "recommendation": "restart-contract",
+                "bottleneck": "the request is ambiguous",
+                "findings": ["Not clear what 'it' refers to."],
+                "score": 0.0,
+            }, {"cost": 0.01}
+
+        with (
+            mock.patch.object(roles, "generate_generator_implementation_artifacts", side_effect=fake_implementation),
+            mock.patch.object(roles, "generate_evaluator_attempt_artifacts", side_effect=fake_attempt_review),
+        ):
+            result = runner.invoke(
+                cli.app,
+                ["-C", str(self.workspace), "run", "--light", "--proposal", "fix it"],
+            )
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        state = cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "stopped")
+
+    def test_review_command_reports_verdict_and_writes_report(self) -> None:
+        runner = CliRunner()
+
+        def fake_reviewer(*, working_folder: Path, proposal: str) -> tuple[dict[str, object], dict[str, object]]:
+            self.assertIn("Refactor auth", proposal)
+            return {"verdict": "approve", "summary": "Looks fine.", "findings": []}, {"cost": 0.02}
+
+        with mock.patch.object(roles, "generate_reviewer_artifacts", side_effect=fake_reviewer):
+            result = runner.invoke(
+                cli.app,
+                ["-C", str(self.workspace), "review", "--proposal", "Refactor auth"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("verdict: approve", result.output)
+        report_path = self.workspace / ".hooky/runs/local/review_report.json"
+        self.assertTrue(report_path.exists())
+        self.assertEqual(json.loads(report_path.read_text(encoding="utf-8"))["verdict"], "approve")
+
+    def test_review_command_exits_nonzero_on_request_changes(self) -> None:
+        runner = CliRunner()
+
+        def fake_reviewer(*, working_folder: Path, proposal: str) -> tuple[dict[str, object], dict[str, object]]:
+            return {"verdict": "request_changes", "summary": "Missing tests.", "findings": ["No coverage for the new branch."]}, {"cost": 0.02}
+
+        with mock.patch.object(roles, "generate_reviewer_artifacts", side_effect=fake_reviewer):
+            result = runner.invoke(
+                cli.app,
+                ["-C", str(self.workspace), "review", "--proposal", "Refactor auth"],
+            )
+
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("verdict: request_changes", result.output)
+
 
 if __name__ == "__main__":
     unittest.main()

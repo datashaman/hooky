@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from hooky.shared.github_event import derive_run_from_event, should_trigger_event
+from hooky.shared.github_event import derive_run_from_event, determine_mode, fold_issue_comments, parse_hooky_comment, should_trigger_event
 
 
 class ShouldTriggerEventTests(unittest.TestCase):
@@ -27,6 +27,82 @@ class ShouldTriggerEventTests(unittest.TestCase):
         self.assertFalse(should_trigger_event({"comment": {"body": "/hooky"}}, "push"))
 
 
+class ParseHookyCommentTests(unittest.TestCase):
+    def test_recognizes_run_go_review_keywords_case_insensitively(self) -> None:
+        self.assertEqual(parse_hooky_comment("/hooky run"), ("run", ""))
+        self.assertEqual(parse_hooky_comment("/hooky Go please"), ("go", "please"))
+        self.assertEqual(parse_hooky_comment("/hooky REVIEW the tests too"), ("review", "the tests too"))
+
+    def test_freeform_text_has_no_keyword(self) -> None:
+        self.assertEqual(parse_hooky_comment("/hooky also handle nulls"), ("", "also handle nulls"))
+        self.assertEqual(parse_hooky_comment("/hooky"), ("", ""))
+
+
+class DetermineModeTests(unittest.TestCase):
+    def test_workflow_dispatch_is_implement(self) -> None:
+        self.assertEqual(determine_mode({}, "workflow_dispatch"), "implement")
+
+    def test_issue_label_is_implement(self) -> None:
+        self.assertEqual(determine_mode({"label": {"name": "hooky:run"}}, "issues"), "implement")
+        self.assertEqual(determine_mode({"label": {"name": "bug"}}, "issues"), "")
+
+    def test_pull_request_label_is_review_only(self) -> None:
+        self.assertEqual(determine_mode({"label": {"name": "hooky:run"}}, "pull_request"), "review")
+        self.assertEqual(determine_mode({"label": {"name": "bug"}}, "pull_request"), "")
+
+    def test_freeform_comment_on_issue_is_refine(self) -> None:
+        event = {"issue": {"number": 1}, "comment": {"body": "/hooky also handle nulls"}}
+        self.assertEqual(determine_mode(event, "issue_comment"), "refine")
+
+    def test_run_or_go_comment_on_issue_is_implement(self) -> None:
+        for keyword in ("run", "go"):
+            event = {"issue": {"number": 1}, "comment": {"body": f"/hooky {keyword}"}}
+            self.assertEqual(determine_mode(event, "issue_comment"), "implement")
+
+    def test_review_comment_on_issue_is_still_refine(self) -> None:
+        # "review" only has meaning against a PR's diff; on a bare issue it's
+        # just freeform text to fold into a future run.
+        event = {"issue": {"number": 1}, "comment": {"body": "/hooky review this approach"}}
+        self.assertEqual(determine_mode(event, "issue_comment"), "refine")
+
+    def test_freeform_comment_on_pull_request_is_light_implement(self) -> None:
+        event = {"issue": {"number": 7, "pull_request": {"url": "..."}}, "comment": {"body": "/hooky also handle nulls"}}
+        self.assertEqual(determine_mode(event, "issue_comment"), "light-implement")
+
+    def test_review_comment_on_pull_request_is_review(self) -> None:
+        event = {"issue": {"number": 7, "pull_request": {"url": "..."}}, "comment": {"body": "/hooky review"}}
+        self.assertEqual(determine_mode(event, "issue_comment"), "review")
+
+    def test_non_hooky_comment_does_not_trigger(self) -> None:
+        self.assertEqual(determine_mode({"comment": {"body": "not a command"}}, "issue_comment"), "")
+
+    def test_unknown_event_name_does_not_trigger(self) -> None:
+        self.assertEqual(determine_mode({}, "push"), "")
+
+
+class FoldIssueCommentsTests(unittest.TestCase):
+    def test_folds_only_hooky_prefixed_comments_with_remainder(self) -> None:
+        comments = [
+            "Hooky run finished with loop status: passed.",  # bot status comment, no prefix
+            "/hooky run",  # bare keyword, no remainder
+            "/hooky also handle the empty-list case",
+            "unrelated human chatter",
+            "/hooky and log a warning",
+        ]
+
+        proposal = fold_issue_comments("Fix the crash on save.", comments)
+
+        self.assertIn("Fix the crash on save.", proposal)
+        self.assertIn("Follow-up comments:", proposal)
+        self.assertIn("- also handle the empty-list case", proposal)
+        self.assertIn("- and log a warning", proposal)
+        self.assertNotIn("Hooky run finished", proposal)
+        self.assertNotIn("unrelated human chatter", proposal)
+
+    def test_no_refining_comments_returns_proposal_unchanged(self) -> None:
+        self.assertEqual(fold_issue_comments("Fix the crash on save.", ["/hooky run", "not a command"]), "Fix the crash on save.")
+
+
 class DeriveRunFromEventTests(unittest.TestCase):
     def test_issue_comment_on_issue_derives_issue_run_key(self) -> None:
         event = {
@@ -49,6 +125,7 @@ class DeriveRunFromEventTests(unittest.TestCase):
         run_key, proposal = derive_run_from_event(event, "issue_comment", "999")
 
         self.assertEqual(run_key, "pr-7")
+        self.assertIn("Pull request #7", proposal)
         self.assertIn("Add feature", proposal)
 
     def test_pull_request_event_derives_pr_run_key_and_proposal(self) -> None:
@@ -57,7 +134,7 @@ class DeriveRunFromEventTests(unittest.TestCase):
         run_key, proposal = derive_run_from_event(event, "pull_request", "999")
 
         self.assertEqual(run_key, "pr-3")
-        self.assertIn("Review and improve pull request #3", proposal)
+        self.assertIn("Pull request #3", proposal)
         self.assertIn("cleanup", proposal)
 
     def test_issues_event_derives_issue_run_key_and_proposal(self) -> None:

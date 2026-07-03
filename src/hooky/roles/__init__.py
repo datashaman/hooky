@@ -8,6 +8,7 @@ from hooky.roles.generators import (
     generate_generator_contract_artifacts,
     generate_generator_implementation_artifacts,
     generate_planner_artifacts,
+    generate_reviewer_artifacts,
 )
 from hooky.roles.models import (
     DEFAULT_MODEL,
@@ -33,6 +34,8 @@ from hooky.roles.prompts import (
     generator_implementation_user_prompt,
     planner_system_prompt,
     planner_user_prompt,
+    reviewer_system_prompt,
+    reviewer_user_prompt,
 )
 from hooky.roles.runner import (
     read_loop_proposal,
@@ -49,6 +52,7 @@ from hooky.roles.schemas import (
     generator_contract_schema,
     generator_implementation_schema,
     planner_schema,
+    reviewer_schema,
 )
 from hooky.roles.validators import (
     find_markdown_heading_line,
@@ -91,6 +95,7 @@ __all__ = [
     "generator_contract_schema",
     "generator_implementation_schema",
     "planner_schema",
+    "reviewer_schema",
     "find_markdown_heading_line",
     "find_markdown_section_end",
     "markdown_section",
@@ -115,9 +120,12 @@ __all__ = [
     "generator_implementation_user_prompt",
     "planner_system_prompt",
     "planner_user_prompt",
+    "reviewer_system_prompt",
+    "reviewer_user_prompt",
     "generate_evaluator_attempt_artifacts",
     "generate_evaluator_contract_artifacts",
     "generate_generator_contract_artifacts",
     "generate_generator_implementation_artifacts",
     "generate_planner_artifacts",
+    "generate_reviewer_artifacts",
 ]

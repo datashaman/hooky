@@ -24,6 +24,8 @@ from hooky.roles.prompts import (
     generator_implementation_user_prompt,
     planner_system_prompt,
     planner_user_prompt,
+    reviewer_system_prompt,
+    reviewer_user_prompt,
 )
 from hooky.roles.runner import read_loop_proposal, run_loop_role, runtime_dir, runtime_path, runtime_rel, tool_results_rel
 from hooky.roles.schemas import (
@@ -32,6 +34,7 @@ from hooky.roles.schemas import (
     generator_contract_schema,
     generator_implementation_schema,
     planner_schema,
+    reviewer_schema,
 )
 from hooky.roles.validators import (
     validate_evaluator_attempt_report,
@@ -256,4 +259,38 @@ def generate_evaluator_attempt_artifacts(*, working_folder: Path, attempt_id: st
         runtime=runtime,
         live_root=live_root,
         missing_report_error="Loop evaluator finished without final_report",
+    )
+
+
+def generate_reviewer_artifacts(*, working_folder: Path, proposal: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run a read-only reviewer pass against the current workspace (no contract, no writes)."""
+    working_folder = working_folder.resolve()
+    model = selected_evaluator_attempt_model()
+    ensure_model_available(model, "loop reviewer")
+    model_metadata = selected_evaluator_attempt_model_metadata()
+    live_root = runtime_path(working_folder, "review")
+    runtime = ToolRuntime(
+        working_folder=working_folder,
+        final_report_schema=reviewer_schema(),
+        max_cost_usd=float(os.environ.get("LOOP_EVALUATOR_MAX_COST_USD", "0.50")),
+        max_seconds=int(os.environ.get("LOOP_EVALUATOR_MAX_SECONDS", "600")),
+        context_window_tokens=model_metadata.get("context_length"),
+        skills=agent_skills.discover_skills(working_folder),
+        write_enabled=False,
+        read_allowed_prefixes=[runtime_dir(), tool_results_rel()],
+        read_blocked_prefixes=[".hooky"],
+        live_log_root=live_root,
+        live_event_log_paths=[runtime_path(working_folder, "log.runtime")],
+        live_event_prefix="role=reviewer ",
+    )
+    return run_loop_role(
+        role="reviewer",
+        agent_name="loop-reviewer",
+        model=model,
+        model_metadata=model_metadata,
+        system=reviewer_system_prompt(),
+        user=reviewer_user_prompt(proposal, model_metadata),
+        runtime=runtime,
+        live_root=live_root,
+        missing_report_error="Reviewer finished without final_report",
     )

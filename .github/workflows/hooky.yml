@@ -42,10 +42,33 @@ jobs:
       HOOKY_LAST_RUN_PATH: /tmp/hooky-last-run-path
 
     steps:
+      - name: Determine checkout ref
+        id: checkout_ref
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          ref = ""
+          if event_name == "issue_comment":
+              issue = event.get("issue") or {}
+              if issue.get("pull_request") and issue.get("number"):
+                  # issue_comment's default checkout ref is the default branch even when
+                  # commenting on a PR; pin it to the PR's own merge ref instead, matching
+                  # what a pull_request-triggered run already checks out.
+                  ref = f"refs/pull/{issue.get('number')}/merge"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"ref={ref}\n")
+          PY
+
       - name: Check out repository
         uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
+          ref: ${{ steps.checkout_ref.outputs.ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6.3.0
@@ -59,99 +82,104 @@ jobs:
         run: |
           uv tool install --editable .
 
-      - name: Build proposal from event
+      - name: Determine mode, run_key, and proposal
         id: proposal
         env:
           WORKFLOW_PROPOSAL: ${{ inputs.proposal }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 - <<'PY'
+          uv run python3 - <<'PY'
           import json
           import os
+          import subprocess
           from pathlib import Path
 
+          from hooky.shared.github_event import derive_run_from_event, determine_mode, fold_issue_comments
+
           event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-          proposal = (os.environ.get("WORKFLOW_PROPOSAL") or "").strip()
           event_name = os.environ["GITHUB_EVENT_NAME"]
-          run_key = f"manual-{os.environ['GITHUB_RUN_ID']}"
+          run_id = os.environ["GITHUB_RUN_ID"]
+          explicit_proposal = os.environ.get("WORKFLOW_PROPOSAL") or ""
 
-          if not proposal and event_name == "issue_comment":
-              issue = event.get("issue") or {}
-              run_key = f"pr-{issue.get('number')}" if issue.get("pull_request") else f"issue-{issue.get('number')}"
-              comment = event.get("comment") or {}
-              body = str(comment.get("body") or "")
-              if body.startswith("/hooky"):
-                  body = body[len("/hooky"):].strip()
-              proposal = "\n\n".join(
-                  part
-                  for part in [
-                      f"Respond to GitHub issue #{issue.get('number')}: {issue.get('title', '')}".strip(),
-                      body or str(issue.get("body") or "").strip(),
-                  ]
-                  if part
+          mode = determine_mode(event, event_name)
+          run_key, proposal = derive_run_from_event(event, event_name, run_id, explicit_proposal=explicit_proposal)
+
+          # Issue threads accumulate refinement comments over time (see docs/workflows.md);
+          # fold them into the proposal whenever the full loop actually runs, so a run
+          # triggered by a label or by /hooky run/go picks up everything discussed since
+          # the issue was opened, not just the original body.
+          issue_number = (event.get("issue") or {}).get("number")
+          if mode == "implement" and event_name in {"issues", "issue_comment"} and not explicit_proposal.strip() and issue_number:
+              completed = subprocess.run(
+                  ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/issues/{issue_number}/comments?per_page=100"],
+                  capture_output=True,
+                  text=True,
+                  check=False,
               )
-
-          if not proposal and event_name == "pull_request":
-              pr = event.get("pull_request") or {}
-              run_key = f"pr-{pr.get('number')}"
-              proposal = "\n\n".join(
-                  part
-                  for part in [
-                      f"Review and improve pull request #{pr.get('number')}: {pr.get('title', '')}".strip(),
-                      str(pr.get("body") or "").strip(),
-                  ]
-                  if part
-              )
-
-          if not proposal:
-              issue = event.get("issue") or {}
-              if issue.get("number"):
-                  run_key = f"issue-{issue.get('number')}"
-                  proposal = "\n\n".join(
-                      part
-                      for part in [
-                          f"Address GitHub issue #{issue.get('number')}: {issue.get('title', '')}".strip(),
-                          str(issue.get("body") or "").strip(),
-                      ]
-                      if part
-                  )
-
-          if not proposal:
-              proposal = f"Run Hooky for {event_name} event {os.environ['GITHUB_RUN_ID']}."
+              if completed.returncode == 0:
+                  try:
+                      comments = json.loads(completed.stdout)
+                  except json.JSONDecodeError:
+                      comments = []
+                  bodies = [str(item.get("body") or "") for item in comments if isinstance(item, dict)]
+                  proposal = fold_issue_comments(proposal, bodies)
 
           Path("event-proposal.md").write_text(proposal + "\n", encoding="utf-8")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"mode={mode}\n")
               handle.write(f"run_key={run_key}\n")
           PY
 
       - name: Run Hooky
+        if: steps.proposal.outputs.mode != 'refine'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          args=(run --run-key "${{ steps.proposal.outputs.run_key }}" --proposal-file event-proposal.md --last-run-path "$HOOKY_LAST_RUN_PATH")
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            args+=(--dry-run)
-          fi
-          hooky "${args[@]}"
+          mode="${{ steps.proposal.outputs.mode }}"
+          run_key="${{ steps.proposal.outputs.run_key }}"
+          case "$mode" in
+            implement)
+              args=(run --run-key "$run_key" --proposal-file event-proposal.md --last-run-path "$HOOKY_LAST_RUN_PATH")
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                args+=(--dry-run)
+              fi
+              hooky "${args[@]}"
+              ;;
+            light-implement)
+              hooky run --light --run-key "$run_key" --proposal-file event-proposal.md --last-run-path "$HOOKY_LAST_RUN_PATH"
+              ;;
+            review)
+              hooky review --run-key "$run_key" --proposal-file event-proposal.md --last-run-path "$HOOKY_LAST_RUN_PATH"
+              ;;
+          esac
 
       - name: Write harness report
-        if: always()
+        if: always() && (steps.proposal.outputs.mode == 'implement' || steps.proposal.outputs.mode == 'light-implement')
         run: |
           hooky --run-key "${{ steps.proposal.outputs.run_key }}" report || true
 
       - name: Read Hooky loop status
         id: loop_status
-        if: always()
+        if: always() && steps.proposal.outputs.mode != 'refine'
         run: |
-          state_path=".hooky/runs/${{ steps.proposal.outputs.run_key }}/state.json"
-          if [ -f "$state_path" ]; then
-            status="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('status', 'unknown'))" "$state_path")"
+          mode="${{ steps.proposal.outputs.mode }}"
+          run_key="${{ steps.proposal.outputs.run_key }}"
+          if [ "$mode" = "review" ]; then
+            report_path=".hooky/runs/${run_key}/review_report.json"
+            key="verdict"
+          else
+            report_path=".hooky/runs/${run_key}/state.json"
+            key="status"
+          fi
+          if [ -f "$report_path" ]; then
+            status="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], 'unknown'))" "$report_path" "$key")"
           else
             status="crashed"
           fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
       - name: Upload Hooky artifacts
-        if: always()
+        if: always() && steps.proposal.outputs.mode != 'refine'
         uses: actions/upload-artifact@v4
         with:
           name: hooky-${{ github.run_id }}
@@ -162,7 +190,7 @@ jobs:
 
       - name: Commit Hooky changes to branch
         id: commit
-        if: success()
+        if: success() && (steps.proposal.outputs.mode == 'implement' || steps.proposal.outputs.mode == 'light-implement')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -185,37 +213,83 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           branch="${{ steps.commit.outputs.branch }}"
+          run_key="${{ steps.proposal.outputs.run_key }}"
+          number=""
+          case "$run_key" in
+            issue-*) number="${run_key#issue-}" ;;
+            pr-*) number="${run_key#pr-}" ;;
+          esac
+          body="Hooky completed a loop run from GitHub event ${{ github.event_name }}. Artifacts are attached to the workflow run."
+          if [ -n "$number" ]; then
+            body="${body}"$'\n\n'"Relates to #${number}."
+          fi
           existing_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url')"
           if [ -n "$existing_url" ]; then
             pr_url="$existing_url"
           else
             pr_url="$(gh pr create \
-              --title "Hooky run ${{ steps.proposal.outputs.run_key }}" \
-              --body "Hooky completed a loop run from GitHub event ${{ github.event_name }}. Artifacts are attached to the workflow run." \
+              --title "Hooky run ${run_key}" \
+              --body "$body" \
               --base "${{ github.event.repository.default_branch }}" \
               --head "$branch")"
           fi
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
+      - name: Post PR review
+        if: success() && steps.proposal.outputs.mode == 'review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_key="${{ steps.proposal.outputs.run_key }}"
+          number="${run_key#pr-}"
+          report_path=".hooky/runs/${run_key}/review_report.json"
+          if [ ! -f "$report_path" ]; then
+            echo "no review report found at $report_path" >&2
+            exit 1
+          fi
+          verdict="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('verdict','comment'))" "$report_path")"
+          summary="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('summary',''))" "$report_path")"
+          findings="$(python3 -c "
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          print('\n'.join(f'- {item}' for item in (data.get('findings') or [])))
+          " "$report_path")"
+          body="$summary"
+          if [ -n "$findings" ]; then
+            body="${body}"$'\n\n'"${findings}"
+          fi
+          case "$verdict" in
+            approve) flag="--approve" ;;
+            request_changes) flag="--request-changes" ;;
+            *) flag="--comment" ;;
+          esac
+          gh pr review "$number" $flag --body "$body"
+
       - name: Comment on issue
         if: >-
           always() &&
-          (github.event.issue.number || github.event.pull_request.number)
+          (github.event.issue.number || github.event.pull_request.number) &&
+          steps.proposal.outputs.mode != 'review'
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.proposal.outputs.mode }}
           PR_URL: ${{ steps.pr.outputs.url }}
           PR_OUTCOME: ${{ steps.pr.outcome }}
           BRANCH: ${{ steps.commit.outputs.branch }}
         run: |
           number="${{ github.event.issue.number || github.event.pull_request.number }}"
+          if [ "$MODE" = "refine" ]; then
+            gh issue comment "$number" --body "Noted, will be included in the next run."
+            exit 0
+          fi
           status="${{ steps.loop_status.outputs.status }}"
           body="Hooky run finished with loop status: ${status}."
           if [ -n "$PR_URL" ]; then
-            body="${body}\n\nPull request: ${PR_URL}"
+            body="${body}"$'\n\n'"Pull request: ${PR_URL}"
           elif [ "$PR_OUTCOME" = "failure" ]; then
-            body="${body}\n\nA pull request could not be opened (gh pr create/list failed); see the workflow run logs. The committed changes are still on branch \`${BRANCH}\` if the commit step succeeded."
+            body="${body}"$'\n\n'"A pull request could not be opened (gh pr create/list failed); see the workflow run logs. The committed changes are still on branch \`${BRANCH}\` if the commit step succeeded."
           elif [ "$status" != "passed" ]; then
-            body="${body}\n\nNo pull request was opened because the loop did not reach a passing evaluator verdict. See the workflow run artifacts for the evaluator report and traces."
+            body="${body}"$'\n\n'"No pull request was opened because the loop did not reach a passing evaluator verdict. See the workflow run artifacts for the evaluator report and traces."
           fi
-          body="${body}\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="${body}"$'\n\n'"Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh issue comment "$number" --body "$body"

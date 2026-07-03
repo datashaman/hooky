@@ -84,3 +84,16 @@ def evaluator_attempt_schema() -> dict[str, Any]:
             "score_explanation": {"type": "string"},
         },
     }
+
+
+def reviewer_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["verdict", "summary", "findings"],
+        "properties": {
+            "verdict": {"type": "string", "enum": ["approve", "comment", "request_changes"]},
+            "summary": {"type": "string"},
+            "findings": {"type": "array", "items": {"type": "string"}},
+        },
+    }

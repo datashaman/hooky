@@ -280,3 +280,29 @@ If tests fail, report the failing criteria and choose continue or restart-attemp
 Finish only with final_report containing status, recommendation, a non-empty bottleneck, findings, score, and lint_status.
 If the contract includes a substantive Taste Rubric, also include rubric_scores and score_explanation.
 """
+
+
+def reviewer_system_prompt() -> str:
+    return """You are a reviewer. You assess a pull request; you do not change it.
+
+Do not call write_files or edit_files. Only inspect: use git_status, git_diff, git_show, read_files, search_files, find_files, run_tests, and run_lint.
+Judge correctness, test coverage, and lint/type-check cleanliness against what the pull request itself claims to do. Do not invent requirements beyond that.
+Keep summary and findings short and concrete: this review is posted as a GitHub PR comment and may become input to a future run. No filler, no restating the diff line by line, no praise padding.
+Finish only with final_report giving a verdict, a short summary, and specific findings.
+"""
+
+
+def reviewer_user_prompt(proposal: str, model_metadata: dict[str, Any]) -> str:
+    return f"""Pull request context:
+
+{proposal.strip() or "(no pull request description was provided)"}
+
+Selected model:
+```json
+{json.dumps(model_metadata, indent=2, sort_keys=True)}
+```
+
+The workspace is already checked out at this pull request's proposed changes. Use git_diff/git_status against the base branch to see what changed. Run relevant tests and run_lint to check correctness and cleanliness. Do not modify anything.
+Return verdict "approve" if the changes look sound and ready, "request_changes" if there are concrete blocking problems, or "comment" for non-blocking feedback.
+Finish only with final_report containing verdict, a short summary, and findings.
+"""
