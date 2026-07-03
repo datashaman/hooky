@@ -29,6 +29,9 @@ class SchemasTests(unittest.TestCase):
         self.assertIn("append_evidence_command", names)
         self.assertIn("append_evidence_screenshot", names)
 
+    def test_available_tools_include_run_lint(self) -> None:
+        self.assertIn("run_lint", available_tool_names())
+
 
 if __name__ == "__main__":
     unittest.main()

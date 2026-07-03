@@ -28,11 +28,13 @@ def detect_project_environment(root: Path) -> dict[str, Any]:
     if not package_manager:
         package_manager = package_manager_from_lockfiles(lockfiles)
     test_commands = likely_test_commands(root, package_manager, scripts)
+    lint_commands = likely_lint_commands(root, package_manager, scripts)
     return {
         "package_manager": package_manager,
         "lockfiles": lockfiles,
         "scripts": scripts,
         "test_commands": test_commands,
+        "lint_commands": lint_commands,
         "has_package_json": package_json_path.exists(),
         "languages": language_hints(root),
     }
@@ -87,6 +89,44 @@ def likely_test_commands(root: Path, package_manager: str, scripts: dict[str, st
     if (root / "go.mod").exists():
         commands.append("go test ./...")
     return dedupe_strings(commands)
+
+
+def likely_lint_commands(root: Path, package_manager: str, scripts: dict[str, str]) -> list[str]:
+    commands: list[str] = []
+    if scripts.get("lint"):
+        commands.append(f"{package_manager or 'npm'} run lint")
+    if (root / "ruff.toml").exists() or (root / ".ruff.toml").exists() or ruff_configured_in_pyproject(root):
+        commands.append("ruff check .")
+    if (root / "mypy.ini").exists() or mypy_configured_in_pyproject(root):
+        commands.append("mypy .")
+    if (root / "Cargo.toml").exists():
+        commands.append("cargo clippy")
+    if (root / "go.mod").exists():
+        commands.append("go vet ./...")
+    return dedupe_strings(commands)
+
+
+def ruff_configured_in_pyproject(root: Path) -> bool:
+    return "[tool.ruff" in pyproject_text(root)
+
+
+def mypy_configured_in_pyproject(root: Path) -> bool:
+    return "[tool.mypy" in pyproject_text(root)
+
+
+def pyproject_text(root: Path) -> str:
+    path = root / "pyproject.toml"
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def default_lint_command(environment: dict[str, Any]) -> str:
+    commands = environment.get("lint_commands") if isinstance(environment.get("lint_commands"), list) else []
+    return str(commands[0]) if commands else ""
 
 
 def language_hints(root: Path) -> list[str]:

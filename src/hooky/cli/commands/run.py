@@ -53,6 +53,19 @@ from hooky.cli.transcript import loop_debug_root
 from hooky.shared import loop_executor
 
 
+def enforce_lint_status_gate(evaluator_report: dict) -> dict:
+    """Deterministically block a pass when the evaluator reported unresolved lint issues.
+
+    The evaluator's own judgment about lint_status is inferential and can be wrong or skipped;
+    this keeps a passing attempt from shipping a maintainability regression regardless.
+    """
+    if evaluator_report.get("status") != "pass" or evaluator_report.get("lint_status") != "issues":
+        return evaluator_report
+    findings = list(evaluator_report.get("findings") or [])
+    findings.append("lint_status=issues: attempt cannot pass with unresolved lint/type-check findings.")
+    return {**evaluator_report, "status": "fail", "recommendation": "continue", "findings": findings}
+
+
 def run_model_role_with_retries[T](
     workspace: Path,
     label: str,
@@ -252,6 +265,7 @@ def _run_model_loop_once(
                 error=exc,
                 generator_report=generator_report,
             )
+        evaluator_report = enforce_lint_status_gate(evaluator_report)
         report_path = attempt_dir / "evaluator_report.json"
         final_report_path = report_path
         write_json(report_path, evaluator_report)

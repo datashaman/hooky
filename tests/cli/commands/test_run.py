@@ -25,6 +25,30 @@ class RunCommandsTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_enforce_lint_status_gate_downgrades_pass_with_lint_issues(self) -> None:
+        report = {"status": "pass", "recommendation": "continue", "lint_status": "issues", "findings": ["looked fine"]}
+
+        gated = commands_run.enforce_lint_status_gate(report)
+
+        self.assertEqual(gated["status"], "fail")
+        self.assertEqual(gated["recommendation"], "continue")
+        self.assertIn("looked fine", gated["findings"])
+        self.assertTrue(any("lint_status=issues" in item for item in gated["findings"]))
+
+    def test_enforce_lint_status_gate_leaves_clean_pass_untouched(self) -> None:
+        report = {"status": "pass", "recommendation": "continue", "lint_status": "clean", "findings": []}
+
+        gated = commands_run.enforce_lint_status_gate(report)
+
+        self.assertEqual(gated, report)
+
+    def test_enforce_lint_status_gate_leaves_failing_attempts_untouched(self) -> None:
+        report = {"status": "fail", "recommendation": "restart-attempt", "lint_status": "issues", "findings": []}
+
+        gated = commands_run.enforce_lint_status_gate(report)
+
+        self.assertEqual(gated, report)
+
     def test_model_role_retry_logs_and_retries_agent_run_error(self) -> None:
         calls = 0
 

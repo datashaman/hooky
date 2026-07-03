@@ -16,6 +16,7 @@ from hooky.runtime.models import runtime_path
 from hooky.runtime.project_env import (
     append_shell_arg,
     append_test_name_filter,
+    default_lint_command,
     default_test_command,
     detect_project_environment,
     latest_error_context_artifacts,
@@ -73,6 +74,38 @@ class ShellToolsMixin:
         if protected_changes:
             result["ok"] = False
             result["error"] = "test command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20])
+        return result
+
+    def run_lint(self, args: dict[str, Any]) -> dict[str, Any]:
+        environment = detect_project_environment(self.working_folder)
+        command = str(args.get("command") or "").strip()
+        if not command:
+            command = default_lint_command(environment)
+        if not command:
+            return {"ok": False, "error": "no lint command was detected for this project; pass an explicit command"}
+        if self.bash_command_validator:
+            violation = self.bash_command_validator(command)
+            if violation:
+                return {"ok": False, "error": f"lint command blocked by agent policy: {violation}", "command": command}
+        timeout_seconds = int(args.get("timeout_seconds") or self.bash_timeout_seconds)
+        started = utc_timestamp()
+        completed, timed_out, protected_changes = self.run_guarded_shell_command(command, timeout_seconds=timeout_seconds)
+        ended = utc_timestamp()
+        output = normalize_subprocess_output(completed.stdout) + normalize_subprocess_output(completed.stderr)
+        output_path = write_tool_result_artifact(self.working_folder, "lint-runs", output)
+        result = {
+            "ok": completed.returncode == 0 and not timed_out and not protected_changes,
+            "command": command,
+            "returncode": completed.returncode,
+            "timed_out": timed_out,
+            "started_at": started,
+            "ended_at": ended,
+            "output_path": output_path,
+            "output_tail": output[-8000:],
+        }
+        if protected_changes:
+            result["ok"] = False
+            result["error"] = "lint command modified protected paths; changes were reverted: " + ", ".join(protected_changes[:20])
         return result
 
     def latest_test_failure_context(self, args: dict[str, Any]) -> dict[str, Any]:

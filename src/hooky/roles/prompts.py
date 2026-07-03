@@ -183,6 +183,7 @@ You must not grade your own work and must not edit .hooky. The evaluator will gr
 
 Use files for code, tests, and project artifacts. Keep changes scoped to the contract.
 Use todo_write for substantive work and run relevant commands before final_report.
+Before final_report, call run_lint. If detect_project_environment finds no lint_commands, report an empty lint_run and an empty lint_findings; do not skip the tool call silently.
 """
 
 
@@ -222,7 +223,7 @@ Selected model:
 
 Implement the contract in this workspace. Do not edit .hooky. Do not declare the attempt passed.
 Use only the provided tools. To edit whole files or create new files, use write_files. To make compact line-range changes to existing files, use edit_files. Use search_files to search file contents.
-Finish only with final_report describing changed_files, tests_run, and any failures.
+Finish only with final_report describing changed_files, tests_run, failures, lint_run, and lint_findings.
 """
 
 
@@ -239,6 +240,7 @@ When the contract cites a visual reference, canonical template, official CSS, or
 For TodoMVC-style contracts, explicitly verify the populated view uses `.main` and `.footer`, the official CSS applies to footer/filter layout, completed items are line-through, the selected filter has canonical styling, editing mode uses `.editing` plus `.edit`, and local CSS is minimal.
 When the accepted contract defines a Taste Rubric, grade it explicitly with rubric_scores for design, originality, craft, and functionality plus score_explanation. When the task asks for subjective taste, polish, aesthetics, originality, brand fit, or craft but the contract lacks a substantive Taste Rubric, do not invent criteria after the fact; fail with recommendation=restart-contract.
 Always set a non-empty bottleneck. On pass, name the weakest remaining part of the loop or product process. Use none_visible_after_trace_review only when you inspected traces/artifacts and found no meaningful bottleneck.
+Call run_lint yourself, or verify the generator's lint_run/lint_findings, and set lint_status to "clean" (ran and no findings), "issues" (ran and findings remain), or "not_available" (detect_project_environment found no lint_commands). An attempt cannot pass with lint_status="issues"; a passing attempt must be lint_status="clean" or "not_available".
 
 Return a recommendation:
 - continue when the attempt passes, or when failures are normal implementation defects that another generator pass can fix
@@ -275,6 +277,6 @@ When using start_process, pass the returned url directly to capture_visual_snaps
 For reference/canonical UI products, capture visual evidence from multiple meaningful UI states, not just first load. If a canonical CSS/template contract is present, source inspect the expected classes and then verify those classes render correctly in the browser.
 If the available tests are placeholder-only, report that as a verification failure even if the test command exits 0.
 If tests fail, report the failing criteria and choose continue or restart-attempt unless there is a true automation blocker.
-Finish only with final_report containing status, recommendation, a non-empty bottleneck, findings, and score.
+Finish only with final_report containing status, recommendation, a non-empty bottleneck, findings, score, and lint_status.
 If the contract includes a substantive Taste Rubric, also include rubric_scores and score_explanation.
 """

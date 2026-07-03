@@ -46,6 +46,39 @@ class ShellToolsTests(unittest.TestCase):
             self.assertIn("pnpm test", result["test_commands"])
             self.assertIn("pnpm exec playwright test", result["test_commands"])
 
+    def test_detect_project_environment_finds_lint_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text('{"scripts":{"lint":"eslint ."}}', encoding="utf-8")
+            (root / "pyproject.toml").write_text("[tool.ruff]\nline-length = 120\n", encoding="utf-8")
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.detect_project_environment({})
+
+            self.assertIn("npm run lint", result["lint_commands"])
+            self.assertIn("ruff check .", result["lint_commands"])
+
+    def test_run_lint_saves_output_and_reports_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.run_lint({"command": "python3 -c \"print('bad style'); raise SystemExit(1)\"", "timeout_seconds": 10})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["returncode"], 1)
+            self.assertTrue((root / result["output_path"]).exists())
+            self.assertIn("lint-runs", result["output_path"])
+
+    def test_run_lint_without_command_or_detection_reports_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            result = runtime.run_lint({})
+
+            self.assertFalse(result["ok"])
+            self.assertIn("no lint command", result["error"])
+
     def test_run_tests_saves_output_and_extracts_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

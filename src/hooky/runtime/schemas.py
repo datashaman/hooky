@@ -27,6 +27,7 @@ def available_tool_names() -> list[str]:
         "search_files",
         "detect_project_environment",
         "run_tests",
+        "run_lint",
         "latest_test_failure_context",
         "capture_visual_snapshot",
         "append_evidence_note",

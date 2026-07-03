@@ -201,6 +201,15 @@ class ToolRuntime(
                 [],
             ),
             tool_schema(
+                "run_lint",
+                "Run a project lint/type-check command and return structured pass/fail evidence with full output saved to an artifact.",
+                {
+                    "command": string_schema(default=""),
+                    "timeout_seconds": integer_schema(default=120, minimum=1, maximum=600),
+                },
+                [],
+            ),
+            tool_schema(
                 "latest_test_failure_context",
                 "Write and return a concise, file-backed diagnostic bundle for the latest failed run_tests call.",
                 {
@@ -384,6 +393,7 @@ class ToolRuntime(
             "search_files": self.search_files,
             "detect_project_environment": self.detect_project_environment,
             "run_tests": self.run_tests,
+            "run_lint": self.run_lint,
             "latest_test_failure_context": self.latest_test_failure_context,
             "capture_visual_snapshot": self.capture_visual_snapshot,
             "append_evidence_note": self.append_evidence_note,

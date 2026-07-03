@@ -52,13 +52,15 @@ def generator_implementation_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["status", "summary", "changed_files", "tests_run", "failures"],
+        "required": ["status", "summary", "changed_files", "tests_run", "failures", "lint_run", "lint_findings"],
         "properties": {
             "status": {"type": "string", "enum": ["done", "blocked"]},
             "summary": {"type": "string"},
             "changed_files": {"type": "array", "items": {"type": "string"}},
             "tests_run": {"type": "array", "items": {"type": "string"}},
             "failures": {"type": "array", "items": {"type": "string"}},
+            "lint_run": {"type": "array", "items": {"type": "string"}},
+            "lint_findings": {"type": "array", "items": {"type": "string"}},
         },
     }
 
@@ -67,13 +69,14 @@ def evaluator_attempt_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["status", "recommendation", "bottleneck", "findings", "score"],
+        "required": ["status", "recommendation", "bottleneck", "findings", "score", "lint_status"],
         "properties": {
             "status": {"type": "string", "enum": ["pass", "fail"]},
             "recommendation": {"type": "string", "enum": ["continue", "restart-attempt", "restart-contract", "stop"]},
             "bottleneck": {"type": "string"},
             "findings": {"type": "array", "items": {"type": "string"}},
             "score": {"type": "number", "minimum": 0, "maximum": 1},
+            "lint_status": {"type": "string", "enum": ["clean", "issues", "not_available"]},
             "rubric_scores": {
                 "type": "object",
                 "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1},

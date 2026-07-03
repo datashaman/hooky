@@ -57,6 +57,14 @@ Runtime files live under `.hooky/runs/<key>/`.
   Runs a project test command and returns structured pass/fail evidence. Full
   output is saved to a tool-result artifact under the selected run directory.
 
+- `run_lint`
+  Runs a project lint/type-check command (ruff, eslint, mypy, cargo clippy, go
+  vet, or a package.json `lint` script, auto-detected the same way `run_tests`
+  detects test commands) and returns pass/fail evidence, with full output
+  saved to a tool-result artifact. The generator must call this before
+  finishing an implementation attempt; the evaluator must report the result as
+  `lint_status` and cannot pass an attempt with `lint_status="issues"`.
+
 - `latest_test_failure_context`
   Builds a concise, file-backed diagnostic bundle from the latest failed
   `run_tests` call and nearby Playwright error-context files.
