@@ -138,6 +138,18 @@ jobs:
         run: |
           hooky --run-key "${{ steps.proposal.outputs.run_key }}" report || true
 
+      - name: Read Hooky loop status
+        id: loop_status
+        if: always()
+        run: |
+          state_path=".hooky/runs/${{ steps.proposal.outputs.run_key }}/state.json"
+          if [ -f "$state_path" ]; then
+            status="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('status', 'unknown'))" "$state_path")"
+          else
+            status="crashed"
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
       - name: Upload Hooky artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -188,10 +200,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
-          status="${{ job.status }}"
-          body="Hooky run finished with status: ${status}."
+          status="${{ steps.loop_status.outputs.status }}"
+          body="Hooky run finished with loop status: ${status}."
           if [ -n "$PR_URL" ]; then
             body="${body}\n\nPull request: ${PR_URL}"
+          elif [ "$status" != "passed" ]; then
+            body="${body}\n\nNo pull request was opened because the loop did not reach a passing evaluator verdict. See the workflow run artifacts for the evaluator report and traces."
           fi
           body="${body}\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh issue comment "${{ github.event.issue.number }}" --body "$body"

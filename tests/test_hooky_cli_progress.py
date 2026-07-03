@@ -733,7 +733,7 @@ class HookyProgressTests(unittest.TestCase):
                 ["-C", str(self.workspace), "run", "--proposal", "Build something"],
             )
 
-        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.exit_code, 1, result.output)
         self.assertIn("status: contract-rejected", result.output)
         self.assertEqual(contract_calls, 5)
         self.assertEqual(review_calls, 5)
@@ -1447,7 +1447,7 @@ class HookyProgressTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.exit_code, 1, result.output)
         state = hooky_cli.read_loop_state(self.workspace)
         self.assertEqual(state["status"], "restart-attempt")
         self.assertEqual(state["attempts"][0]["status"], "restarted")

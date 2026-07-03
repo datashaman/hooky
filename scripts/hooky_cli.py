@@ -1761,7 +1761,7 @@ def _run_model_loop_once(
         typer.echo("status: contract-rejected")
         typer.echo(f"rounds: {max_contract_rounds}")
         typer.echo(f"review: {review}")
-        return
+        raise typer.Exit(1)
 
     max_attempt_rounds = int(os.environ.get("LOOP_ATTEMPT_MAX_ROUNDS", "3"))
     evaluator_feedback = ""
@@ -1861,6 +1861,8 @@ def _run_model_loop_once(
     typer.echo(f"status: {state['status']}")
     if final_report_path is not None:
         typer.echo(f"report: {final_report_path}")
+    if state["status"] != "passed":
+        raise typer.Exit(1)
 
 
 def loop_run(
@@ -2002,6 +2004,8 @@ def loop_run(
     typer.echo(f"attempt: {attempt_id}")
     typer.echo(f"status: {state['status']}")
     typer.echo(f"report: {report_path}")
+    if state["status"] != "passed":
+        raise typer.Exit(1)
 
 
 run_default = app.command("run")(loop_run)
