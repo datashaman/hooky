@@ -53,7 +53,10 @@ def selected_executor(explicit: str | None = None) -> str:
 def run_role(invocation: RoleInvocation, *, executor: str | None = None) -> AgentRunResult:
     selected = selected_executor(executor)
     if selected == "native":
-        return run_tool_agent(model=invocation.model, system=invocation.system, user=invocation.user, runtime=invocation.runtime)
+        try:
+            return run_tool_agent(model=invocation.model, system=invocation.system, user=invocation.user, runtime=invocation.runtime)
+        finally:
+            invocation.runtime.close_mcp_clients()
     return run_external_executor(invocation, executor=selected)
 
 

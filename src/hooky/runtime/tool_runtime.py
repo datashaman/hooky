@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hooky.runtime.mcp_client import McpClientManager
 from hooky.runtime.models import runtime_dir
 from hooky.runtime.rendering import canonical_tool_name
 from hooky.runtime.schemas import integer_schema, string_array_schema, string_schema, tool_schema
@@ -89,6 +90,7 @@ class ToolRuntime(
         self.started_at = time.monotonic()
         self.final_report: dict[str, Any] | None = None
         self.anchored_summary = ""
+        self._mcp_client_manager: McpClientManager | None = None
         if os.environ.get("AGENT_HEARTBEAT_SECONDS"):
             self.heartbeat_seconds = int(os.environ["AGENT_HEARTBEAT_SECONDS"])
         if os.environ.get("AGENT_NO_TOOL_RESPONSE_LIMIT"):
@@ -458,6 +460,7 @@ class ToolRuntime(
                     ["name", "path"],
                 ),
             )
+        tools.extend(self._mcp_manager().tool_schemas())
         if self.enabled_tools is not None:
             enabled = set(self.enabled_tools)
             tools = [tool for tool in tools if tool.get("function", {}).get("name") in enabled]
@@ -480,7 +483,22 @@ class ToolRuntime(
     def canonical_tool_name(self, name: str) -> str:
         return canonical_tool_name(name, self.tool_handlers().keys())
 
+    def _mcp_manager(self) -> McpClientManager:
+        if self._mcp_client_manager is None:
+            self._mcp_client_manager = McpClientManager(self.working_folder, reserved_tool_names=set(self._builtin_tool_handlers().keys()))
+        return self._mcp_client_manager
+
+    def close_mcp_clients(self) -> None:
+        if self._mcp_client_manager is not None:
+            self._mcp_client_manager.close()
+            self._mcp_client_manager = None
+
     def tool_handlers(self) -> dict[str, ToolHandler]:
+        handlers = self._builtin_tool_handlers()
+        handlers.update(self._mcp_manager().tool_handlers())
+        return handlers
+
+    def _builtin_tool_handlers(self) -> dict[str, ToolHandler]:
         return {
             "read_files": self.read_files,
             "read_file_excerpt": self.read_file_excerpt,

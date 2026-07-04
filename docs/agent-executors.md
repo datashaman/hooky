@@ -101,6 +101,45 @@ shell), not by Hooky; `hooky mcp-serve --config <path>` reads
 starts) to reconstruct a `ToolRuntime` scoped to that role's workspace,
 timeouts, and evidence directory.
 
+## MCP: Native Executor as an MCP Client
+
+The sections above cover Hooky *serving* its own tools over MCP to codex and
+claude. The `native` executor needs the opposite direction: it's Hooky's own
+in-process OpenRouter/Ollama-driven agent, so it has no external tool config
+of its own to fall back on the way codex/claude do — the only tools it ever
+sees are whatever `ToolRuntime` hands it.
+
+To close that gap, `native` reads the same `.mcp.json` file from the
+workspace root that codex/claude already read
+(`{"mcpServers": {"name": {"command", "args", "env"}}}`), connects to each
+declared server, and merges their tools into the same `tools()`/
+`tool_handlers()` surface the built-in tools use — so the model sees no
+difference between a Hooky tool and an MCP one, and existing `enabled_tools`
+allowlists (e.g. a role restricted to `["final_report"]`) govern MCP tools
+identically, with no special-casing.
+
+Tool names are synthesized as `mcp__<server-name>__<tool-name>` (matching the
+convention Claude Code itself uses for its own MCP tool calls), so a tool
+named `echo` from a server named `fixture` becomes `mcp__fixture__echo`. If a
+synthesized name collides with one of Hooky's own built-in tool names, the
+MCP tool is dropped (not exposed, never shadows the built-in) and a warning
+is recorded — this should be structurally rare given the `mcp__` prefix, but
+is checked defensively.
+
+Connections are made once per role invocation (lazily, on first use, so
+roles with no `.mcp.json` or a fully restrictive `enabled_tools` allowlist
+pay no cost) and torn down after the role finishes, success or failure. Each
+server runs on its own background thread so tool calls dispatch through the
+async MCP client without making the rest of Hooky's runtime asynchronous.
+
+**Trust boundary**: an MCP server's tools run outside Hooky's own guarded
+handlers — none of `ToolRuntime`'s protected-path snapshotting,
+`write_enabled` gate, or `bash_command_validator` apply to a third-party MCP
+tool call, since Hooky is just forwarding the call to that server's own
+process. This is the same trust level codex/claude already extend to
+`.mcp.json` servers; Hooky has no additional way to sandbox an arbitrary
+third-party subprocess beyond what the OS/user's own environment provides.
+
 ## Codex
 
 Default command shape:
