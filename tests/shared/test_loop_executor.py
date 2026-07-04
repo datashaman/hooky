@@ -76,6 +76,88 @@ class LoopExecutorTests(unittest.TestCase):
             self.assertIn("--effort", command)
             self.assertIn("medium", command)
 
+    def test_codex_command_registers_mcp_server_when_config_path_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
+            mcp_config_path = Path(tmp) / "exec" / "mcp_config.json"
+
+            command = loop_executor.codex_command(Path(tmp), Path(tmp) / "exec", mcp_config_path=mcp_config_path)
+
+            self.assertIn('mcp_servers.hooky.command="hooky"', command)
+            joined = " ".join(command)
+            self.assertIn("mcp_servers.hooky.args=", joined)
+            self.assertIn("mcp-serve", joined)
+            self.assertIn(mcp_config_path.as_posix(), joined)
+            self.assertEqual(command[-1], "-")
+
+    def test_claude_command_registers_mcp_server_when_config_path_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
+            executor_dir = Path(tmp) / "exec"
+            executor_dir.mkdir(parents=True)
+            mcp_config_path = executor_dir / "mcp_config.json"
+
+            command = loop_executor.claude_command(executor_dir, mcp_config_path=mcp_config_path)
+
+            self.assertIn("--mcp-config", command)
+            claude_mcp_config_path = Path(command[command.index("--mcp-config") + 1])
+            self.assertTrue(claude_mcp_config_path.exists())
+            written = json.loads(claude_mcp_config_path.read_text(encoding="utf-8"))
+            self.assertEqual(written["mcpServers"]["hooky"]["command"], "hooky")
+            self.assertIn(mcp_config_path.as_posix(), written["mcpServers"]["hooky"]["args"])
+
+    def test_run_external_executor_folds_mcp_tool_events_back_into_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
+            workspace = Path(tmp)
+            script = workspace / "fake_codex.py"
+            script.write_text(
+                """
+from __future__ import annotations
+import json
+import sys
+from pathlib import Path
+
+executor_dir = Path(sys.argv[1])
+config = json.loads((executor_dir / "mcp_config.json").read_text(encoding="utf-8"))
+events_path = Path(config["events_path"])
+events_path.write_text(json.dumps({
+    "tool_call_id": "mcp-1",
+    "name": "detect_project_environment",
+    "arguments": {},
+    "result": {"ok": True, "returncode": 0, "stdout": "", "stderr": ""},
+    "started_at": "2026-01-01T00:00:00Z",
+    "ended_at": "2026-01-01T00:00:00Z",
+    "duration_ms": 1.0,
+    "source": "mcp",
+}) + "\\n", encoding="utf-8")
+(executor_dir / "output.json").write_text(json.dumps({"ok": True}) + "\\n", encoding="utf-8")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            runtime = ToolRuntime(
+                working_folder=workspace,
+                final_report_schema={"type": "object"},
+                max_cost_usd=0.01,
+                max_seconds=10,
+                final_validator=lambda report: None,
+                live_log_root=workspace / ".hooky/runs/local",
+            )
+            invocation = loop_executor.RoleInvocation(
+                role="generator",
+                agent_name="loop-generator",
+                model="test-model",
+                model_metadata={"model": "test-model"},
+                system="system",
+                user="user",
+                runtime=runtime,
+            )
+            executor_dir = workspace / ".hooky/runs/local/executor/generator"
+            fake_codex_command = [sys.executable, script.as_posix(), executor_dir.as_posix()]
+
+            with mock.patch.object(loop_executor, "codex_command", return_value=fake_codex_command):
+                result = loop_executor.run_role(invocation, executor="codex")
+
+            self.assertEqual(len(result.tool_events), 1)
+            self.assertEqual(result.tool_events[0]["name"], "detect_project_environment")
+
     def test_shell_executor_reads_input_and_writes_validated_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
             workspace = Path(tmp)

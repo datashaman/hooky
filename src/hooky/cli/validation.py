@@ -100,10 +100,12 @@ def loop_attempt_blocking_visual_failures(workspace: Path, events: list[dict[str
         return []
     failures: list[str] = []
     failures.extend(blocking_visual_failures_from_snapshot_events(events))
-    findings_text = " ".join(str(item) for item in report.get("findings", []) if isinstance(item, str)).lower()
-    bottleneck_text = str(report.get("bottleneck") or "").lower()
-    report_text = f"{findings_text} {bottleneck_text}"
-    if report_mentions_blocking_visual_defect(report_text):
+    # Checked per finding/bottleneck, not joined into one blob: joining let an unrelated
+    # finding's primary-content word (e.g. "link") combine with a *different* finding's
+    # negated visual term (e.g. "no clipping or overlap") into a false positive.
+    report_texts = [str(item).lower() for item in report.get("findings", []) if isinstance(item, str)]
+    report_texts.append(str(report.get("bottleneck") or "").lower())
+    if any(report_mentions_blocking_visual_defect(text) for text in report_texts):
         failures.append("Evaluator cannot pass this attempt: visual findings report clipped/off-screen/overflowing primary UI content.")
     return runtime.dedupe_strings(failures)
 

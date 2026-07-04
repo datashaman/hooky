@@ -20,6 +20,7 @@ from hooky.cli.commands.inspect import (
     loop_transcript,
 )
 from hooky.cli.commands.listen import listen
+from hooky.cli.commands.mcp import mcp_serve
 from hooky.cli.commands.roles import (
     loop_accept_contract,
     loop_complete_attempt,
@@ -265,6 +266,7 @@ __all__ = [
     "loop_trace_grep",
     "loop_transcript",
     "listen",
+    "mcp_serve",
     "_run_model_loop_once",
     "cli",
     "doctor",

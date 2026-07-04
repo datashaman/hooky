@@ -48,6 +48,51 @@ Each invocation also writes:
 - `last_message.txt` for Codex
 - `debug.log` for Claude
 
+## MCP: Hooky Tools Inside Codex/Claude
+
+The `codex` and `claude` executors run their own file/bash tools, but they don't
+know how to gather Hooky-specific evidence (browser screenshots, layout
+metrics, run_tests/run_lint result parsing). To close that gap, every codex
+and claude invocation registers a per-run MCP server, `hooky mcp-serve`, that
+exposes this curated tool subset over stdio:
+
+- `detect_project_environment`
+- `run_tests`, `run_lint`, `latest_test_failure_context`
+- `capture_visual_snapshot`, `interact_and_snapshot`
+- `append_evidence_note`, `append_evidence_command`,
+  `append_evidence_screenshot`, `append_evidence_interaction`
+
+File-editing, bash, git, and reporting tools (`read_files`/`write_files`/
+`bash`/`git_status`/`git_diff`/`final_report`/...) are deliberately excluded:
+codex and claude already have their own equivalents for those (a thin
+read-only wrapper around `git diff` adds nothing they can't already do with
+their own bash tool), and the JSON-report file contract above is unchanged.
+Only tools that do something codex/claude can't already do themselves -
+parsing test output into structured pass/fail evidence, driving a headless
+browser for screenshots/interaction - are exposed this way.
+
+Each call is dispatched through the same `ToolRuntime.run_tool` the native
+executor uses, so the same evidence tools produce the same evidence shape
+regardless of which executor ran the role. Calls are appended to
+`executor/<role>/mcp_tool_events.jsonl` and folded back into that attempt's
+`tool_events.json` after the executor exits, so the `capture_visual_snapshot`/
+`interact_and_snapshot` evidence gates in `cli/validation.py` see them exactly
+as they would from the native executor.
+
+Registration is per-invocation, not persisted to the user's global config:
+
+- For codex, via `-c mcp_servers.hooky.command=...` /
+  `-c mcp_servers.hooky.args=...` overrides (nothing is written to
+  `~/.codex/config.toml`).
+- For claude, via a generated `executor/<role>/claude_mcp_servers.json` passed
+  with `--mcp-config` (the user's other MCP servers still load; this is
+  additive, not `--strict-mcp-config`).
+
+The server itself is spawned by codex/claude, not by Hooky; `hooky mcp-serve
+--config <path>` reads `executor/<role>/mcp_config.json` (written before the
+executor process starts) to reconstruct a `ToolRuntime` scoped to that role's
+workspace, timeouts, and evidence directory.
+
 ## Codex
 
 Default command shape:

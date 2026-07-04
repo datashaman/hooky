@@ -23,6 +23,9 @@ from hooky.runtime import (
     single_line,
     utc_timestamp,
 )
+from hooky.runtime.mcp_server import McpServerConfig
+
+MCP_EXECUTORS = {"codex", "claude"}
 
 VALID_EXECUTORS = {"native", "shell", "codex", "claude"}
 EXECUTOR_ENV = "HOOKY_EXECUTOR"
@@ -65,9 +68,25 @@ def run_external_executor(invocation: RoleInvocation, *, executor: str) -> Agent
     stderr_path = executor_dir / "stderr.log"
     metadata_path = executor_dir / "metadata.json"
 
+    mcp_config_path: Path | None = None
+    mcp_events_path: Path | None = None
+    if executor in MCP_EXECUTORS:
+        mcp_config_path = executor_dir / "mcp_config.json"
+        mcp_events_path = executor_dir / "mcp_tool_events.jsonl"
+        mcp_events_path.write_text("", encoding="utf-8")
+        mcp_server_config(invocation.runtime, mcp_events_path).to_json_file(mcp_config_path)
+
     prompt = executor_prompt(invocation, output_path)
     input_path.write_text(prompt, encoding="utf-8")
-    command, stdin_text = command_for_executor(executor, invocation.runtime.working_folder, input_path, output_path, executor_dir, prompt)
+    command, stdin_text = command_for_executor(
+        executor,
+        invocation.runtime.working_folder,
+        input_path,
+        output_path,
+        executor_dir,
+        prompt,
+        mcp_config_path=mcp_config_path,
+    )
     metadata: dict[str, Any] = {
         "schema_version": 1,
         "executor": executor,
@@ -154,7 +173,7 @@ def run_external_executor(invocation: RoleInvocation, *, executor: str) -> Agent
                 "ended_at": ended_at,
             },
         ],
-        tool_events=[],
+        tool_events=load_mcp_tool_events(mcp_events_path) if mcp_events_path is not None else [],
         compaction_events=[],
         pre_compaction_archives=[],
         started_at=started_at,
@@ -208,14 +227,72 @@ def command_for_executor(
     output_path: Path,
     executor_dir: Path,
     prompt: str,
+    *,
+    mcp_config_path: Path | None = None,
 ) -> tuple[list[str], str | None]:
     if executor == "shell":
         return shell_command(workspace, input_path, output_path, executor_dir), None
     if executor == "codex":
-        return codex_command(workspace, executor_dir), prompt
+        return codex_command(workspace, executor_dir, mcp_config_path=mcp_config_path), prompt
     if executor == "claude":
-        return claude_command(executor_dir), prompt
+        return claude_command(executor_dir, mcp_config_path=mcp_config_path), prompt
     raise ValueError(f"unsupported executor: {executor}")
+
+
+def mcp_server_config(runtime: ToolRuntime, events_path: Path) -> McpServerConfig:
+    return McpServerConfig(
+        working_folder=runtime.working_folder.as_posix(),
+        events_path=events_path.as_posix(),
+        max_seconds=runtime.max_seconds,
+        bash_timeout_seconds=runtime.bash_timeout_seconds,
+        read_allowed_prefixes=list(runtime.read_allowed_prefixes),
+        read_blocked_prefixes=list(runtime.read_blocked_prefixes),
+        bash_protected_prefixes=list(runtime.bash_protected_prefixes),
+        bash_blocked_substrings=list(runtime.bash_blocked_substrings),
+        live_log_root=runtime.live_log_root.as_posix() if runtime.live_log_root else None,
+        live_event_prefix=runtime.live_event_prefix,
+    )
+
+
+def mcp_codex_config_args(mcp_config_path: Path) -> list[str]:
+    args_toml = json.dumps(["mcp-serve", "--config", mcp_config_path.as_posix()])
+    return [
+        "--config",
+        'mcp_servers.hooky.command="hooky"',
+        "--config",
+        f"mcp_servers.hooky.args={args_toml}",
+    ]
+
+
+def write_claude_mcp_config_file(executor_dir: Path, mcp_config_path: Path) -> Path:
+    claude_mcp_config = {
+        "mcpServers": {
+            "hooky": {
+                "command": "hooky",
+                "args": ["mcp-serve", "--config", mcp_config_path.as_posix()],
+            }
+        }
+    }
+    path = executor_dir / "claude_mcp_servers.json"
+    path.write_text(json.dumps(claude_mcp_config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def load_mcp_tool_events(events_path: Path) -> list[dict[str, Any]]:
+    if not events_path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for raw_line in events_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
 def shell_command(workspace: Path, input_path: Path, output_path: Path, executor_dir: Path) -> list[str]:
@@ -232,7 +309,7 @@ def shell_command(workspace: Path, input_path: Path, output_path: Path, executor
     return ["/bin/sh", "-lc", command]
 
 
-def codex_command(workspace: Path, executor_dir: Path) -> list[str]:
+def codex_command(workspace: Path, executor_dir: Path, *, mcp_config_path: Path | None = None) -> list[str]:
     command = [
         "codex",
         "exec",
@@ -247,11 +324,13 @@ def codex_command(workspace: Path, executor_dir: Path) -> list[str]:
         command.extend(["--model", model])
     if effort := os.environ.get("HOOKY_CODEX_REASONING_EFFORT"):
         command.extend(["--config", f'model_reasoning_effort="{effort}"'])
+    if mcp_config_path is not None:
+        command.extend(mcp_codex_config_args(mcp_config_path))
     command.append("-")
     return command
 
 
-def claude_command(executor_dir: Path) -> list[str]:
+def claude_command(executor_dir: Path, *, mcp_config_path: Path | None = None) -> list[str]:
     command = [
         "claude",
         "--print",
@@ -269,6 +348,9 @@ def claude_command(executor_dir: Path) -> list[str]:
         command.extend(["--model", model])
     if effort := os.environ.get("HOOKY_CLAUDE_EFFORT"):
         command.extend(["--effort", effort])
+    if mcp_config_path is not None:
+        claude_mcp_config_path = write_claude_mcp_config_file(executor_dir, mcp_config_path)
+        command.extend(["--mcp-config", claude_mcp_config_path.as_posix()])
     return command
 
 
