@@ -28,6 +28,10 @@ class SchemasTests(unittest.TestCase):
         self.assertIn("append_evidence_note", names)
         self.assertIn("append_evidence_command", names)
         self.assertIn("append_evidence_screenshot", names)
+        self.assertIn("append_evidence_interaction", names)
+
+    def test_available_tools_include_interact_and_snapshot(self) -> None:
+        self.assertIn("interact_and_snapshot", available_tool_names())
 
     def test_available_tools_include_run_lint(self) -> None:
         self.assertIn("run_lint", available_tool_names())

@@ -9,6 +9,7 @@ from typing import Any
 
 from hooky.runtime.evidence import (
     append_evidence_command_file,
+    append_evidence_interaction_file,
     append_evidence_note_file,
     append_evidence_screenshot_file,
     read_text_prefix,
@@ -235,6 +236,21 @@ class EvidenceToolsMixin:
         title = str(args.get("title") or "Visual evidence").strip() or "Visual evidence"
         snapshot = self.capture_visual_snapshot(args)
         evidence_path = append_evidence_screenshot_file(
+            self.working_folder,
+            self.evidence_base_dir(),
+            title=title,
+            url=str(args.get("url") or ""),
+            snapshot=snapshot,
+        )
+        return {
+            **snapshot,
+            "evidence_path": relative_to(evidence_path, self.working_folder),
+        }
+
+    def append_evidence_interaction(self, args: dict[str, Any]) -> dict[str, Any]:
+        title = str(args.get("title") or "Interaction evidence").strip() or "Interaction evidence"
+        snapshot = self.interact_and_snapshot(args)
+        evidence_path = append_evidence_interaction_file(
             self.working_folder,
             self.evidence_base_dir(),
             title=title,

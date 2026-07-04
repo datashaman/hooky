@@ -164,6 +164,53 @@ class ShellToolsTests(unittest.TestCase):
             self.assertTrue((root / result["screenshot_path"]).exists())
             self.assertEqual(runtime.pending_image_inputs[0]["path"], result["screenshot_path"])
 
+    def test_interact_and_snapshot_requires_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            with self.assertRaises(ValueError):
+                runtime.interact_and_snapshot({"url": "http://127.0.0.1:4173", "actions": []})
+
+    def test_interact_and_snapshot_runs_actions_and_reports_step_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = ToolRuntime(working_folder=root, final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            def fake_run(command, cwd, text, capture_output, timeout):
+                screenshot_path = Path(command[3])
+                screenshot_path.write_bytes(b"png")
+                actions_path = Path(command[8])
+                self.assertTrue(actions_path.exists())
+                payload = {
+                    "url": command[2],
+                    "screenshotBytes": 3,
+                    "consoleMessages": [],
+                    "metrics": {"viewportCoverage": 0.4, "visibleElementCount": 6},
+                    "steps": [
+                        {"action": "click", "selector": "#open-form", "value": "", "ok": True},
+                        {"action": "fill", "selector": "#missing", "value": "hello", "ok": False, "error": "selector not found"},
+                    ],
+                }
+                return subprocess.CompletedProcess(command, 0, stdout=json_dumps(payload), stderr="")
+
+            with mock.patch.object(subprocess, "run", side_effect=fake_run):
+                result = runtime.interact_and_snapshot(
+                    {
+                        "url": "http://127.0.0.1:4173",
+                        "actions": [
+                            {"action": "click", "selector": "#open-form"},
+                            {"action": "fill", "selector": "#missing", "value": "hello"},
+                        ],
+                    }
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(len(result["steps"]), 2)
+            self.assertFalse(result["steps"][1]["ok"])
+            self.assertIn("visual-snapshots", result["screenshot_path"])
+            self.assertTrue((root / result["screenshot_path"]).exists())
+            self.assertEqual(runtime.pending_image_inputs[0]["path"], result["screenshot_path"])
+
 
 def json_dumps(value: object) -> str:
     import json

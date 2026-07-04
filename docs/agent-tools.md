@@ -75,6 +75,21 @@ Runtime files live under `.hooky/runs/<key>/`.
   Captures a browser screenshot and returns layout metrics. The evaluator uses
   this for UI evidence. Screenshots and metrics are saved under
   `.hooky/runs/<key>/tool-results/visual-snapshots/`.
+  This only shows the page's initial load state; it cannot catch flaws that
+  only appear after interaction (validation errors, empty/loading states,
+  a submit that silently fails). Use `interact_and_snapshot` for those.
+
+- `interact_and_snapshot`
+  Drives a page through a scripted action sequence — `click`, `dblclick`,
+  `fill`, `type`, `press`, `select_option`, `check`, `uncheck`, `hover`,
+  `wait_for_selector`, `wait_for_timeout` — then captures a screenshot and
+  layout metrics of the resulting state. Each step's selector/value/success is
+  returned so a broken selector or an interaction that silently fails is
+  itself surfaced as evidence, not just a screenshot that happens to look
+  fine. By default a failed step stops the sequence (`stop_on_error: false`
+  to continue past it). Use this to verify golden-path flows (open a form,
+  fill it, submit, confirm the resulting state) rather than only the first
+  paint.
 
 ## Evidence Tools
 
@@ -93,6 +108,10 @@ Before attempts exist, run-level evidence lives at `.hooky/runs/<key>/evidence.m
 - `append_evidence_screenshot`
   Captures a browser screenshot using the visual snapshot tool and appends the
   image link plus metrics to `evidence.md`.
+
+- `append_evidence_interaction`
+  Runs `interact_and_snapshot` and appends the step-by-step results, the
+  resulting screenshot, and layout metrics to `evidence.md`.
 
 ## Git Tools
 

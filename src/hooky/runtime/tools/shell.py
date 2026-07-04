@@ -11,7 +11,13 @@ import urllib.request
 from datetime import UTC, datetime
 from typing import Any
 
-from hooky.runtime.evidence import read_tail, relative_to, visual_snapshot_script, write_tool_result_artifact
+from hooky.runtime.evidence import (
+    interactive_snapshot_script,
+    read_tail,
+    relative_to,
+    visual_snapshot_script,
+    write_tool_result_artifact,
+)
 from hooky.runtime.models import runtime_path
 from hooky.runtime.project_env import (
     append_shell_arg,
@@ -212,6 +218,77 @@ class ShellToolsMixin:
         payload["screenshot_path"] = relative_to(screenshot_path, self.working_folder)
         payload["script_path"] = relative_to(script_path, self.working_folder)
         self.queue_image_input(screenshot_path, f"Visual snapshot for {url} at {viewport_width}x{viewport_height}")
+        if stderr:
+            payload["stderr"] = single_line(stderr, 1000)
+        return payload
+
+    def interact_and_snapshot(self, args: dict[str, Any]) -> dict[str, Any]:
+        url = str(args.get("url") or "").strip()
+        if not url:
+            raise ValueError("interact_and_snapshot requires a URL; start a dev server first when needed")
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("interact_and_snapshot URL must be http or https")
+        actions = args.get("actions") or []
+        if not isinstance(actions, list) or not actions:
+            raise ValueError("interact_and_snapshot requires a non-empty actions list")
+        viewport_width = int(args.get("viewport_width") or 1280)
+        viewport_height = int(args.get("viewport_height") or 900)
+        wait_selector = str(args.get("wait_selector") or "body")
+        full_page = bool(args.get("full_page", True))
+        timeout_seconds = int(args.get("timeout_seconds") or 30)
+        output_dir = runtime_path(self.working_folder, "tool-results", "visual-snapshots")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%SZ%f")[:22]
+        screenshot_path = output_dir / f"{stamp}.png"
+        script_path = output_dir / f"{stamp}.cjs"
+        actions_path = output_dir / f"{stamp}.actions.json"
+        script_path.write_text(interactive_snapshot_script(), encoding="utf-8")
+        actions_path.write_text(json.dumps(actions), encoding="utf-8")
+        completed = subprocess.run(
+            [
+                "node",
+                script_path.as_posix(),
+                url,
+                screenshot_path.as_posix(),
+                str(viewport_width),
+                str(viewport_height),
+                wait_selector,
+                "1" if full_page else "0",
+                actions_path.as_posix(),
+            ],
+            cwd=self.working_folder,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+        stdout = completed.stdout.strip()
+        stderr = completed.stderr.strip()
+        if completed.returncode != 0:
+            return {
+                "ok": False,
+                "url": url,
+                "returncode": completed.returncode,
+                "error": single_line(stderr or stdout or "interactive snapshot command failed", 1000),
+                "screenshot_path": relative_to(screenshot_path, self.working_folder) if screenshot_path.exists() else "",
+            }
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            return {
+                "ok": False,
+                "url": url,
+                "returncode": completed.returncode,
+                "error": f"interactive snapshot returned invalid JSON: {exc}",
+                "stdout": single_line(stdout, 1000),
+                "stderr": single_line(stderr, 1000),
+            }
+        steps = payload.get("steps") if isinstance(payload.get("steps"), list) else []
+        all_steps_ok = all(bool(step.get("ok")) for step in steps)
+        payload["ok"] = all_steps_ok
+        payload["screenshot_path"] = relative_to(screenshot_path, self.working_folder)
+        payload["script_path"] = relative_to(script_path, self.working_folder)
+        self.queue_image_input(screenshot_path, f"Interaction snapshot for {url} at {viewport_width}x{viewport_height} (final state)")
         if stderr:
             payload["stderr"] = single_line(stderr, 1000)
         return payload

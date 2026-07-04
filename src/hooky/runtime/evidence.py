@@ -157,14 +157,50 @@ def append_evidence_screenshot_file(root: Path, evidence_base_dir: Path, *, titl
     return append_evidence_section(root, evidence_base_dir, title, "\n".join(lines))
 
 
+def append_evidence_interaction_file(root: Path, evidence_base_dir: Path, *, title: str, url: str, snapshot: dict[str, Any]) -> Path:
+    screenshot = str(snapshot.get("screenshot_path") or "")
+    lines = [
+        f"- url: `{url}`",
+        f"- ok: {str(bool(snapshot.get('ok'))).lower()}",
+    ]
+    steps = snapshot.get("steps") if isinstance(snapshot.get("steps"), list) else []
+    if steps:
+        lines.extend(["", "- steps:"])
+        for index, step in enumerate(steps, start=1):
+            status = "ok" if step.get("ok") else "FAILED"
+            detail = f"  {index}. {step.get('action')} `{step.get('selector')}` -> {status}"
+            if step.get("value"):
+                detail += f" (value: {step.get('value')})"
+            if step.get("error"):
+                detail += f" — {step.get('error')}"
+            lines.append(detail)
+    if screenshot:
+        lines.append(f"- screenshot (final state): `{screenshot}`")
+        lines.extend(["", f"![{title}]({screenshot})"])
+    if snapshot.get("error"):
+        lines.append(f"- error: {snapshot.get('error')}")
+    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+    if metrics:
+        lines.extend(
+            [
+                "",
+                "- metrics (final state):",
+                f"  - viewportCoverage: {metrics.get('viewportCoverage')}",
+                f"  - topGapRatio: {metrics.get('topGapRatio')}",
+                f"  - leftGapRatio: {metrics.get('leftGapRatio')}",
+                f"  - visibleElementCount: {metrics.get('visibleElementCount')}",
+                f"  - headingInteractiveOverlapCount: {metrics.get('headingInteractiveOverlapCount')}",
+            ]
+        )
+    return append_evidence_section(root, evidence_base_dir, title, "\n".join(lines))
+
+
 def relative_to(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-def visual_snapshot_script() -> str:
+def _playwright_loader_js() -> str:
     return r"""
-const fs = require('fs');
-
 async function loadPlaywright() {
   try {
     return require('playwright');
@@ -176,29 +212,13 @@ async function loadPlaywright() {
     }
   }
 }
+"""
 
-(async () => {
-  const [url, screenshotPath, widthRaw, heightRaw, waitSelector, fullPageRaw] = process.argv.slice(2);
-  const width = Number(widthRaw || 1280);
-  const height = Number(heightRaw || 900);
-  const fullPage = fullPageRaw === '1';
-  const consoleMessages = [];
-  const { chromium } = await loadPlaywright();
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width, height } });
-  page.on('console', message => {
-    if (['error', 'warning'].includes(message.type())) {
-      consoleMessages.push({ type: message.type(), text: message.text().slice(0, 500) });
-    }
-  });
-  page.on('pageerror', error => {
-    consoleMessages.push({ type: 'pageerror', text: String(error.message || error).slice(0, 500) });
-  });
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
-  if (waitSelector) {
-    await page.waitForSelector(waitSelector, { timeout: 10000 });
-  }
-  const metrics = await page.evaluate(() => {
+
+def _metrics_capture_js() -> str:
+    return r"""
+async function captureMetrics(page) {
+  return page.evaluate(() => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     const doc = document.documentElement;
     const body = document.body;
@@ -331,6 +351,38 @@ async function loadPlaywright() {
       sampleTextBlocks: textBlocks.slice(0, 30),
     };
   });
+}
+"""
+
+
+def visual_snapshot_script() -> str:
+    return (
+        "const fs = require('fs');\n"
+        + _playwright_loader_js()
+        + _metrics_capture_js()
+        + r"""
+(async () => {
+  const [url, screenshotPath, widthRaw, heightRaw, waitSelector, fullPageRaw] = process.argv.slice(2);
+  const width = Number(widthRaw || 1280);
+  const height = Number(heightRaw || 900);
+  const fullPage = fullPageRaw === '1';
+  const consoleMessages = [];
+  const { chromium } = await loadPlaywright();
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width, height } });
+  page.on('console', message => {
+    if (['error', 'warning'].includes(message.type())) {
+      consoleMessages.push({ type: message.type(), text: message.text().slice(0, 500) });
+    }
+  });
+  page.on('pageerror', error => {
+    consoleMessages.push({ type: 'pageerror', text: String(error.message || error).slice(0, 500) });
+  });
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  if (waitSelector) {
+    await page.waitForSelector(waitSelector, { timeout: 10000 });
+  }
+  const metrics = await captureMetrics(page);
   await page.screenshot({ path: screenshotPath, fullPage });
   await browser.close();
   console.log(JSON.stringify({
@@ -344,3 +396,98 @@ async function loadPlaywright() {
   process.exit(1);
 });
 """
+    )
+
+
+def interactive_snapshot_script() -> str:
+    return (
+        "const fs = require('fs');\n"
+        + _playwright_loader_js()
+        + _metrics_capture_js()
+        + r"""
+async function runStep(page, step) {
+  const timeout = Number(step.timeout_ms) || 5000;
+  const selector = step.selector || '';
+  const value = step.value === undefined || step.value === null ? '' : String(step.value);
+  switch (step.action) {
+    case 'click':
+      return page.click(selector, { timeout });
+    case 'dblclick':
+      return page.dblclick(selector, { timeout });
+    case 'fill':
+      return page.fill(selector, value, { timeout });
+    case 'type':
+      return page.type(selector, value, { timeout });
+    case 'press':
+      return page.press(selector, value, { timeout });
+    case 'select_option':
+      return page.selectOption(selector, value, { timeout });
+    case 'check':
+      return page.check(selector, { timeout });
+    case 'uncheck':
+      return page.uncheck(selector, { timeout });
+    case 'hover':
+      return page.hover(selector, { timeout });
+    case 'wait_for_selector':
+      return page.waitForSelector(selector, { timeout });
+    case 'wait_for_timeout':
+      return page.waitForTimeout(Number(value) || timeout);
+    default:
+      throw new Error(`unknown action: ${step.action}`);
+  }
+}
+
+(async () => {
+  const [url, screenshotPath, widthRaw, heightRaw, waitSelector, fullPageRaw, actionsPath] = process.argv.slice(2);
+  const width = Number(widthRaw || 1280);
+  const height = Number(heightRaw || 900);
+  const fullPage = fullPageRaw === '1';
+  const actions = JSON.parse(fs.readFileSync(actionsPath, 'utf-8'));
+  const consoleMessages = [];
+  const { chromium } = await loadPlaywright();
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width, height } });
+  page.on('console', message => {
+    if (['error', 'warning'].includes(message.type())) {
+      consoleMessages.push({ type: message.type(), text: message.text().slice(0, 500) });
+    }
+  });
+  page.on('pageerror', error => {
+    consoleMessages.push({ type: 'pageerror', text: String(error.message || error).slice(0, 500) });
+  });
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  if (waitSelector) {
+    await page.waitForSelector(waitSelector, { timeout: 10000 });
+  }
+  const stepResults = [];
+  for (const step of actions) {
+    try {
+      await runStep(page, step);
+      stepResults.push({ action: step.action, selector: step.selector || '', value: step.value ?? '', ok: true });
+    } catch (error) {
+      stepResults.push({
+        action: step.action,
+        selector: step.selector || '',
+        value: step.value ?? '',
+        ok: false,
+        error: String(error && error.message ? error.message : error).slice(0, 500),
+      });
+      if (step.stop_on_error !== false) break;
+    }
+  }
+  const metrics = await captureMetrics(page);
+  await page.screenshot({ path: screenshotPath, fullPage });
+  await browser.close();
+  console.log(JSON.stringify({
+    url,
+    screenshotBytes: fs.statSync(screenshotPath).size,
+    consoleMessages,
+    metrics,
+    steps: stepResults,
+  }));
+})().catch(error => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+});
+"""
+    )

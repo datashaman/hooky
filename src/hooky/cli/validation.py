@@ -24,7 +24,7 @@ def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: di
     test_failures = loop_attempt_test_evidence_failures(events)
     evidence_failures.extend(test_failures)
     if loop_attempt_requires_visual_evidence(workspace) and not loop_attempt_captured_visual_snapshot(events):
-        evidence_failures.append("Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot evidence from the running app.")
+        evidence_failures.append("Evaluator cannot pass this attempt: browser/UI work needs capture_visual_snapshot or interact_and_snapshot evidence from the running app.")
     reference_visual_failures = loop_attempt_reference_visual_evidence_failures(workspace, events)
     evidence_failures.extend(reference_visual_failures)
     visual_failures = loop_attempt_blocking_visual_failures(workspace, events, report)
@@ -133,7 +133,7 @@ def loop_attempt_tool_events(workspace: Path, attempt_id: str) -> list[dict[str,
 def blocking_visual_failures_from_snapshot_events(events: list[dict[str, Any]]) -> list[str]:
     failures: list[str] = []
     for event in events:
-        if event.get("name") != "capture_visual_snapshot":
+        if event.get("name") not in VISUAL_SNAPSHOT_TOOL_NAMES:
             continue
         result = event.get("result")
         if not isinstance(result, dict) or result.get("ok") is not True:
@@ -275,10 +275,13 @@ def loop_attempt_captured_visual_snapshot(events: list[dict[str, Any]]) -> bool:
     return loop_attempt_visual_snapshot_count(events) > 0
 
 
+VISUAL_SNAPSHOT_TOOL_NAMES = frozenset({"capture_visual_snapshot", "interact_and_snapshot"})
+
+
 def loop_attempt_visual_snapshot_count(events: list[dict[str, Any]]) -> int:
     count = 0
     for event in events:
-        if event.get("name") != "capture_visual_snapshot":
+        if event.get("name") not in VISUAL_SNAPSHOT_TOOL_NAMES:
             continue
         result = event.get("result")
         if isinstance(result, dict) and result.get("ok") is True and result.get("screenshot_path"):

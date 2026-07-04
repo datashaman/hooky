@@ -233,6 +233,55 @@ class ToolRuntime(
                 ["url"],
             ),
             tool_schema(
+                "interact_and_snapshot",
+                (
+                    "Drive a page with a scripted action sequence (click/fill/press/select_option/check/hover/wait), "
+                    "then capture a screenshot and layout metrics of the resulting state. Use this to verify flows "
+                    "(form submission, error states, menus) that a single page-load screenshot cannot show."
+                ),
+                {
+                    "url": string_schema(default=""),
+                    "actions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 30,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": [
+                                        "click",
+                                        "dblclick",
+                                        "fill",
+                                        "type",
+                                        "press",
+                                        "select_option",
+                                        "check",
+                                        "uncheck",
+                                        "hover",
+                                        "wait_for_selector",
+                                        "wait_for_timeout",
+                                    ],
+                                },
+                                "selector": string_schema(default=""),
+                                "value": string_schema(default=""),
+                                "timeout_ms": integer_schema(default=5000, minimum=1, maximum=30000),
+                                "stop_on_error": {"type": "boolean", "default": True},
+                            },
+                            "required": ["action"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "wait_selector": string_schema(default="body"),
+                    "viewport_width": integer_schema(default=1280, minimum=320, maximum=3840),
+                    "viewport_height": integer_schema(default=900, minimum=240, maximum=2160),
+                    "full_page": {"type": "boolean", "default": True},
+                    "timeout_seconds": integer_schema(default=30, minimum=1, maximum=120),
+                },
+                ["url", "actions"],
+            ),
+            tool_schema(
                 "append_evidence_note",
                 "Append a human-readable note to the system-owned evidence report for this run or attempt.",
                 {
@@ -264,6 +313,55 @@ class ToolRuntime(
                     "timeout_seconds": integer_schema(default=30, minimum=1, maximum=120),
                 },
                 ["url"],
+            ),
+            tool_schema(
+                "append_evidence_interaction",
+                (
+                    "Drive a page with a scripted action sequence, capture the resulting screenshot and metrics, "
+                    "and append the steps, image, and metrics to the system-owned evidence report."
+                ),
+                {
+                    "url": string_schema(default=""),
+                    "title": string_schema(default="Interaction evidence"),
+                    "actions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 30,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": [
+                                        "click",
+                                        "dblclick",
+                                        "fill",
+                                        "type",
+                                        "press",
+                                        "select_option",
+                                        "check",
+                                        "uncheck",
+                                        "hover",
+                                        "wait_for_selector",
+                                        "wait_for_timeout",
+                                    ],
+                                },
+                                "selector": string_schema(default=""),
+                                "value": string_schema(default=""),
+                                "timeout_ms": integer_schema(default=5000, minimum=1, maximum=30000),
+                                "stop_on_error": {"type": "boolean", "default": True},
+                            },
+                            "required": ["action"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "wait_selector": string_schema(default="body"),
+                    "viewport_width": integer_schema(default=1280, minimum=320, maximum=3840),
+                    "viewport_height": integer_schema(default=900, minimum=240, maximum=2160),
+                    "full_page": {"type": "boolean", "default": True},
+                    "timeout_seconds": integer_schema(default=30, minimum=1, maximum=120),
+                },
+                ["url", "actions"],
             ),
             tool_schema("git_status", "Read git working-tree status without modifying files.", {}, []),
             tool_schema(
@@ -396,9 +494,11 @@ class ToolRuntime(
             "run_lint": self.run_lint,
             "latest_test_failure_context": self.latest_test_failure_context,
             "capture_visual_snapshot": self.capture_visual_snapshot,
+            "interact_and_snapshot": self.interact_and_snapshot,
             "append_evidence_note": self.append_evidence_note,
             "append_evidence_command": self.append_evidence_command,
             "append_evidence_screenshot": self.append_evidence_screenshot,
+            "append_evidence_interaction": self.append_evidence_interaction,
             "git_status": self.git_status,
             "git_diff": self.git_diff,
             "git_show": self.git_show,
