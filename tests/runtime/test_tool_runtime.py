@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from hooky.runtime import ToolRuntime, available_tool_names
+from hooky.runtime import ADVISOR_TOOL_TYPE, ToolRuntime, available_tool_names
 
 
 class ToolRuntimeTests(unittest.TestCase):
@@ -50,6 +52,36 @@ class ToolRuntimeTests(unittest.TestCase):
             schema_names = [tool["function"]["name"] for tool in runtime.tools()]
 
             self.assertEqual(schema_names, available_tool_names())
+
+    def test_advisor_tool_is_included_when_configured_and_unrestricted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HOOKY_ADVISOR_MODEL": "anthropic/claude-opus-latest"}, clear=True):
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            types = [tool.get("type") for tool in runtime.tools()]
+
+            self.assertIn(ADVISOR_TOOL_TYPE, types)
+
+    def test_advisor_tool_is_excluded_when_enabled_tools_restricts_the_role(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HOOKY_ADVISOR_MODEL": "anthropic/claude-opus-latest"}, clear=True):
+            runtime = ToolRuntime(
+                working_folder=Path(tmp),
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                enabled_tools=["final_report"],
+            )
+
+            types = [tool.get("type") for tool in runtime.tools()]
+
+            self.assertNotIn(ADVISOR_TOOL_TYPE, types)
+
+    def test_advisor_tool_is_absent_when_not_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            types = [tool.get("type") for tool in runtime.tools()]
+
+            self.assertNotIn(ADVISOR_TOOL_TYPE, types)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from hooky.runtime.evidence import relative_to
-from hooky.runtime.models import LocalDeadline, model_client, model_provider, model_request_options, openrouter_timeout_ms, relative_or_name, response_usage
+from hooky.runtime.models import ADVISOR_TOOL_TYPE, LocalDeadline, model_client, model_provider, model_request_options, openrouter_timeout_ms, relative_or_name, response_usage
 from hooky.runtime.rendering import append_live_event, format_runtime_event_line, utc_timestamp, write_runtime_log
 from hooky.runtime.schemas import structured_response_format
 from hooky.runtime.text import (
@@ -30,6 +30,15 @@ from hooky.runtime.text import (
 )
 from hooky.runtime.tool_runtime import ToolRuntime
 from hooky.shared import agent_skills
+
+
+def tools_for_completion(runtime: ToolRuntime, model: str) -> list[dict[str, Any]]:
+    tools = runtime.tools()
+    if model_provider(model) != "openrouter":
+        # The openrouter:advisor server tool only exists on OpenRouter's own Chat
+        # Completions API; Ollama's endpoint has no idea what to do with it.
+        tools = [tool for tool in tools if tool.get("type") != ADVISOR_TOOL_TYPE]
+    return tools
 
 
 def model_request_deadline_seconds(runtime: ToolRuntime, elapsed_seconds: float) -> int:
@@ -287,7 +296,7 @@ def run_tool_agent(
                         completion = client.chat.send(
                             model=model,
                             messages=messages,
-                            tools=runtime.tools(),
+                            tools=tools_for_completion(runtime, model),
                             tool_choice="auto",
                             **model_request_options(model),
                         )

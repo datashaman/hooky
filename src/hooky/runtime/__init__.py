@@ -15,6 +15,7 @@ from hooky.runtime.agent_loop import (
     run_tool_agent,
     skill_catalog_message,
     start_heartbeat_thread,
+    tools_for_completion,
 )
 from hooky.runtime.evidence import (
     append_evidence_command_file,
@@ -48,6 +49,8 @@ from hooky.runtime.git import (
     snapshot_protected_paths,
 )
 from hooky.runtime.models import (
+    ADVISOR_TOOL_TYPE,
+    DEFAULT_ADVISOR_INSTRUCTIONS,
     DEFAULT_RUNTIME_DIR,
     RUNTIME_DIR_ENV,
     LocalDeadline,
@@ -58,6 +61,7 @@ from hooky.runtime.models import (
     ModelToolCall,
     OllamaChat,
     OllamaClient,
+    advisor_tool_definition,
     model_client,
     model_credentials_available,
     model_credentials_error,
@@ -170,6 +174,8 @@ from hooky.runtime.text import (
 from hooky.runtime.tool_runtime import FinalValidator, ToolHandler, ToolRuntime
 
 __all__ = [
+    "ADVISOR_TOOL_TYPE",
+    "DEFAULT_ADVISOR_INSTRUCTIONS",
     "DEFAULT_RUNTIME_DIR",
     "RUNTIME_DIR_ENV",
     "DISPOSABLE_RUNTIME_DIR_NAMES",
@@ -183,6 +189,7 @@ __all__ = [
     "ModelToolCall",
     "OllamaChat",
     "OllamaClient",
+    "advisor_tool_definition",
     "model_client",
     "model_credentials_available",
     "model_credentials_error",
@@ -320,4 +327,5 @@ __all__ = [
     "run_tool_agent",
     "skill_catalog_message",
     "start_heartbeat_thread",
+    "tools_for_completion",
 ]

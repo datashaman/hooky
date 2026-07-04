@@ -150,6 +150,27 @@ process. This is the same trust level codex/claude already extend to
 `.mcp.json` servers; Hooky has no additional way to sandbox an arbitrary
 third-party subprocess beyond what the OS/user's own environment provides.
 
+## Advisor: A Second Opinion for the Native Executor
+
+`native` can also opt into OpenRouter's hosted `openrouter:advisor` server
+tool — the model can consult a second model mid-task for a sanity check,
+resolved entirely server-side by OpenRouter in the same completion request
+(confirmed with a live call: the response comes back with `finish_reason:
+"stop"` and the advice already folded into the assistant's answer, no
+`tool_calls` entry and no follow-up round-trip needed on Hooky's end).
+
+Enable it with `HOOKY_ADVISOR_MODEL` (e.g. `anthropic/claude-opus-latest`);
+unset means the tool is never added. Optional
+`HOOKY_ADVISOR_INSTRUCTIONS`/`HOOKY_ADVISOR_MAX_COMPLETION_TOKENS` tune the
+advisor's system prompt and output budget. See `.env.example`.
+
+Like MCP tools, the advisor entry is added before the `enabled_tools` filter
+runs, so a role restricted to a specific tool list (e.g. `["final_report"]`)
+never sees it — it's only available to roles with the full, unrestricted
+tool set. It's also OpenRouter-only: `tools_for_completion()` in
+`agent_loop.py` strips it back out for `ollama/*` models, since Ollama's chat
+endpoint has no notion of this tool type.
+
 ## Codex
 
 Default command shape:

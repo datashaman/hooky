@@ -7,10 +7,12 @@ from pathlib import Path
 from unittest import mock
 
 from hooky.runtime import (
+    ADVISOR_TOOL_TYPE,
     ToolRuntime,
     image_input_message,
     model_request_deadline_seconds,
     skill_catalog_message,
+    tools_for_completion,
 )
 from hooky.shared import agent_skills
 
@@ -68,6 +70,16 @@ class AgentLoopTests(unittest.TestCase):
             self.assertEqual(content[0]["type"], "text")
             self.assertEqual(content[1]["type"], "image_url")
             self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_tools_for_completion_strips_advisor_tool_for_ollama_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HOOKY_ADVISOR_MODEL": "anthropic/claude-opus-latest"}, clear=True):
+            runtime = ToolRuntime(working_folder=Path(tmp), final_report_schema={"type": "object"}, max_cost_usd=1, max_seconds=30)
+
+            openrouter_types = [tool.get("type") for tool in tools_for_completion(runtime, "anthropic/claude-3.5")]
+            ollama_types = [tool.get("type") for tool in tools_for_completion(runtime, "ollama/gpt-oss:20b")]
+
+            self.assertIn(ADVISOR_TOOL_TYPE, openrouter_types)
+            self.assertNotIn(ADVISOR_TOOL_TYPE, ollama_types)
 
 
 if __name__ == "__main__":

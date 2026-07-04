@@ -6,8 +6,11 @@ import unittest
 from unittest import mock
 
 from hooky.runtime import (
+    ADVISOR_TOOL_TYPE,
+    DEFAULT_ADVISOR_INSTRUCTIONS,
     ModelMessage,
     OllamaChat,
+    advisor_tool_definition,
     model_credentials_available,
     model_provider,
     provider_model_name,
@@ -73,6 +76,46 @@ class ModelsTests(unittest.TestCase):
         self.assertEqual(
             OllamaChat("http://localhost:11434/v1").chat_completions_url(),
             "http://localhost:11434/v1/chat/completions",
+        )
+
+    def test_advisor_tool_definition_is_none_when_unset(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(advisor_tool_definition())
+
+    def test_advisor_tool_definition_uses_default_instructions_when_configured(self) -> None:
+        with mock.patch.dict(os.environ, {"HOOKY_ADVISOR_MODEL": "anthropic/claude-opus-latest"}, clear=True):
+            definition = advisor_tool_definition()
+
+        self.assertEqual(
+            definition,
+            {
+                "type": ADVISOR_TOOL_TYPE,
+                "parameters": {
+                    "model": "anthropic/claude-opus-latest",
+                    "instructions": DEFAULT_ADVISOR_INSTRUCTIONS,
+                },
+            },
+        )
+
+    def test_advisor_tool_definition_respects_instruction_and_token_overrides(self) -> None:
+        env = {
+            "HOOKY_ADVISOR_MODEL": "openai/gpt-4o-mini",
+            "HOOKY_ADVISOR_INSTRUCTIONS": "Be blunt.",
+            "HOOKY_ADVISOR_MAX_COMPLETION_TOKENS": "250",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            definition = advisor_tool_definition()
+
+        self.assertEqual(
+            definition,
+            {
+                "type": ADVISOR_TOOL_TYPE,
+                "parameters": {
+                    "model": "openai/gpt-4o-mini",
+                    "instructions": "Be blunt.",
+                    "max_completion_tokens": 250,
+                },
+            },
         )
 
 

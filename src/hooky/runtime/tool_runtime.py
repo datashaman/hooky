@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from hooky.runtime.mcp_client import McpClientManager
-from hooky.runtime.models import runtime_dir
+from hooky.runtime.models import advisor_tool_definition, runtime_dir
 from hooky.runtime.rendering import canonical_tool_name
 from hooky.runtime.schemas import integer_schema, string_array_schema, string_schema, tool_schema
 from hooky.runtime.tools.evidence import EvidenceToolsMixin
@@ -460,6 +460,9 @@ class ToolRuntime(
                     ["name", "path"],
                 ),
             )
+        advisor = advisor_tool_definition()
+        if advisor is not None:
+            tools.append(advisor)
         tools.extend(self._mcp_manager().tool_schemas())
         if self.enabled_tools is not None:
             enabled = set(self.enabled_tools)

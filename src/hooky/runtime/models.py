@@ -13,6 +13,13 @@ from typing import Any
 DEFAULT_RUNTIME_DIR = ".hooky/runs/local"
 RUNTIME_DIR_ENV = "HOOKY_RUN_DIR"
 
+ADVISOR_TOOL_TYPE = "openrouter:advisor"
+DEFAULT_ADVISOR_INSTRUCTIONS = (
+    "You are a second opinion for another AI coding agent that is stuck, uncertain, or "
+    "wants a sanity check mid-task. You cannot see the codebase yourself, only the prompt "
+    "you're given here. Answer tersely and concretely."
+)
+
 
 def runtime_dir() -> str:
     raw = os.environ.get(RUNTIME_DIR_ENV, DEFAULT_RUNTIME_DIR).strip().strip("/")
@@ -29,6 +36,23 @@ def openrouter_request_options() -> dict[str, Any]:
     if reasoning:
         options["reasoning"] = json.loads(reasoning)
     return options
+
+
+def advisor_tool_definition() -> dict[str, Any] | None:
+    """An OpenRouter-hosted `openrouter:advisor` server tool: lets the model consult a
+    second model mid-task, resolved entirely server-side (no dispatch needed on our end).
+    Opt-in via HOOKY_ADVISOR_MODEL; unset means the feature is off."""
+    model = os.environ.get("HOOKY_ADVISOR_MODEL", "").strip()
+    if not model:
+        return None
+    parameters: dict[str, Any] = {
+        "model": model,
+        "instructions": os.environ.get("HOOKY_ADVISOR_INSTRUCTIONS", "").strip() or DEFAULT_ADVISOR_INSTRUCTIONS,
+    }
+    max_tokens = os.environ.get("HOOKY_ADVISOR_MAX_COMPLETION_TOKENS", "").strip()
+    if max_tokens:
+        parameters["max_completion_tokens"] = int(max_tokens)
+    return {"type": ADVISOR_TOOL_TYPE, "parameters": parameters}
 
 
 def model_provider(model: str) -> str:
