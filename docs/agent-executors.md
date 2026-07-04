@@ -171,6 +171,23 @@ tool set. It's also OpenRouter-only: `tools_for_completion()` in
 `agent_loop.py` strips it back out for `ollama/*` models, since Ollama's chat
 endpoint has no notion of this tool type.
 
+## Project Instructions: AGENTS.md for the Native Executor
+
+`codex` and `claude` already read a workspace's `AGENTS.md`/`CLAUDE.md`
+themselves as part of their own normal operation, regardless of what Hooky
+sends them. `native` had no equivalent — every role's system prompt was a
+fixed Python string with no way for a project to add its own persistent
+guidance (e.g. "always use pnpm", "never touch `legacy/`").
+
+`native` now reads a single `AGENTS.md` at the workspace root (no nested
+per-directory merging, no `CLAUDE.md` fallback — just the one file) and
+appends it to every role's system prompt under a `## Project Instructions
+(from AGENTS.md)` header, so the model can tell Hooky's own role instructions
+apart from project-supplied guidance. Long files are truncated (8000 chars)
+so a runaway `AGENTS.md` can't silently balloon every role's token cost. This
+is on by default — no env var gate — since it's just reading a file the user
+already committed, at the same trust level codex/claude already extend to it.
+
 ## Codex
 
 Default command shape:

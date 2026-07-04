@@ -14,6 +14,7 @@ from typing import Any
 
 from hooky.runtime.evidence import relative_to
 from hooky.runtime.models import ADVISOR_TOOL_TYPE, LocalDeadline, model_client, model_provider, model_request_options, openrouter_timeout_ms, relative_or_name, response_usage
+from hooky.runtime.project_instructions import compose_system_prompt
 from hooky.runtime.rendering import append_live_event, format_runtime_event_line, utc_timestamp, write_runtime_log
 from hooky.runtime.schemas import structured_response_format
 from hooky.runtime.text import (
@@ -119,6 +120,7 @@ def run_tool_agent(
     started_at = utc_timestamp()
     soft_deadline_sent = False
     consecutive_no_tool_responses = 0
+    system = compose_system_prompt(system, runtime.working_folder)
     messages: list[Any] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     transcript.extend(
         [
