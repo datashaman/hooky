@@ -204,6 +204,69 @@ print("wrote", output_path)
             metadata = json.loads((workspace / ".hooky/runs/local/executor/planner/metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["returncode"], 0)
 
+    def test_shell_command_exposes_mcp_config_placeholder_when_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HOOKY_EXECUTOR_COMMAND": "my-agent $input $output $mcp_config"}, clear=True):
+            workspace = Path(tmp)
+            mcp_config_path = workspace / "exec" / "mcp_config.json"
+
+            command = loop_executor.shell_command(workspace, workspace / "input.md", workspace / "output.json", workspace / "exec", mcp_config_path=mcp_config_path)
+
+            self.assertIn(mcp_config_path.as_posix(), command[-1])
+
+    def test_shell_executor_can_opt_into_the_mcp_server_and_fold_events_back_in(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
+            workspace = Path(tmp)
+            script = workspace / "fake_shell_agent.py"
+            script.write_text(
+                """
+from __future__ import annotations
+import json
+import sys
+from pathlib import Path
+
+input_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+mcp_config_path = Path(sys.argv[3])
+config = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+events_path = Path(config["events_path"])
+events_path.write_text(json.dumps({
+    "tool_call_id": "mcp-1",
+    "name": "detect_project_environment",
+    "arguments": {},
+    "result": {"ok": True},
+    "started_at": "2026-01-01T00:00:00Z",
+    "ended_at": "2026-01-01T00:00:00Z",
+    "duration_ms": 1.0,
+    "source": "mcp",
+}) + "\\n", encoding="utf-8")
+output_path.write_text(json.dumps({"ok": True}) + "\\n", encoding="utf-8")
+""".lstrip(),
+                encoding="utf-8",
+            )
+            runtime = ToolRuntime(
+                working_folder=workspace,
+                final_report_schema={"type": "object"},
+                max_cost_usd=0.01,
+                max_seconds=10,
+                final_validator=lambda report: None,
+                live_log_root=workspace / ".hooky/runs/local",
+            )
+            invocation = loop_executor.RoleInvocation(
+                role="planner",
+                agent_name="loop-planner",
+                model="test-model",
+                model_metadata={"model": "test-model"},
+                system="system",
+                user="user",
+                runtime=runtime,
+            )
+            os.environ["HOOKY_EXECUTOR_COMMAND"] = f"{shlex.quote(sys.executable)} {shlex.quote(script.as_posix())} $input $output $mcp_config"
+
+            result = loop_executor.run_role(invocation, executor="shell")
+
+            self.assertEqual(len(result.tool_events), 1)
+            self.assertEqual(result.tool_events[0]["name"], "detect_project_environment")
+
     def test_extract_executor_error_reads_claude_stream_json_result(self) -> None:
         stdout = "\n".join(
             [

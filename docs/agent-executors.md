@@ -48,13 +48,14 @@ Each invocation also writes:
 - `last_message.txt` for Codex
 - `debug.log` for Claude
 
-## MCP: Hooky Tools Inside Codex/Claude
+## MCP: Hooky Tools Inside External Executors
 
-The `codex` and `claude` executors run their own file/bash tools, but they don't
-know how to gather Hooky-specific evidence (browser screenshots, layout
-metrics, run_tests/run_lint result parsing). To close that gap, every codex
-and claude invocation registers a per-run MCP server, `hooky mcp-serve`, that
-exposes this curated tool subset over stdio:
+The `codex`, `claude`, and `shell` executors all run their own file/bash
+tools (or, for `shell`, whatever your own command provides), but none of
+them know how to gather Hooky-specific evidence (browser screenshots, layout
+metrics, run_tests/run_lint result parsing) on their own. To close that gap,
+every external-executor invocation gets a per-run MCP server config,
+served by `hooky mcp-serve`, exposing this curated tool subset over stdio:
 
 - `detect_project_environment`
 - `run_tests`, `run_lint`, `latest_test_failure_context`
@@ -79,7 +80,8 @@ regardless of which executor ran the role. Calls are appended to
 `interact_and_snapshot` evidence gates in `cli/validation.py` see them exactly
 as they would from the native executor.
 
-Registration is per-invocation, not persisted to the user's global config:
+For codex and claude, Hooky registers the server itself, per-invocation, never
+persisted to the user's global config:
 
 - For codex, via `-c mcp_servers.hooky.command=...` /
   `-c mcp_servers.hooky.args=...` overrides (nothing is written to
@@ -88,10 +90,16 @@ Registration is per-invocation, not persisted to the user's global config:
   with `--mcp-config` (the user's other MCP servers still load; this is
   additive, not `--strict-mcp-config`).
 
-The server itself is spawned by codex/claude, not by Hooky; `hooky mcp-serve
---config <path>` reads `executor/<role>/mcp_config.json` (written before the
-executor process starts) to reconstruct a `ToolRuntime` scoped to that role's
-workspace, timeouts, and evidence directory.
+For `shell`, Hooky can't register anything on your command's behalf (it
+doesn't know if your agent even speaks MCP), so it just always writes the
+config file and exposes its path as `$mcp_config` (see the Shell section
+below) — wiring it up is opt-in.
+
+The server itself is spawned by codex/claude (or your own command, for
+shell), not by Hooky; `hooky mcp-serve --config <path>` reads
+`executor/<role>/mcp_config.json` (written before the executor process
+starts) to reconstruct a `ToolRuntime` scoped to that role's workspace,
+timeouts, and evidence directory.
 
 ## Codex
 
@@ -147,6 +155,11 @@ with these placeholders:
 - `$input`
 - `$output`
 - `$executor_dir`
+- `$mcp_config`: path to the same MCP server config codex/claude use (see
+  above). Hooky always writes this file for the shell executor; your command
+  isn't required to use it, but if your own agent understands MCP you can
+  register `hooky mcp-serve --config $mcp_config` with it the same way codex
+  and claude do, and get the same evidence tools and tool_events.json fold-in.
 
 Example:
 

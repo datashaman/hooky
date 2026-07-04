@@ -25,7 +25,7 @@ from hooky.runtime import (
 )
 from hooky.runtime.mcp_server import McpServerConfig
 
-MCP_EXECUTORS = {"codex", "claude"}
+MCP_EXECUTORS = {"codex", "claude", "shell"}
 
 VALID_EXECUTORS = {"native", "shell", "codex", "claude"}
 EXECUTOR_ENV = "HOOKY_EXECUTOR"
@@ -231,7 +231,7 @@ def command_for_executor(
     mcp_config_path: Path | None = None,
 ) -> tuple[list[str], str | None]:
     if executor == "shell":
-        return shell_command(workspace, input_path, output_path, executor_dir), None
+        return shell_command(workspace, input_path, output_path, executor_dir, mcp_config_path=mcp_config_path), None
     if executor == "codex":
         return codex_command(workspace, executor_dir, mcp_config_path=mcp_config_path), prompt
     if executor == "claude":
@@ -295,7 +295,7 @@ def load_mcp_tool_events(events_path: Path) -> list[dict[str, Any]]:
     return events
 
 
-def shell_command(workspace: Path, input_path: Path, output_path: Path, executor_dir: Path) -> list[str]:
+def shell_command(workspace: Path, input_path: Path, output_path: Path, executor_dir: Path, *, mcp_config_path: Path | None = None) -> list[str]:
     template = os.environ.get("HOOKY_EXECUTOR_COMMAND")
     if not template:
         raise RuntimeError("HOOKY_EXECUTOR_COMMAND is required when HOOKY_EXECUTOR=shell")
@@ -304,6 +304,7 @@ def shell_command(workspace: Path, input_path: Path, output_path: Path, executor
         "input": shlex.quote(input_path.as_posix()),
         "output": shlex.quote(output_path.as_posix()),
         "executor_dir": shlex.quote(executor_dir.as_posix()),
+        "mcp_config": shlex.quote(mcp_config_path.as_posix()) if mcp_config_path is not None else "",
     }
     command = Template(template).safe_substitute(values)
     return ["/bin/sh", "-lc", command]
