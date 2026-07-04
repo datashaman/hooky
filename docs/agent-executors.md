@@ -95,6 +95,16 @@ doesn't know if your agent even speaks MCP), so it just always writes the
 config file and exposes its path as `$mcp_config` (see the Shell section
 below) — wiring it up is opt-in.
 
+Registration is additive with one exception: the server name itself, `hooky`,
+is reserved. If a project's `.mcp.json` (or a user's global config) already
+defines its own server named `hooky`, Hooky's injected entry wins outright
+for that invocation — confirmed empirically for both codex (`-c` overrides
+the existing `mcp_servers.hooky` table) and claude (`--mcp-config`'s `hooky`
+entry is used, not merged with the project's). The user's config file itself
+is never modified; their own `hooky` entry is just shadowed for that one run.
+This only matters if a server happens to be named exactly `hooky`, which is
+unlikely outside of this exact scenario.
+
 The server itself is spawned by codex/claude (or your own command, for
 shell), not by Hooky; `hooky mcp-serve --config <path>` reads
 `executor/<role>/mcp_config.json` (written before the executor process
