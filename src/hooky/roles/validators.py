@@ -175,12 +175,18 @@ def taste_rubric_is_substantive(contract: str) -> bool:
     rubric = markdown_section(contract, "Taste Rubric").lower()
     if not rubric:
         return False
-    placeholders = ("optional", "required only", "subjective quality matters", "_")
     stripped = re.sub(r"[\s_*`.-]+", " ", rubric).strip()
     if not stripped:
         return False
     if all(term in rubric for term in ("optional", "subjective")) and len(stripped) < 120:
         return False
+    # An explicit "not applicable"/"n/a" disclaimer overrides the axis-keyword
+    # scan below - otherwise a sentence like "no canonical-template reference
+    # to grade against" gets misread as a substantive rubric just because it
+    # contains the word "reference", even though it's a negation.
+    if re.search(r"\bnot applicable\b|\bn/a\b", stripped):
+        return False
+    placeholders = ("optional", "required only", "subjective quality matters", "_")
     if any(axis in rubric for axis in ("design", "originality", "craft", "functionality", "weight", "reference")):
         return True
     return not any(term in rubric for term in placeholders)
