@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from hooky.shared.github_event import derive_run_from_event, determine_mode, fold_issue_comments, parse_hooky_comment, should_trigger_event
+from hooky.shared.github_event import derive_run_from_event, determine_mode, fold_issue_comments, is_authorized_comment_actor, parse_hooky_comment, should_trigger_event
 
 
 class ShouldTriggerEventTests(unittest.TestCase):
@@ -18,13 +18,31 @@ class ShouldTriggerEventTests(unittest.TestCase):
         self.assertTrue(should_trigger_event({"label": {"name": "hooky:run"}}, "pull_request"))
         self.assertFalse(should_trigger_event({"label": {"name": "bug"}}, "pull_request"))
 
-    def test_issue_comment_requires_hooky_prefix(self) -> None:
-        self.assertTrue(should_trigger_event({"comment": {"body": "/hooky do it"}}, "issue_comment"))
-        self.assertFalse(should_trigger_event({"comment": {"body": "not a command"}}, "issue_comment"))
+    def test_issue_comment_requires_hooky_prefix_and_authorized_author(self) -> None:
+        event = {"comment": {"body": "/hooky do it", "author_association": "OWNER"}}
+        self.assertTrue(should_trigger_event(event, "issue_comment"))
+        self.assertFalse(should_trigger_event({"comment": {"body": "not a command", "author_association": "OWNER"}}, "issue_comment"))
         self.assertFalse(should_trigger_event({}, "issue_comment"))
+
+    def test_issue_comment_from_unauthorized_actor_does_not_trigger(self) -> None:
+        event = {"comment": {"body": "/hooky run", "author_association": "NONE"}}
+        self.assertFalse(should_trigger_event(event, "issue_comment"))
 
     def test_unknown_event_name_does_not_trigger(self) -> None:
         self.assertFalse(should_trigger_event({"comment": {"body": "/hooky"}}, "push"))
+
+
+class IsAuthorizedCommentActorTests(unittest.TestCase):
+    def test_owner_member_and_collaborator_are_authorized(self) -> None:
+        for association in ("OWNER", "MEMBER", "COLLABORATOR"):
+            self.assertTrue(is_authorized_comment_actor({"comment": {"author_association": association}}))
+
+    def test_contributor_and_first_timers_are_not_authorized(self) -> None:
+        for association in ("CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE", ""):
+            self.assertFalse(is_authorized_comment_actor({"comment": {"author_association": association}}))
+
+    def test_missing_comment_is_not_authorized(self) -> None:
+        self.assertFalse(is_authorized_comment_actor({}))
 
 
 class ParseHookyCommentTests(unittest.TestCase):

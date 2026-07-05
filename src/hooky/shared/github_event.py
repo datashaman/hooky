@@ -31,6 +31,8 @@ from typing import Any
 
 HOOKY_COMMENT_KEYWORDS = {"run", "go", "review"}
 
+AUTHORIZED_COMMENT_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
 
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -76,9 +78,26 @@ def determine_mode(event: dict[str, Any], event_name: str) -> str:
     return ""
 
 
+def is_authorized_comment_actor(event: dict[str, Any]) -> bool:
+    """Only OWNER/MEMBER/COLLABORATOR comments may trigger a run.
+
+    Labeled-event triggers don't need this check: applying a label already
+    requires Triage+ repo permission under GitHub's own model. Anyone can
+    comment on a public issue/PR, though, so `/hooky` comments need an
+    explicit allowlist to keep arbitrary commenters from spending model
+    budget or pushing branches.
+    """
+    comment = as_dict(event.get("comment"))
+    return str(comment.get("author_association") or "") in AUTHORIZED_COMMENT_ASSOCIATIONS
+
+
 def should_trigger_event(event: dict[str, Any], event_name: str) -> bool:
     """Match the `if:` condition on the Hooky workflow's `run` job."""
-    return determine_mode(event, event_name) != ""
+    if determine_mode(event, event_name) == "":
+        return False
+    if event_name == "issue_comment":
+        return is_authorized_comment_actor(event)
+    return True
 
 
 def fold_issue_comments(proposal: str, comment_bodies: list[str]) -> str:
