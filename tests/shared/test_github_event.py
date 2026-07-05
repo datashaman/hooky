@@ -10,13 +10,21 @@ class ShouldTriggerEventTests(unittest.TestCase):
         self.assertTrue(should_trigger_event({}, "workflow_dispatch"))
 
     def test_issues_requires_hooky_run_label(self) -> None:
-        self.assertTrue(should_trigger_event({"label": {"name": "hooky:run"}}, "issues"))
-        self.assertFalse(should_trigger_event({"label": {"name": "bug"}}, "issues"))
+        self.assertTrue(should_trigger_event({"action": "labeled", "label": {"name": "hooky:run"}}, "issues"))
+        self.assertFalse(should_trigger_event({"action": "labeled", "label": {"name": "bug"}}, "issues"))
         self.assertFalse(should_trigger_event({}, "issues"))
 
+    def test_issues_unlabeling_hooky_run_does_not_trigger(self) -> None:
+        # Removing the label carries the same `label` payload as adding it;
+        # only the `labeled` action should count as a trigger.
+        self.assertFalse(should_trigger_event({"action": "unlabeled", "label": {"name": "hooky:run"}}, "issues"))
+
     def test_pull_request_requires_hooky_run_label(self) -> None:
-        self.assertTrue(should_trigger_event({"label": {"name": "hooky:run"}}, "pull_request"))
-        self.assertFalse(should_trigger_event({"label": {"name": "bug"}}, "pull_request"))
+        self.assertTrue(should_trigger_event({"action": "labeled", "label": {"name": "hooky:run"}}, "pull_request"))
+        self.assertFalse(should_trigger_event({"action": "labeled", "label": {"name": "bug"}}, "pull_request"))
+
+    def test_pull_request_unlabeling_hooky_run_does_not_trigger(self) -> None:
+        self.assertFalse(should_trigger_event({"action": "unlabeled", "label": {"name": "hooky:run"}}, "pull_request"))
 
     def test_issue_comment_requires_hooky_prefix_and_authorized_author(self) -> None:
         event = {"comment": {"body": "/hooky do it", "author_association": "OWNER"}}
@@ -61,12 +69,20 @@ class DetermineModeTests(unittest.TestCase):
         self.assertEqual(determine_mode({}, "workflow_dispatch"), "implement")
 
     def test_issue_label_is_implement(self) -> None:
-        self.assertEqual(determine_mode({"label": {"name": "hooky:run"}}, "issues"), "implement")
-        self.assertEqual(determine_mode({"label": {"name": "bug"}}, "issues"), "")
+        self.assertEqual(determine_mode({"action": "labeled", "label": {"name": "hooky:run"}}, "issues"), "implement")
+        self.assertEqual(determine_mode({"action": "labeled", "label": {"name": "bug"}}, "issues"), "")
+
+    def test_issue_unlabel_of_hooky_run_does_not_trigger(self) -> None:
+        # GitHub includes the same `label` object for `unlabeled` deliveries;
+        # only `action == "labeled"` should count.
+        self.assertEqual(determine_mode({"action": "unlabeled", "label": {"name": "hooky:run"}}, "issues"), "")
 
     def test_pull_request_label_is_review_only(self) -> None:
-        self.assertEqual(determine_mode({"label": {"name": "hooky:run"}}, "pull_request"), "review")
-        self.assertEqual(determine_mode({"label": {"name": "bug"}}, "pull_request"), "")
+        self.assertEqual(determine_mode({"action": "labeled", "label": {"name": "hooky:run"}}, "pull_request"), "review")
+        self.assertEqual(determine_mode({"action": "labeled", "label": {"name": "bug"}}, "pull_request"), "")
+
+    def test_pull_request_unlabel_of_hooky_run_does_not_trigger(self) -> None:
+        self.assertEqual(determine_mode({"action": "unlabeled", "label": {"name": "hooky:run"}}, "pull_request"), "")
 
     def test_freeform_comment_on_issue_is_refine(self) -> None:
         event = {"issue": {"number": 1}, "comment": {"body": "/hooky also handle nulls"}}

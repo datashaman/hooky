@@ -57,9 +57,13 @@ def determine_mode(event: dict[str, Any], event_name: str) -> str:
     if event_name == "workflow_dispatch":
         return "implement"
     if event_name == "issues":
+        if event.get("action") != "labeled":
+            return ""
         label = as_dict(event.get("label"))
         return "implement" if str(label.get("name") or "") == "hooky:run" else ""
     if event_name == "pull_request":
+        if event.get("action") != "labeled":
+            return ""
         label = as_dict(event.get("label"))
         return "review" if str(label.get("name") or "") == "hooky:run" else ""
     if event_name == "issue_comment":

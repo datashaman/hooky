@@ -74,6 +74,17 @@ class ListenServerTests(unittest.TestCase):
         self.assertEqual(status, 202)
         run_mock.assert_not_called()
 
+    def test_unlabeling_hooky_run_does_not_spawn_subprocess(self) -> None:
+        _server, port = self.start_server()
+        body = json.dumps({"action": "unlabeled", "label": {"name": "hooky:run"}, "issue": {"number": 12, "title": "Broken link"}}).encode()
+
+        with mock.patch.object(subprocess, "run") as run_mock:
+            status = self.post(port, body, event="issues")
+            time.sleep(0.2)
+
+        self.assertEqual(status, 202)
+        run_mock.assert_not_called()
+
     def test_missing_signature_is_rejected_when_secret_configured(self) -> None:
         _server, port = self.start_server(secret="topsecret")
         body = json.dumps({"label": {"name": "hooky:run"}, "issue": {"number": 1}}).encode()
@@ -84,7 +95,7 @@ class ListenServerTests(unittest.TestCase):
 
     def test_triggering_event_spawns_hooky_run_subprocess(self) -> None:
         _server, port = self.start_server()
-        body = json.dumps({"label": {"name": "hooky:run"}, "issue": {"number": 12, "title": "Broken link"}}).encode()
+        body = json.dumps({"action": "labeled", "label": {"name": "hooky:run"}, "issue": {"number": 12, "title": "Broken link"}}).encode()
 
         with mock.patch.object(subprocess, "run") as run_mock:
             run_mock.return_value = subprocess.CompletedProcess([], 0)
