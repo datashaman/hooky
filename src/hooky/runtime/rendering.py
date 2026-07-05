@@ -77,7 +77,7 @@ def safe_path_segment(value: str) -> str:
 def append_live_event(runtime: ToolRuntime, line: str) -> None:
     targets: list[tuple[Path, str]] = []
     if runtime.live_log_root is not None:
-        targets.append((runtime.live_log_root / "runtime_events.log", ""))
+        targets.append((runtime.live_log_root / "runtime_events.log", runtime.live_event_prefix))
     for path in runtime.live_event_log_paths:
         targets.append((path, runtime.live_event_prefix))
     for path, prefix in targets:

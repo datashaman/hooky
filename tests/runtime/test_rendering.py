@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 
 from hooky.runtime import (
+    ToolRuntime,
     active_todo_label,
+    append_live_event,
     assistant_message_text,
     assistant_reasoning_trace,
     canonical_tool_name,
@@ -230,6 +232,31 @@ class RenderingTests(unittest.TestCase):
             self.assertTrue((archive / "runtime_transcript.json").exists())
             archived = json.loads((archive / "runtime_transcript.json").read_text(encoding="utf-8"))
             self.assertEqual(archived[0]["message"]["content"], "plain text response")
+
+    def test_append_live_event_prefixes_the_live_log_root_file_with_role(self) -> None:
+        # live_log_root's runtime_events.log used to hardcode an empty prefix,
+        # so watching it live gave no indication of which Hooky role
+        # (planner/generator/evaluator) emitted a given line - unlike the
+        # separate aggregate log.runtime file, which already carried
+        # live_event_prefix. Both should show the same role tag.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = ToolRuntime(
+                working_folder=root,
+                final_report_schema={"type": "object"},
+                max_cost_usd=1,
+                max_seconds=30,
+                live_log_root=root / "traces",
+                live_event_log_paths=[root / "log.runtime"],
+                live_event_prefix="role=generator ",
+            )
+
+            append_live_event(runtime, "2026-07-01T00:00:00+00:00 run start executor=claude")
+
+            live_log_root_line = (root / "traces" / "runtime_events.log").read_text(encoding="utf-8")
+            aggregate_line = (root / "log.runtime").read_text(encoding="utf-8")
+            self.assertIn("role=generator run start", live_log_root_line)
+            self.assertEqual(live_log_root_line, aggregate_line)
 
 
 if __name__ == "__main__":
