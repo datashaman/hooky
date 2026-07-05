@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -43,6 +44,47 @@ class LoopStateTests(unittest.TestCase):
             self.assertEqual((workspace / "src/App.jsx").read_text(encoding="utf-8"), "before\n")
             self.assertFalse((workspace / "tests/stale.spec.js").exists())
             self.assertTrue((workspace / ".hooky/runs/local/log.md").exists())
+
+    def test_read_loop_state_passes_when_state_and_progress_agree(self) -> None:
+        cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
+
+        state = cli.read_loop_state(self.workspace)
+
+        self.assertEqual(state["status"], "initialized")
+
+    def test_read_loop_state_raises_on_current_attempt_mismatch(self) -> None:
+        cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
+        state = cli.read_loop_state(self.workspace)
+        state["current_attempt"] = "007"
+        cli.write_json(cli.loop_state_path(self.workspace), state)
+        # progress.md still says "current_attempt: none"
+
+        with self.assertRaises(cli.LoopStateConsistencyError) as ctx:
+            cli.read_loop_state(self.workspace)
+
+        self.assertIn("current_attempt", str(ctx.exception))
+        self.assertIn("007", str(ctx.exception))
+
+    def test_read_loop_state_raises_on_status_mismatch(self) -> None:
+        cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
+        state = cli.read_loop_state(self.workspace)
+        state["status"] = "attempt-running"
+        cli.write_json(cli.loop_state_path(self.workspace), state)
+        # progress.md still says "status: initialized"
+
+        with self.assertRaises(cli.LoopStateConsistencyError) as ctx:
+            cli.read_loop_state(self.workspace)
+
+        self.assertIn("attempt-running", str(ctx.exception))
+        self.assertIn("initialized", str(ctx.exception))
+
+    def test_read_loop_state_raises_on_truncated_state_json(self) -> None:
+        cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
+        # Simulate a process killed mid-write: state.json truncated to a partial write.
+        cli.loop_state_path(self.workspace).write_text('{"schema_version": 1, "status": "attempt-r', encoding="utf-8")
+
+        with self.assertRaises(json.JSONDecodeError):
+            cli.read_loop_state(self.workspace)
 
 
 if __name__ == "__main__":
