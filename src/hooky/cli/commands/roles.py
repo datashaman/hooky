@@ -24,6 +24,7 @@ from hooky.cli.loop_state import (
     write_loop_state,
 )
 from hooky.cli.paths import (
+    atomic_write_text,
     loop_contract_path,
     loop_feature_list_path,
     loop_log_path,
@@ -62,9 +63,9 @@ def loop_proposal(
     workspace = workspace_from_ctx(ctx)
     ensure_loop_initialized(workspace)
     proposal_text = read_body_arg_or_file(proposal, proposal_file)
-    loop_proposal_path(workspace).write_text(proposal_text.strip() + ("\n" if proposal_text.strip() else ""), encoding="utf-8")
+    atomic_write_text(loop_proposal_path(workspace), proposal_text.strip() + ("\n" if proposal_text.strip() else ""))
     path = loop_contract_path(workspace)
-    path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal_text), encoding="utf-8")
+    atomic_write_text(path, replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal_text))
     state = read_loop_state(workspace)
     state["status"] = "proposal-written"
     state["contract_accepted"] = False
@@ -114,7 +115,7 @@ def loop_propose_contract(
     ensure_loop_initialized(workspace)
     criteria = read_body_arg_or_file(body, body_file)
     path = loop_contract_path(workspace)
-    path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Done Criteria", criteria), encoding="utf-8")
+    atomic_write_text(path, replace_markdown_section(path.read_text(encoding="utf-8"), "Done Criteria", criteria))
     state = read_loop_state(workspace)
     state["status"] = "contract-proposed"
     state["contract_accepted"] = False

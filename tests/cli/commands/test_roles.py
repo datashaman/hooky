@@ -56,6 +56,9 @@ class RolesCommandsTests(unittest.TestCase):
         self.assertIn("Build a browser todo app.", contract)
         self.assertIn("Build a browser todo app.", proposal_artifact)
         self.assertIn("- Add todos", contract)
+        run_dir = self.workspace / ".hooky/runs/local"
+        leftover_tmp_files = [entry.name for entry in run_dir.iterdir() if entry.name.endswith(".tmp")]
+        self.assertEqual(leftover_tmp_files, [], "atomic writes for proposal/contract must not leave temp files behind")
         log = (self.workspace / ".hooky/runs/local/log.md").read_text(encoding="utf-8")
         self.assertIn("Missing route criteria.", log)
         state = cli.read_loop_state(self.workspace)

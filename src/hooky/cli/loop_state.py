@@ -73,9 +73,18 @@ def check_loop_state_consistency(workspace: Path, state: dict[str, Any]) -> None
     if not progress_text.strip():
         return
 
+    progress_attempt = _progress_field(progress_text, "current_attempt")
+    progress_status = _progress_field(progress_text, "status")
+    if progress_attempt is None and progress_status is None:
+        raise LoopStateConsistencyError(
+            f"loop state is inconsistent: {progress_path} has content but no recognizable "
+            "'- current_attempt: ...' or '- status: ...' entry could be extracted from it. "
+            "This can happen if the process was killed mid-write. Inspect "
+            f"{loop_state_path(workspace)} and {progress_path} and repair before resuming."
+        )
+
     state_attempt = state.get("current_attempt")
     state_attempt_str = str(state_attempt) if state_attempt is not None else "none"
-    progress_attempt = _progress_field(progress_text, "current_attempt")
     if progress_attempt is not None and progress_attempt != state_attempt_str:
         raise LoopStateConsistencyError(
             "loop state is inconsistent: state.json current_attempt="
@@ -85,7 +94,6 @@ def check_loop_state_consistency(workspace: Path, state: dict[str, Any]) -> None
         )
 
     state_status = str(state.get("status", "unknown"))
-    progress_status = _progress_field(progress_text, "status")
     if progress_status is not None and progress_status != state_status:
         raise LoopStateConsistencyError(
             f"loop state is inconsistent: state.json status={state_status!r} but "
@@ -99,7 +107,13 @@ def read_loop_state(workspace: Path) -> dict[str, Any]:
     path = loop_state_path(workspace)
     if not path.exists():
         raise typer.BadParameter("loop is not initialized. Run `hooky init` first.")
-    state = read_json(path)
+    try:
+        state = read_json(path)
+    except json.JSONDecodeError as exc:
+        raise LoopStateConsistencyError(
+            f"loop state file is corrupted (invalid JSON): {path}. This can happen if the "
+            f"process was killed mid-write. Original error: {exc}"
+        ) from exc
     check_loop_state_consistency(workspace, state)
     return state
 

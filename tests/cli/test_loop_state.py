@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import tempfile
@@ -83,8 +82,22 @@ class LoopStateTests(unittest.TestCase):
         # Simulate a process killed mid-write: state.json truncated to a partial write.
         cli.loop_state_path(self.workspace).write_text('{"schema_version": 1, "status": "attempt-r', encoding="utf-8")
 
-        with self.assertRaises(json.JSONDecodeError):
+        with self.assertRaises(cli.LoopStateConsistencyError) as ctx:
             cli.read_loop_state(self.workspace)
+
+        self.assertIn(str(cli.loop_state_path(self.workspace)), str(ctx.exception))
+
+    def test_read_loop_state_raises_on_malformed_progress_with_no_recognizable_entry(self) -> None:
+        cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
+        # progress.md is non-empty but has no "- current_attempt: ..." / "- status: ..." line,
+        # simulating a kill mid-write to progress.md that left unrelated/garbage prose behind.
+        cli.loop_progress_path(self.workspace).write_text("garbage prose with no recognizable fields\n", encoding="utf-8")
+
+        with self.assertRaises(cli.LoopStateConsistencyError) as ctx:
+            cli.read_loop_state(self.workspace)
+
+        self.assertIn(str(cli.loop_progress_path(self.workspace)), str(ctx.exception))
+        self.assertIn("no recognizable", str(ctx.exception))
 
 
 if __name__ == "__main__":

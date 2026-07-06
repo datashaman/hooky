@@ -54,6 +54,18 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(len(tmp_files), 1)
         self.assertTrue(tmp_files[0].name.endswith(".tmp"))
 
+    def test_crash_during_write_leaves_no_leftover_and_original_intact(self) -> None:
+        target = self.workspace / "state.json"
+        target.write_text("original\n", encoding="utf-8")
+
+        with mock.patch("os.fsync", side_effect=OSError("simulated crash while fsyncing")):
+            with self.assertRaises(OSError):
+                cli.atomic_write_text(target, "new-content\n")
+
+        self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
+        entries = sorted(p.name for p in self.workspace.iterdir())
+        self.assertEqual(entries, ["state.json"])
+
     def test_write_json_uses_atomic_helper_and_leaves_no_leftovers(self) -> None:
         target = self.workspace / "feature_list.json"
 
