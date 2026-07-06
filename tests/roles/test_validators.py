@@ -146,6 +146,46 @@ class ValidatorsTests(unittest.TestCase):
                 root,
             )
 
+    def test_taste_rubric_not_applicable_disclaimer_is_not_substantive_despite_axis_words(self) -> None:
+        # "reference" is one of the axis-keyword triggers, but here it appears
+        # inside a negation ("no ... reference to grade against") as part of an
+        # explicit not-applicable disclaimer for a backend-only task. That must
+        # not be misread as a substantive rubric.
+        contract = (
+            "# Loop Contract\n\n"
+            "## Done Criteria\n\n- Add an atomic-write helper.\n\n"
+            "## Taste Rubric\n\n"
+            "_Not applicable: this proposal is a backend durability/consistency fix "
+            "with no visual, UI, or canonical-template reference to grade against._\n"
+        )
+
+        self.assertFalse(roles.taste_rubric_is_substantive(contract))
+
+    def test_evaluator_attempt_does_not_require_rubric_scores_for_not_applicable_rubric(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            loop_dir = root / ".hooky/runs/local"
+            loop_dir.mkdir(parents=True)
+            (loop_dir / "contract.md").write_text(
+                "# Loop Contract\n\n"
+                "## Done Criteria\n\n- Add an atomic-write helper.\n\n"
+                "## Taste Rubric\n\n"
+                "_Not applicable: this proposal is a backend durability/consistency fix "
+                "with no visual, UI, or canonical-template reference to grade against._\n",
+                encoding="utf-8",
+            )
+
+            roles.validate_evaluator_attempt_report(
+                {
+                    "status": "pass",
+                    "recommendation": "continue",
+                    "bottleneck": "none",
+                    "findings": [],
+                    "score": 0.9,
+                },
+                root,
+            )
+
     def test_evaluator_attempt_requires_non_empty_bottleneck(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

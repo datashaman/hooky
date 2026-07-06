@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from typing import Any
 import typer
 
 from hooky.cli.paths import (
+    atomic_write_text,
     loop_attempt_dir,
     loop_contract_path,
     loop_dir,
@@ -26,6 +28,10 @@ from hooky.cli.paths import (
     write_json,
 )
 from hooky.cli.validation import enforce_loop_evaluator_evidence
+
+
+class LoopStateConsistencyError(typer.BadParameter):
+    """Raised when state.json and progress.md disagree about the current attempt."""
 
 
 def default_loop_feature_list() -> dict[str, Any]:
@@ -44,11 +50,81 @@ def default_loop_state() -> dict[str, Any]:
     }
 
 
+def _progress_field(progress_text: str, field: str) -> str | None:
+    prefix = f"- {field}: "
+    for line in progress_text.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return None
+
+
+# state.json and progress.md are written as two separate atomic writes (see
+# record_loop_transition), so a reader can legitimately observe progress.md a
+# few milliseconds behind state.json even when nothing crashed -- e.g. `hooky
+# loop status` running concurrently in another terminal. Retrying briefly
+# lets that normal race resolve itself; a genuinely killed process leaves a
+# permanent mismatch that survives every retry and still raises.
+_CONSISTENCY_CHECK_RETRIES = 3
+_CONSISTENCY_CHECK_RETRY_DELAY_SECONDS = 0.02
+
+
+def _consistency_mismatch(workspace: Path, state: dict[str, Any]) -> str | None:
+    """Return a description of a state.json/progress.md disagreement, or ``None`` if consistent."""
+    progress_path = loop_progress_path(workspace)
+    if not progress_path.exists():
+        return None
+    progress_text = progress_path.read_text(encoding="utf-8")
+
+    progress_attempt = _progress_field(progress_text, "current_attempt")
+    progress_status = _progress_field(progress_text, "status")
+    if progress_attempt is None or progress_status is None:
+        return f"{progress_path} has no recognizable '- current_attempt: ...' and '- status: ...' entries (it may be blank or truncated)."
+
+    state_attempt = state.get("current_attempt")
+    state_attempt_str = str(state_attempt) if state_attempt is not None else "none"
+    if progress_attempt != state_attempt_str:
+        return f"state.json current_attempt={state_attempt_str!r} but progress.md current_attempt={progress_attempt!r}."
+
+    state_status = str(state.get("status", "unknown"))
+    if progress_status != state_status:
+        return f"state.json status={state_status!r} but progress.md status={progress_status!r}."
+
+    return None
+
+
+def check_loop_state_consistency(workspace: Path, state: dict[str, Any]) -> None:
+    """Cross-check ``state.json`` against ``progress.md`` before a resume continues.
+
+    ``progress.md`` is rendered from state on every transition (see
+    ``write_loop_progress``), so on a healthy resume the two must agree on the
+    current attempt id and status. A killed process mid-write can leave one
+    file updated and the other stale/truncated; raise loudly rather than
+    silently trusting ``state.json``. A brief retry absorbs the normal race
+    where a concurrent writer's second atomic write hasn't landed yet.
+    """
+    mismatch = _consistency_mismatch(workspace, state)
+    attempt = 0
+    while mismatch is not None and attempt < _CONSISTENCY_CHECK_RETRIES:
+        time.sleep(_CONSISTENCY_CHECK_RETRY_DELAY_SECONDS)
+        mismatch = _consistency_mismatch(workspace, state)
+        attempt += 1
+    if mismatch is not None:
+        progress_path = loop_progress_path(workspace)
+        raise LoopStateConsistencyError(
+            f"loop state is inconsistent: {mismatch} This can happen if the process was killed mid-write. Inspect {loop_state_path(workspace)} and {progress_path} and repair before resuming."
+        )
+
+
 def read_loop_state(workspace: Path) -> dict[str, Any]:
     path = loop_state_path(workspace)
     if not path.exists():
         raise typer.BadParameter("loop is not initialized. Run `hooky init` first.")
-    return read_json(path)
+    try:
+        state = read_json(path)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        raise LoopStateConsistencyError(f"loop state file is corrupted or unreadable: {path}. This can happen if the process was killed mid-write. Original error: {exc}") from exc
+    check_loop_state_consistency(workspace, state)
+    return state
 
 
 def write_loop_state(workspace: Path, state: dict[str, Any]) -> None:
@@ -127,7 +203,7 @@ def write_loop_progress(workspace: Path, state: dict[str, Any], *, note: str | N
             if not isinstance(attempt, dict):
                 continue
             lines.append(f"- {attempt.get('id')}: {attempt.get('status')} ({attempt.get('started_at')})")
-    loop_progress_path(workspace).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(loop_progress_path(workspace), "\n".join(lines) + "\n")
 
 
 def record_loop_transition(workspace: Path, state: dict[str, Any], *, note: str, log_op: str, log_title: str, log_body: str = "") -> None:
@@ -157,9 +233,9 @@ def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str =
     loop_root.mkdir(parents=True, exist_ok=True)
     write_json(loop_feature_list_path(workspace), default_loop_feature_list())
     proposal_artifact = proposal.strip() or (title or "").strip()
-    loop_proposal_path(workspace).write_text(
+    atomic_write_text(
+        loop_proposal_path(workspace),
         proposal_artifact + ("\n" if proposal_artifact else ""),
-        encoding="utf-8",
     )
     state = default_loop_state()
     state["run_key"] = run_key
@@ -182,9 +258,9 @@ def initialize_loop_files(workspace: Path, *, title: str | None, proposal: str =
             "",
         ]
     )
-    loop_contract_path(workspace).write_text("\n".join(contract_lines), encoding="utf-8")
+    atomic_write_text(loop_contract_path(workspace), "\n".join(contract_lines))
     write_loop_progress(workspace, state, note="Loop initialized.")
-    loop_log_path(workspace).write_text("", encoding="utf-8")
+    atomic_write_text(loop_log_path(workspace), "")
     append_loop_log(workspace, "init", "loop initialized", f"workspace: {workspace}")
     return loop_root
 
@@ -207,7 +283,7 @@ def initialize_light_implementation_files(workspace: Path, *, proposal: str) -> 
             "features": [{"id": "F001", "text": proposal_text, "proposal_refs": [], "status": "pending"}] if proposal_text else [],
         },
     )
-    loop_proposal_path(workspace).write_text(proposal_text + ("\n" if proposal_text else ""), encoding="utf-8")
+    atomic_write_text(loop_proposal_path(workspace), proposal_text + ("\n" if proposal_text else ""))
     state = default_loop_state()
     state["run_key"] = run_key
     state["created_at"] = utc_now()
@@ -215,9 +291,9 @@ def initialize_light_implementation_files(workspace: Path, *, proposal: str) -> 
     state["status"] = "contract-accepted"
     write_loop_state(workspace, state)
     contract_lines = ["# Loop Contract", "", "## Done Criteria", "", proposal_text or "_(no proposal text provided)_", ""]
-    loop_contract_path(workspace).write_text("\n".join(contract_lines), encoding="utf-8")
+    atomic_write_text(loop_contract_path(workspace), "\n".join(contract_lines))
     write_loop_progress(workspace, state, note="Light implement: contract set directly from the request, no negotiation.")
-    loop_log_path(workspace).write_text("", encoding="utf-8")
+    atomic_write_text(loop_log_path(workspace), "")
     append_loop_log(workspace, "init", "light-implement initialized", f"workspace: {workspace}")
     return loop_root
 

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -143,9 +144,43 @@ def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def write_json(path: Path, payload: dict[str, Any]) -> None:
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write ``data`` to ``path`` atomically.
+
+    Writes to a temp file in the same directory as ``path``, fsyncs it, then
+    ``os.replace``s it onto the target. A crash before the replace leaves the
+    prior contents of ``path`` untouched; a crash after leaves the new
+    contents fully written. Either way ``path`` never contains a partial write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        # mkstemp creates the temp file at mode 0600; os.replace would carry that
+        # onto the target, silently tightening permissions relative to the
+        # umask-based mode a plain open()/write_text() call would have produced.
+        os.chmod(tmp_name, 0o644)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    # A crash/exception past this point (including os.replace itself failing)
+    # leaves the stray temp file on disk and the target untouched -- matching
+    # what a killed process would actually leave behind.
+    os.replace(tmp_name, path)
+
+
+def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    atomic_write_bytes(path, text.encode(encoding))
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def loop_attempt_dir(workspace: Path, attempt_id: str) -> Path:

@@ -623,6 +623,9 @@ class RunCommandsTests(unittest.TestCase):
         contract = (self.workspace / ".hooky/runs/local/contract.md").read_text(encoding="utf-8")
         self.assertIn("Build a TodoMVC-style app.", contract)
         self.assertIn("- Persist todos", contract)
+        run_dir = self.workspace / ".hooky/runs/local"
+        leftover_tmp_files = [entry.name for entry in run_dir.iterdir() if entry.name.endswith(".tmp")]
+        self.assertEqual(leftover_tmp_files, [], "atomic writes for contract.md must not leave temp files behind")
 
     def test_loop_run_can_record_restart_recommendation(self) -> None:
         result = CliRunner().invoke(

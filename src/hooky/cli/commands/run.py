@@ -35,6 +35,7 @@ from hooky.cli.loop_state import (
 )
 from hooky.cli.paths import (
     DEFAULT_LAST_RUN_PATH,
+    atomic_write_text,
     ensure_workspace_ready,
     loop_contract_path,
     loop_dir,
@@ -119,7 +120,7 @@ def _run_model_loop_once(
         initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
     elif proposal:
         path = loop_contract_path(workspace)
-        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal), encoding="utf-8")
+        atomic_write_text(path, replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal))
 
     state = read_loop_state(workspace)
     planner_report, planner_usage = run_model_role_with_retries(
@@ -489,16 +490,16 @@ def loop_run(
         initialize_loop_files(workspace, title=title, proposal=proposal, force=force)
     elif proposal:
         path = loop_contract_path(workspace)
-        path.write_text(replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal), encoding="utf-8")
+        atomic_write_text(path, replace_markdown_section(path.read_text(encoding="utf-8"), "Proposal", proposal))
     if status not in {"pass", "fail"}:
         raise typer.BadParameter("status must be pass or fail")
     if recommendation not in {"continue", "restart-attempt", "restart-contract", "stop"}:
         raise typer.BadParameter("recommendation must be continue, restart-attempt, restart-contract, or stop")
 
     contract_path = loop_contract_path(workspace)
-    contract_path.write_text(
+    atomic_write_text(
+        contract_path,
         replace_markdown_section(contract_path.read_text(encoding="utf-8"), "Done Criteria", criteria),
-        encoding="utf-8",
     )
     append_loop_log(workspace, "generator", "contract proposed", criteria)
     state = read_loop_state(workspace)
