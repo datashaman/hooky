@@ -155,6 +155,10 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
+        # mkstemp creates the temp file at mode 0600; os.replace would carry that
+        # onto the target, silently tightening permissions relative to the
+        # umask-based mode a plain open()/write_text() call would have produced.
+        os.chmod(tmp_name, 0o644)
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()

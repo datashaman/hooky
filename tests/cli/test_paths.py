@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,6 +67,19 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "original\n")
         entries = sorted(p.name for p in self.workspace.iterdir())
         self.assertEqual(entries, ["state.json"])
+
+    def test_write_does_not_tighten_permissions_to_mkstemp_default(self) -> None:
+        # tempfile.mkstemp creates its temp file at mode 0600; without an explicit
+        # chmod, os.replace would carry that mode onto the target, silently
+        # tightening permissions relative to a plain open()/write_text() call.
+        target = self.workspace / "state.json"
+        target.write_text("original\n", encoding="utf-8")
+        os.chmod(target, 0o644)
+
+        cli.atomic_write_text(target, "new-content\n")
+
+        mode = stat.S_IMODE(os.stat(target).st_mode)
+        self.assertEqual(mode, 0o644)
 
     def test_write_json_uses_atomic_helper_and_leaves_no_leftovers(self) -> None:
         target = self.workspace / "feature_list.json"
