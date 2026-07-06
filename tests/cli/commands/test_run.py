@@ -425,11 +425,15 @@ class RunCommandsTests(unittest.TestCase):
             )
 
         self.assertEqual(result.exit_code, 1, result.output)
-        self.assertIn("status: contract-rejected", result.output)
+        self.assertIn("status: restart-contract", result.output)
         self.assertEqual(contract_calls, 5)
         self.assertEqual(review_calls, 5)
         log = (self.workspace / ".hooky/runs/local/log.md").read_text(encoding="utf-8")
         self.assertIn("contract rejected round 5", log)
+        self.assertIn("contract negotiation round cap exhausted", log)
+        state = cli.read_loop_state(self.workspace)
+        self.assertEqual(state["status"], "restart-contract")
+        self.assertFalse(state["contract_accepted"])
 
     def test_loop_run_retries_attempts_with_evaluator_feedback(self) -> None:
         runner = CliRunner()

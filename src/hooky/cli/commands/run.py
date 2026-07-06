@@ -199,8 +199,27 @@ def _run_model_loop_once(
         if accepted:
             break
     if not accepted:
+        # Hitting the round cap without acceptance is not the same as a single
+        # rejected round: the generator/evaluator converged on stopping rather
+        # than on a sound contract. Escalate to the same restart-contract state
+        # used for a mid-attempt evaluator veto, rather than leaving status at
+        # the last round's plain "contract-rejected" (which reads as "try once
+        # more"), so a human has to look at it before anything else proceeds.
+        state = read_loop_state(workspace)
+        state["status"] = "restart-contract"
+        state["contract_accepted"] = False
+        state["last_action"] = "run:contract-rounds-exhausted"
+        note = f"Contract negotiation exhausted the round cap ({max_contract_rounds}) without evaluator acceptance. Escalating to restart-contract for human review. Last review: {review}"
+        record_loop_transition(
+            workspace,
+            state,
+            note=note,
+            log_op="loop-runner",
+            log_title="contract negotiation round cap exhausted",
+            log_body=note,
+        )
         write_last_run_workspace(last_run_path, workspace)
-        typer.echo("status: contract-rejected")
+        typer.echo("status: restart-contract")
         typer.echo(f"rounds: {max_contract_rounds}")
         typer.echo(f"review: {review}")
         raise typer.Exit(1)
