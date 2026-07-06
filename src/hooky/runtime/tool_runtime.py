@@ -318,10 +318,7 @@ class ToolRuntime(
             ),
             tool_schema(
                 "append_evidence_interaction",
-                (
-                    "Drive a page with a scripted action sequence, capture the resulting screenshot and metrics, "
-                    "and append the steps, image, and metrics to the system-owned evidence report."
-                ),
+                ("Drive a page with a scripted action sequence, capture the resulting screenshot and metrics, and append the steps, image, and metrics to the system-owned evidence report."),
                 {
                     "url": string_schema(default=""),
                     "title": string_schema(default="Interaction evidence"),

@@ -110,10 +110,7 @@ def read_loop_state(workspace: Path) -> dict[str, Any]:
     try:
         state = read_json(path)
     except json.JSONDecodeError as exc:
-        raise LoopStateConsistencyError(
-            f"loop state file is corrupted (invalid JSON): {path}. This can happen if the "
-            f"process was killed mid-write. Original error: {exc}"
-        ) from exc
+        raise LoopStateConsistencyError(f"loop state file is corrupted (invalid JSON): {path}. This can happen if the process was killed mid-write. Original error: {exc}") from exc
     check_loop_state_consistency(workspace, state)
     return state
 

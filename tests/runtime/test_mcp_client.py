@@ -9,7 +9,7 @@ from pathlib import Path
 from hooky.runtime import mcp_client
 from hooky.runtime.tool_runtime import ToolRuntime
 
-FIXTURE_SERVER = '''
+FIXTURE_SERVER = """
 import asyncio
 from mcp import types
 from mcp.server.lowlevel import Server
@@ -38,7 +38,7 @@ async def main():
         await server.run(r, w, server.create_initialization_options())
 
 asyncio.run(main())
-'''
+"""
 
 
 def write_fixture_server(root: Path) -> Path:
