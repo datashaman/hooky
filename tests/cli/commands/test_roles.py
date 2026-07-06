@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -190,6 +192,64 @@ class RolesCommandsTests(unittest.TestCase):
         self.assertEqual(state["bottleneck"], "generator_trajectory")
         progress = (self.workspace / ".hooky/runs/local/progress.md").read_text(encoding="utf-8")
         self.assertIn("generator_trajectory", progress)
+
+    def test_start_attempt_blocks_when_recorded_pid_is_still_alive(self) -> None:
+        runner = CliRunner()
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
+        # The just-started attempt's pid is this test process, which is alive.
+
+        result = runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("attempt already active", result.output)
+        state = cli.read_loop_state(self.workspace)
+        self.assertEqual(state["current_attempt"], "001")
+
+    def test_start_attempt_recovers_orphaned_attempt_with_dead_pid(self) -> None:
+        # Simulate a crash mid-attempt (issue #10): current_attempt is stuck set,
+        # but the process that set it (recorded as a pid) is no longer running.
+        runner = CliRunner()
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
+        dead_process = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead_pid = dead_process.pid
+        dead_process.wait()
+
+        state = cli.read_loop_state(self.workspace)
+        state["attempts"][0]["pid"] = dead_pid
+        cli.write_json(cli.loop_state_path(self.workspace), state)
+
+        result = runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        state = cli.read_loop_state(self.workspace)
+        self.assertEqual(state["current_attempt"], "002")
+        self.assertEqual(state["attempts"][0]["status"], "orphaned")
+        log = (self.workspace / ".hooky/runs/local/log.md").read_text(encoding="utf-8")
+        self.assertIn("orphaned", log)
+        self.assertIn(str(dead_pid), log)
+
+    def test_start_attempt_recovers_attempt_missing_pid_field(self) -> None:
+        # Attempts created before pid tracking existed have no "pid" field at all;
+        # treat that the same as a dead pid instead of blocking forever.
+        runner = CliRunner()
+        runner.invoke(cli.app, ["-C", str(self.workspace), "init"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "accept-contract"])
+        runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
+
+        state = cli.read_loop_state(self.workspace)
+        del state["attempts"][0]["pid"]
+        cli.write_json(cli.loop_state_path(self.workspace), state)
+
+        result = runner.invoke(cli.app, ["-C", str(self.workspace), "start-attempt"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        state = cli.read_loop_state(self.workspace)
+        self.assertEqual(state["current_attempt"], "002")
+        self.assertEqual(state["attempts"][0]["status"], "orphaned")
 
     def test_loop_generator_implement_command_runs_role_for_active_attempt(self) -> None:
         runner = CliRunner()
