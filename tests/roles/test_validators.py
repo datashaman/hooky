@@ -186,6 +186,55 @@ class ValidatorsTests(unittest.TestCase):
                 root,
             )
 
+    def test_parse_taste_rubric_weights_extracts_axis_weight_pairs(self) -> None:
+        contract = (
+            "# Loop Contract\n\n"
+            "## Done Criteria\n\n- Build a polished dashboard.\n\n"
+            "## Taste Rubric\n\n"
+            "- design weight 0.35: calm, legible hierarchy\n"
+            "- originality weight 0.15: not a generic template\n"
+            "- craft weight 0.25: aligned spacing and refined states\n"
+            "- functionality weight 0.25: workflows remain clear\n"
+        )
+
+        weights = roles.parse_taste_rubric_weights(contract)
+
+        self.assertEqual(weights, {"design": 0.35, "originality": 0.15, "craft": 0.25, "functionality": 0.25})
+        self.assertTrue(roles.taste_rubric_weights_are_valid(contract))
+
+    def test_taste_rubric_weights_are_invalid_when_they_do_not_sum_to_one(self) -> None:
+        contract = (
+            "# Loop Contract\n\n"
+            "## Done Criteria\n\n- Build a polished dashboard.\n\n"
+            "## Taste Rubric\n\n"
+            "- design weight 0.5: calm, legible hierarchy\n"
+            "- originality weight 0.1: not a generic template\n"
+            "- craft weight 0.1: aligned spacing and refined states\n"
+            "- functionality weight 0.1: workflows remain clear\n"
+        )
+
+        self.assertFalse(roles.taste_rubric_weights_are_valid(contract))
+
+    def test_taste_rubric_weights_are_invalid_when_an_axis_is_missing(self) -> None:
+        contract = (
+            "# Loop Contract\n\n"
+            "## Done Criteria\n\n- Build a polished dashboard.\n\n"
+            "## Taste Rubric\n\n"
+            "- design weight 0.5: calm, legible hierarchy\n"
+            "- craft weight 0.5: aligned spacing and refined states\n"
+        )
+
+        self.assertFalse(roles.taste_rubric_weights_are_valid(contract))
+
+    def test_taste_rubric_weights_are_invalid_when_axis_keywords_present_but_no_weights(self) -> None:
+        # taste_rubric_is_substantive would call this rubric substantive (it
+        # mentions the axis keywords), but no weights are actually parseable -
+        # the stricter scoring gate must not trust it.
+        contract = "# Loop Contract\n\n## Done Criteria\n\n- Build a polished dashboard.\n\n## Taste Rubric\n\nGrade design, originality, craft, and functionality holistically.\n"
+
+        self.assertTrue(roles.taste_rubric_is_substantive(contract))
+        self.assertFalse(roles.taste_rubric_weights_are_valid(contract))
+
     def test_evaluator_attempt_requires_non_empty_bottleneck(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

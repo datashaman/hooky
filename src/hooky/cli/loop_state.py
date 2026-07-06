@@ -28,7 +28,7 @@ from hooky.cli.paths import (
     utc_now,
     write_json,
 )
-from hooky.cli.validation import enforce_loop_evaluator_evidence
+from hooky.cli.validation import enforce_loop_evaluator_evidence, enforce_taste_rubric_scoring_gate
 
 
 class LoopStateConsistencyError(typer.BadParameter):
@@ -390,6 +390,7 @@ def apply_loop_evaluator_report(
     report_path: Path,
     action: str,
 ) -> dict[str, Any]:
+    report = enforce_taste_rubric_scoring_gate(workspace, report)
     report = enforce_loop_evaluator_evidence(workspace, attempt_id, report)
     write_json(report_path, report)
     status = str(report.get("status"))

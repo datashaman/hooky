@@ -123,12 +123,15 @@ def validate_evaluator_attempt_report(report: dict[str, Any], working_folder: Pa
         raise ValueError("failed evaluator report must include findings")
     contract = runtime_path(working_folder, "contract.md")
     contract_text = contract.read_text(encoding="utf-8") if contract.exists() else ""
-    if taste_rubric_is_substantive(contract_text):
+    # Require rubric_scores against the same bar (weights present and summing to
+    # 1.0) that later gates trust them by - requiring scores against the looser
+    # taste_rubric_is_substantive heuristic would demand scores here that
+    # enforce_taste_rubric_scoring_gate immediately discards afterward.
+    if taste_rubric_weights_are_valid(contract_text):
         rubric_scores = report.get("rubric_scores")
         if not isinstance(rubric_scores, dict) or not rubric_scores:
             raise ValueError("evaluator report must include rubric_scores when contract.md defines a Taste Rubric")
-        required_axes = {"design", "originality", "craft", "functionality"}
-        missing_axes = sorted(required_axes.difference(str(key) for key in rubric_scores))
+        missing_axes = sorted(REQUIRED_TASTE_RUBRIC_AXES.difference(str(key) for key in rubric_scores))
         if missing_axes:
             raise ValueError("rubric_scores missing required axes: " + ", ".join(missing_axes))
         if any(not isinstance(value, int | float) or value < 0 or value > 1 for value in rubric_scores.values()):
@@ -190,6 +193,45 @@ def taste_rubric_is_substantive(contract: str) -> bool:
     if any(axis in rubric for axis in ("design", "originality", "craft", "functionality", "weight", "reference")):
         return True
     return not any(term in rubric for term in placeholders)
+
+
+REQUIRED_TASTE_RUBRIC_AXES = frozenset({"design", "originality", "craft", "functionality"})
+
+
+def parse_taste_rubric_weights(contract: str) -> dict[str, float]:
+    """Parse per-axis weights out of contract.md's Taste Rubric section.
+
+    Looks for lines shaped like ``- design weight 0.35: ...`` and returns an
+    axis (lowercased) -> weight mapping. Lines that don't match are ignored;
+    an absent section or a section with no such lines yields an empty dict.
+    """
+    rubric = markdown_section(contract, "Taste Rubric")
+    weights: dict[str, float] = {}
+    for line in rubric.splitlines():
+        match = re.match(r"^[-*]\s*([A-Za-z][A-Za-z _-]*?)\s+weight\s+([0-9]*\.?[0-9]+)\b", line.strip(), re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            weights[match.group(1).strip().lower()] = float(match.group(2))
+        except ValueError:
+            continue
+    return weights
+
+
+def taste_rubric_weights_are_valid(contract: str, *, tolerance: float = 0.01) -> bool:
+    """Whether contract.md defines a structured Taste Rubric the evaluator can actually score against.
+
+    ``taste_rubric_is_substantive`` is a loose heuristic (axis keywords,
+    length) used to decide whether a *contract* is complete enough to accept.
+    Trusting an evaluator's ``rubric_scores`` needs a stricter guarantee: the
+    required axes must each carry an explicit weight, and those weights must
+    sum to 1.0 (within a small tolerance for rounding) - otherwise scoring is
+    not grounded in anything the generator/evaluator actually agreed on.
+    """
+    weights = parse_taste_rubric_weights(contract)
+    if not REQUIRED_TASTE_RUBRIC_AXES.issubset(weights):
+        return False
+    return abs(sum(weights.values()) - 1.0) <= tolerance
 
 
 def taste_rubric_required(contract: str) -> bool:
