@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -313,12 +314,52 @@ def update_loop_attempt(state: dict[str, Any], attempt_id: str, **updates: Any) 
     raise typer.BadParameter(f"attempt not found: {attempt_id}")
 
 
+def _process_is_alive(pid: int) -> bool:
+    """Best-effort liveness check for a PID recorded by a prior loop attempt.
+
+    PIDs can be recycled by the OS after a process exits, so this can't be a
+    guarantee, but it correctly separates "no process with this PID exists"
+    (orphaned) from "a process with this PID is still running" (genuinely
+    active) in the overwhelmingly common case relevant here: a process that
+    crashed seconds to minutes ago, well within the loop's own retry window.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _recover_orphaned_attempt(workspace: Path, state: dict[str, Any], attempt_id: str, active_pid: Any) -> None:
+    note = (
+        f"Attempt {attempt_id} was left active with no live process behind it "
+        f"(recorded pid {active_pid!r} is not running); clearing current_attempt so a new "
+        "attempt can start. This can happen if the previous run crashed mid-attempt "
+        "(e.g. an executor session/rate limit exhausting its retries)."
+    )
+    update_loop_attempt(state, attempt_id, status="orphaned", completed_at=utc_now())
+    state["current_attempt"] = None
+    state["status"] = "attempt-orphaned"
+    state["last_action"] = "run:orphaned-attempt-recovered"
+    record_loop_transition(workspace, state, note=note, log_op="loop-runner", log_title=f"attempt {attempt_id} orphaned", log_body=note)
+
+
 def start_loop_attempt_state(workspace: Path, state: dict[str, Any]) -> tuple[str, Path, dict[str, Any]]:
     if not state.get("contract_accepted"):
         raise typer.BadParameter("contract is not accepted. Run `hooky accept-contract` first.")
     active = state.get("current_attempt")
     if active:
-        raise typer.BadParameter(f"attempt already active: {active}")
+        active = str(active)
+        active_pid = next((attempt.get("pid") for attempt in state.get("attempts", []) if isinstance(attempt, dict) and attempt.get("id") == active), None)
+        # A missing pid means this attempt predates pid tracking; treat it the
+        # same as a dead pid rather than blocking forever with no way to recover.
+        if active_pid is not None and _process_is_alive(int(active_pid)):
+            raise typer.BadParameter(f"attempt already active: {active}")
+        _recover_orphaned_attempt(workspace, state, active, active_pid)
     attempt_id = next_loop_attempt_id(state)
     attempt_dir = loop_attempt_dir(workspace, attempt_id)
     (attempt_dir / "traces").mkdir(parents=True, exist_ok=True)
@@ -332,6 +373,7 @@ def start_loop_attempt_state(workspace: Path, state: dict[str, Any]) -> tuple[st
         "status": "running",
         "started_at": utc_now(),
         "path": attempt_dir.relative_to(workspace).as_posix(),
+        "pid": os.getpid(),
     }
     state.setdefault("attempts", []).append(attempt)
     state["current_attempt"] = attempt_id
