@@ -10,6 +10,35 @@ from hooky import roles, runtime
 from hooky.cli.paths import loop_attempt_dir, loop_contract_path, loop_feature_list_path, loop_proposal_path
 
 
+def enforce_taste_rubric_scoring_gate(workspace: Path, report: dict[str, Any]) -> dict[str, Any]:
+    """Discard evaluator-submitted rubric_scores that aren't backed by a real, weighted Taste Rubric.
+
+    The evaluator prompt already instructs it to grade subjective quality
+    only against a rubric written into contract.md, but nothing enforced
+    that: an evaluator could invent taste axes and score them even when no
+    rubric was ever negotiated. rubric_scores are trusted here only when
+    contract.md defines a Taste Rubric whose required axes carry explicit
+    weights summing to 1.0 (see taste_rubric_weights_are_valid) - regardless
+    of whether this attempt otherwise passes or fails.
+    """
+    rubric_scores = report.get("rubric_scores")
+    if not isinstance(rubric_scores, dict) or not rubric_scores:
+        return report
+    contract_path = loop_contract_path(workspace)
+    contract_text = contract_path.read_text(encoding="utf-8", errors="ignore") if contract_path.exists() else ""
+    if roles.taste_rubric_weights_are_valid(contract_text):
+        return report
+    amended = dict(report)
+    amended.pop("rubric_scores", None)
+    amended.pop("score_explanation", None)
+    findings = amended.get("findings") if isinstance(amended.get("findings"), list) else []
+    amended["findings"] = [
+        *findings,
+        "Discarded rubric_scores: contract.md does not define a Taste Rubric with required axis weights summing to 1.0, so subjective scoring is not trusted. Falling back to objective-only grading.",
+    ]
+    return amended
+
+
 def enforce_loop_evaluator_evidence(workspace: Path, attempt_id: str, report: dict[str, Any]) -> dict[str, Any]:
     if report.get("status") != "pass":
         return report

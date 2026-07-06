@@ -85,5 +85,86 @@ class BlockingVisualFailuresFromReportTests(unittest.TestCase):
             self.assertTrue(any("clipped/off-screen/overflowing" in failure for failure in failures))
 
 
+class TasteRubricScoringGateTests(unittest.TestCase):
+    def test_discards_rubric_scores_when_contract_has_no_taste_rubric(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            loop_contract_path(workspace).parent.mkdir(parents=True, exist_ok=True)
+            loop_contract_path(workspace).write_text("# Loop Contract\n\n## Done Criteria\n\n- Add a backend endpoint.\n", encoding="utf-8")
+            report = {
+                "status": "pass",
+                "recommendation": "continue",
+                "score": 0.9,
+                "findings": [],
+                "rubric_scores": {"design": 0.9, "originality": 0.8, "craft": 0.9, "functionality": 0.95},
+                "score_explanation": "Looks great.",
+            }
+
+            amended = validation.enforce_taste_rubric_scoring_gate(workspace, report)
+
+            self.assertNotIn("rubric_scores", amended)
+            self.assertNotIn("score_explanation", amended)
+            self.assertTrue(any("Discarded rubric_scores" in finding for finding in amended["findings"]))
+            # Everything else about the report is untouched -- this gate only strips scoring data.
+            self.assertEqual(amended["status"], "pass")
+            self.assertEqual(amended["score"], 0.9)
+
+    def test_discards_rubric_scores_when_rubric_lacks_weights_summing_to_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            loop_contract_path(workspace).parent.mkdir(parents=True, exist_ok=True)
+            loop_contract_path(workspace).write_text(
+                "# Loop Contract\n\n## Done Criteria\n\n- Build a dashboard.\n\n## Taste Rubric\n\nGrade design, craft, and functionality holistically.\n",
+                encoding="utf-8",
+            )
+            report = {
+                "status": "fail",
+                "recommendation": "continue",
+                "score": 0.4,
+                "findings": ["Needs polish."],
+                "rubric_scores": {"design": 0.5, "originality": 0.3, "craft": 0.4, "functionality": 0.5},
+            }
+
+            amended = validation.enforce_taste_rubric_scoring_gate(workspace, report)
+
+            self.assertNotIn("rubric_scores", amended)
+
+    def test_preserves_rubric_scores_when_contract_defines_a_valid_weighted_rubric(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            loop_contract_path(workspace).parent.mkdir(parents=True, exist_ok=True)
+            loop_contract_path(workspace).write_text(
+                "# Loop Contract\n\n## Done Criteria\n\n- Build a polished dashboard.\n\n## Taste Rubric\n\n"
+                "- design weight 0.35: calm, legible hierarchy\n"
+                "- originality weight 0.15: not a generic template\n"
+                "- craft weight 0.25: aligned spacing and refined states\n"
+                "- functionality weight 0.25: workflows remain clear\n",
+                encoding="utf-8",
+            )
+            rubric_scores = {"design": 0.8, "originality": 0.7, "craft": 0.75, "functionality": 0.9}
+            report = {
+                "status": "pass",
+                "recommendation": "continue",
+                "score": 0.8,
+                "findings": [],
+                "rubric_scores": rubric_scores,
+                "score_explanation": "Strong functional fit with adequate polish.",
+            }
+
+            amended = validation.enforce_taste_rubric_scoring_gate(workspace, report)
+
+            self.assertEqual(amended["rubric_scores"], rubric_scores)
+            self.assertEqual(amended["score_explanation"], "Strong functional fit with adequate polish.")
+
+    def test_is_a_noop_when_evaluator_did_not_submit_rubric_scores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            report = {"status": "pass", "recommendation": "continue", "score": 0.9, "findings": []}
+
+            amended = validation.enforce_taste_rubric_scoring_gate(workspace, report)
+
+            self.assertEqual(amended, report)
+
+
 if __name__ == "__main__":
     unittest.main()

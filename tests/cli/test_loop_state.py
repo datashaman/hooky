@@ -142,6 +142,40 @@ class LoopStateTests(unittest.TestCase):
 
         self.assertEqual(result["current_attempt"], "007")
 
+    def test_apply_loop_evaluator_report_discards_rubric_scores_without_a_valid_rubric(self) -> None:
+        cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
+        state = cli.read_loop_state(self.workspace)
+        state["contract_accepted"] = True
+        cli.write_json(cli.loop_state_path(self.workspace), state)
+        state = cli.read_loop_state(self.workspace)
+        attempt_id, attempt_dir, state = cli.start_loop_attempt_state(self.workspace, state)
+        report_path = attempt_dir / "evaluator_report.json"
+        report = {
+            "status": "pass",
+            "recommendation": "continue",
+            "bottleneck": "none",
+            "score": 0.9,
+            "findings": [],
+            # contract.md here has no Taste Rubric section at all -- this
+            # scoring is fabricated and must be discarded before it's persisted.
+            "rubric_scores": {"design": 0.9, "originality": 0.8, "craft": 0.9, "functionality": 0.95},
+            "score_explanation": "Looks great.",
+        }
+
+        cli.apply_loop_evaluator_report(
+            self.workspace,
+            state,
+            attempt_id=attempt_id,
+            report=report,
+            report_path=report_path,
+            action="test",
+        )
+
+        persisted = cli.read_json(report_path)
+        self.assertNotIn("rubric_scores", persisted)
+        self.assertNotIn("score_explanation", persisted)
+        self.assertTrue(any("Discarded rubric_scores" in finding for finding in persisted["findings"]))
+
     def test_read_loop_state_raises_on_permanent_mismatch_even_with_retries(self) -> None:
         cli.initialize_loop_files(self.workspace, title="demo", proposal="do the thing")
         state = cli.read_loop_state(self.workspace)
